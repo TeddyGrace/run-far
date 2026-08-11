@@ -5,6 +5,7 @@ import { env } from "../../env.js";
 import { db } from "../../db/client.js";
 import { oauthConnections, recoveryMetrics, sleepRecords, whoopWorkouts } from "../../db/schema.js";
 import { syncSingleResource } from "./sync.js";
+import { generateRecommendationsSafe } from "../../recommendations/service.js";
 import { logger } from "../../lib/logger.js";
 import type { WhoopWebhookPayload } from "./types.js";
 
@@ -81,13 +82,17 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
   const id = String(payload.id);
   switch (payload.type) {
     case "recovery.updated":
+      // Recovery score/HRV land here — regenerate so red/yellow/green rules see fresh data.
       await syncSingleResource(userId, "recovery", id);
+      await generateRecommendationsSafe(userId);
       return;
     case "recovery.deleted":
       await db.delete(recoveryMetrics).where(eq(recoveryMetrics.whoopSleepId, id));
       return;
     case "sleep.updated":
+      // Morning sleep sync is the primary cue to refresh today's recommendation.
       await syncSingleResource(userId, "sleep", id);
+      await generateRecommendationsSafe(userId);
       return;
     case "sleep.deleted":
       await db.delete(sleepRecords).where(eq(sleepRecords.whoopSleepId, id));

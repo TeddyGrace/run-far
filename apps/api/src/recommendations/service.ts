@@ -87,6 +87,19 @@ export async function generateRecommendations(userId: string): Promise<string[]>
   return ids;
 }
 
+/**
+ * Best-effort regenerate for webhook / background callers. Never throws — callers
+ * (Whoop webhooks especially) must still ACK even if the rules engine fails.
+ */
+export async function generateRecommendationsSafe(userId: string): Promise<void> {
+  try {
+    const ids = await generateRecommendations(userId);
+    logger.info({ userId, count: ids.length }, "recommendations regenerated");
+  } catch (err) {
+    logger.error({ err, userId }, "failed to regenerate recommendations");
+  }
+}
+
 const RUN_FIELD_APPLIERS: Record<string, (value: unknown) => Record<string, unknown>> = {
   runType: (v) => ({ runType: v }),
   targetPaceSPerKm: (v) => ({ targetPaceSPerKm: v }),
