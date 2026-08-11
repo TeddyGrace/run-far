@@ -9,6 +9,7 @@ import type {
 } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
 import { formatMiles } from "../lib/units.js";
+import { Markdown } from "../components/Markdown.js";
 import clsx from "clsx";
 
 type AddMode = null | "csv" | "describe";
@@ -460,14 +461,14 @@ function DescribePlan({
           <div
             key={`${m.role}-${i}`}
             className={clsx(
-              "text-sm whitespace-pre-wrap",
-              m.role === "user" ? "text-ink-primary" : "text-ink-secondary",
+              "text-sm",
+              m.role === "user" ? "whitespace-pre-wrap text-ink-primary" : "text-ink-secondary",
             )}
           >
             <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-ink-muted">
               {m.role === "user" ? "You" : "Coach"}
             </span>
-            {m.content}
+            {m.role === "user" ? m.content : <Markdown content={m.content} />}
           </div>
         ))}
         {chat.isPending && <p className="text-sm text-ink-muted">Thinking…</p>}
