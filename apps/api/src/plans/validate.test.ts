@@ -33,6 +33,15 @@ describe("validatePlanDraft", () => {
     expect(res.errors.some((e) => /before the plan start/.test(e))).toBe(true);
   });
 
+  it("allows past runs as a warning when revising without an explicit startDate", () => {
+    const res = validatePlanDraft({
+      draft: draft([{ scheduledAt: "2026-08-05T07:00:00Z", runType: "easy", distanceM: 5000 }]),
+      today,
+    });
+    expect(res.valid).toBe(true);
+    expect(res.warnings.some((w) => /before today/.test(w))).toBe(true);
+  });
+
   it("warns on a steep week-over-week mileage jump", () => {
     const res = validatePlanDraft({
       draft: draft([

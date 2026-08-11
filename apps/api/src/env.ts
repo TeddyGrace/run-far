@@ -68,7 +68,9 @@ const envSchema = z.object({
   GOOGLE_WEBHOOK_URL: z.string().default(""),
 
   ANTHROPIC_API_KEY: z.string().default(""),
-  ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-20250514"),
+  ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-5"),
+  /** IANA timezone for scheduling planned runs (wall-clock times the athlete sees). */
+  ATHLETE_TIMEZONE: z.string().default("America/New_York"),
 });
 
 const parsed = envSchema.safeParse(rawEnv);

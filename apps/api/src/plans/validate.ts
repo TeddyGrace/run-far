@@ -75,11 +75,25 @@ export function validatePlanDraft(input: PlanValidationInput): PlanValidationRes
   const lastDate = parsed[parsed.length - 1]?.date ?? null;
 
   // --- Bounds ---
-  const lowerBound = start ?? today;
-  for (const { date, run } of parsed) {
-    if (date.getTime() < lowerBound.getTime()) {
-      errors.push(`Run on ${isoDate(date)} (${run.runType}) is before the plan start (${isoDate(lowerBound)}).`);
-      break;
+  // Explicit startDate is a hard floor (from compute_plan_window). Without it, past runs are
+  // allowed as warnings so revisions of an already-started plan (e.g. time-of-day shifts) pass.
+  if (start) {
+    for (const { date, run } of parsed) {
+      if (date.getTime() < start.getTime()) {
+        errors.push(
+          `Run on ${isoDate(date)} (${run.runType}) is before the plan start (${isoDate(start)}).`,
+        );
+        break;
+      }
+    }
+  } else {
+    for (const { date, run } of parsed) {
+      if (date.getTime() < today.getTime()) {
+        warnings.push(
+          `Run on ${isoDate(date)} (${run.runType}) is before today — fine when revising an active plan.`,
+        );
+        break;
+      }
     }
   }
   if (race) {

@@ -411,7 +411,11 @@ function DescribePlan({
             className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-ink-primary"
           />
         </div>
-        {draft.summary && <p className="text-sm text-ink-secondary">{draft.summary}</p>}
+        {draft.summary && (
+          <div className="text-sm text-ink-secondary">
+            <Markdown content={draft.summary} />
+          </div>
+        )}
         <PreviewTable
           rows={draft.runs.map((r, i) => ({
             key: `${r.scheduledAt}-${i}`,
@@ -446,8 +450,9 @@ function DescribePlan({
   return (
     <div className="space-y-4">
       <p className="text-sm text-ink-secondary">
-        Describe your goal, timeline, and available days. The coach will ask questions, then propose
-        a plan you can preview before it goes on your calendar.
+        Describe your goal, timeline, and available days — or ask to revise your current plan
+        (e.g. “move all my runs to 4:30pm”). The coach will propose a plan you can preview
+        before it goes on your calendar.
       </p>
 
       <div className="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-border bg-surface-1 p-4">
@@ -533,11 +538,12 @@ function PreviewTable({
   }>;
 }) {
   return (
-    <div className="overflow-hidden rounded-xl border border-border">
+    <div className="overflow-x-auto rounded-xl border border-border">
       <table className="w-full text-sm">
         <thead className="bg-surface-2 text-left text-ink-secondary">
           <tr>
             <th className="px-3 py-2 font-medium">Date</th>
+            <th className="px-3 py-2 font-medium">Start time</th>
             <th className="px-3 py-2 font-medium">Type</th>
             <th className="px-3 py-2 font-medium">Duration</th>
             <th className="px-3 py-2 font-medium">Distance</th>
@@ -551,6 +557,15 @@ function PreviewTable({
             <tr key={row.key} className={row.scheduledAt == null ? "opacity-50" : undefined}>
               <td className="px-3 py-2 font-mono text-ink-primary">
                 {row.scheduledAt ? new Date(row.scheduledAt).toLocaleDateString() : "—"}
+              </td>
+              <td className="px-3 py-2 font-mono text-ink-primary">
+                {row.scheduledAt
+                  ? new Date(row.scheduledAt).toLocaleTimeString(undefined, {
+                      hour: "numeric",
+                      minute: "2-digit",
+                      timeZoneName: "short",
+                    })
+                  : "—"}
               </td>
               <td className="px-3 py-2 capitalize text-ink-secondary">{row.runType ?? "—"}</td>
               <td className="px-3 py-2 font-mono text-ink-secondary">
