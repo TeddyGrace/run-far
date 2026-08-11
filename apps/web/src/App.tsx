@@ -1,0 +1,33 @@
+import { Route, Routes } from "react-router-dom";
+import { AuthProvider, RequireAuth } from "./lib/auth.js";
+import { Layout } from "./components/Layout.js";
+import { Login } from "./pages/Login.js";
+import { Dashboard } from "./pages/Dashboard.js";
+import { Calendar } from "./pages/Calendar.js";
+import { Import } from "./pages/Import.js";
+import { Settings } from "./pages/Settings.js";
+
+export function App() {
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/*"
+          element={
+            <RequireAuth>
+              <Layout>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/calendar" element={<Calendar />} />
+                  <Route path="/import" element={<Import />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Routes>
+              </Layout>
+            </RequireAuth>
+          }
+        />
+      </Routes>
+    </AuthProvider>
+  );
+}

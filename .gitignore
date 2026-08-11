@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Test / coverage
+coverage/
+.vitest/
+
+# Vite
+apps/web/dist/
+apps/web/.vite/
+
+# Uploaded TrainingPeaks files — user data, not source
+apps/api/uploads/
+
+# Note: drizzle/ (migration SQL + meta) IS committed intentionally — it's the
+# migration history and drizzle-kit needs the meta snapshots to diff future changes.
+
+# Turbo/Nx-style caches, if ever introduced
+.turbo/
+.cache/
+
+# Local Postgres data directory (dev convenience; not portable, not source)
+.pgdata/

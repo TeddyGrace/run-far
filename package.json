@@ -1,0 +1,26 @@
+{
+  "name": "run-far",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/* run dev",
+    "dev:api": "pnpm --filter @run-far/api run dev",
+    "dev:web": "pnpm --filter @run-far/web run dev",
+    "build": "pnpm --recursive run build",
+    "test": "pnpm --recursive run test",
+    "lint": "pnpm --recursive run lint",
+    "typecheck": "pnpm --recursive run typecheck",
+    "db:generate": "pnpm --filter @run-far/api run db:generate",
+    "db:migrate": "pnpm --filter @run-far/api run db:migrate",
+    "db:seed": "pnpm --filter @run-far/api run db:seed",
+    "db:studio": "pnpm --filter @run-far/api run db:studio",
+    "db:start": "scripts/pg.sh start",
+    "db:stop": "scripts/pg.sh stop"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
