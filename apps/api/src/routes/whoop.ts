@@ -6,6 +6,7 @@ import { whoopGet } from "../integrations/whoop/client.js";
 import { db } from "../db/client.js";
 import { oauthConnections, syncState } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
+import { cookieOpts } from "../lib/cookies.js";
 import { logger } from "../lib/logger.js";
 import { env } from "../env.js";
 
@@ -25,12 +26,7 @@ export async function whoopRoutes(app: FastifyInstance) {
     if (!userId) return;
 
     const { url, state } = buildAuthorizeUrl();
-    reply.setCookie(OAUTH_STATE_COOKIE, state, {
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/",
-    });
+    reply.setCookie(OAUTH_STATE_COOKIE, state, cookieOpts({ maxAge: 600 }));
     reply.redirect(url);
   });
 

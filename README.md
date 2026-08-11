@@ -128,6 +128,47 @@ maps a table of known header aliases rather than fixed column indices — if a
 real export doesn't parse cleanly, that alias table is almost certainly the
 only thing that needs updating.
 
+## Deploy on Railway (API + web + Postgres)
+
+One Docker service serves the Fastify API and the Vite SPA on the same origin
+(so `/api` cookie auth works without CORS tricks). Postgres is a Railway plugin.
+
+1. Push this repo to GitHub (if it isn't already).
+2. In [Railway](https://railway.app): **New Project → Deploy from GitHub** → pick this repo.
+3. **Add Postgres** (plugin) and **connect** it to the service so `DATABASE_URL` is set.
+4. Set variables on the service:
+
+   | Variable | Notes |
+   |---|---|
+   | `NODE_ENV` | `production` |
+   | `SESSION_SECRET` | long random string |
+   | `ENCRYPTION_KEY` | `openssl rand -base64 32` |
+   | `WHOOP_CLIENT_ID` / `SECRET` / `WEBHOOK_SECRET` | from Whoop dashboard |
+   | `GOOGLE_CLIENT_ID` / `SECRET` | from GCP |
+   | `ANTHROPIC_API_KEY` | optional, for Build → Describe |
+
+   Leave `WEB_ORIGIN` and OAuth redirect URIs unset unless you use a custom domain —
+   they default from `RAILWAY_PUBLIC_DOMAIN` (`https://<your-app>.up.railway.app`).
+
+5. Deploy. Health check is `GET /health`. Migrations run on boot (`start:prod`).
+6. In Whoop + Google consoles, add the prod redirect/webhook URLs, e.g.:
+   - `https://<app>.up.railway.app/api/auth/google/callback`
+   - `https://<app>.up.railway.app/api/whoop/oauth/callback`
+   - `https://<app>.up.railway.app/webhooks/whoop`
+   - `https://<app>.up.railway.app/webhooks/google`
+7. Create your first user: either Sign in with Google, or run a one-off
+   `pnpm db:seed` against prod (only if you want the local seed account).
+
+Custom domain: add it in Railway, then set `WEB_ORIGIN=https://your.domain` and
+update OAuth redirect URIs to match.
+
+Local Docker smoke-test (optional):
+
+```bash
+docker build -t run-far .
+docker run --rm -p 8080:8080 --env-file .env -e NODE_ENV=production -e PORT=8080 run-far
+```
+
 ## Recommendation engine
 
 `apps/api/src/recommendations/` is a pure rules engine: `snapshot.ts` is the

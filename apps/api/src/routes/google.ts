@@ -8,6 +8,7 @@ import { pullGoogleCalendarChanges } from "../integrations/google/pull.js";
 import { db } from "../db/client.js";
 import { oauthConnections } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
+import { cookieOpts } from "../lib/cookies.js";
 import { logger } from "../lib/logger.js";
 import { env } from "../env.js";
 
@@ -19,12 +20,7 @@ export async function googleRoutes(app: FastifyInstance) {
     if (!userId) return;
 
     const state = randomBytes(16).toString("hex");
-    reply.setCookie(OAUTH_STATE_COOKIE, state, {
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/",
-    });
+    reply.setCookie(OAUTH_STATE_COOKIE, state, cookieOpts({ maxAge: 600 }));
     reply.redirect(buildAuthorizeUrl(state));
   });
 

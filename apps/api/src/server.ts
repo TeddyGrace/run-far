@@ -3,6 +3,10 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import multipart from "@fastify/multipart";
+import fastifyStatic from "@fastify/static";
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { env } from "./env.js";
 import { logger } from "./lib/logger.js";
 import { healthRoutes } from "./routes/health.js";
@@ -17,6 +21,20 @@ import { whoopWebhookRoutes } from "./integrations/whoop/webhooks.js";
 import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
 import { startGoogleChannelRenewalJob } from "./integrations/google/channelRenewal.js";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+/** Vite build output — present in the Railway image; absent in local `pnpm dev:api`. */
+function webDistPath(): string | null {
+  const candidates = [
+    path.resolve(here, "../../web/dist"), // apps/api/src → apps/web/dist (tsx)
+    path.resolve(here, "../../../web/dist"), // apps/api/dist → apps/web/dist (compiled)
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(path.join(candidate, "index.html"))) return candidate;
+  }
+  return null;
+}
 
 export async function buildServer() {
   const app = Fastify({ loggerInstance: logger });
@@ -70,14 +88,38 @@ export async function buildServer() {
   await app.register(recommendationRoutes);
   await app.register(recoveryRoutes);
 
+  // Production: serve the Vite SPA from the same origin so `/api` cookie auth just works.
+  const webDist = env.NODE_ENV === "production" ? webDistPath() : null;
+  if (webDist) {
+    await app.register(fastifyStatic, {
+      root: webDist,
+      wildcard: false,
+    });
+    app.setNotFoundHandler((request, reply) => {
+      const url = request.url.split("?")[0] ?? "";
+      if (
+        url.startsWith("/api") ||
+        url.startsWith("/webhooks") ||
+        url.startsWith("/health")
+      ) {
+        reply.status(404).send({
+          error: { message: "Not found", code: "NOT_FOUND" },
+        });
+        return;
+      }
+      return reply.sendFile("index.html");
+    });
+    logger.info({ webDist }, "serving web SPA");
+  }
+
   return app;
 }
 
 async function main() {
   const app = await buildServer();
   try {
-    await app.listen({ port: env.API_PORT, host: "0.0.0.0" });
-    logger.info(`API listening on http://localhost:${env.API_PORT}`);
+    await app.listen({ port: env.listenPort, host: "0.0.0.0" });
+    logger.info(`API listening on http://0.0.0.0:${env.listenPort}`);
     startWhoopNightlySync();
     startGoogleChannelRenewalJob();
   } catch (err) {
@@ -87,6 +129,7 @@ async function main() {
 }
 
 // Only auto-start when run directly (not when imported by tests).
-if (process.argv[1] && process.argv[1].endsWith("server.ts")) {
+const entry = process.argv[1] ?? "";
+if (entry.endsWith("server.ts") || entry.endsWith("server.js")) {
   main();
 }

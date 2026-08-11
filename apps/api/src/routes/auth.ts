@@ -6,6 +6,7 @@ import { db } from "../db/client.js";
 import { users } from "../db/schema.js";
 import { verifyPassword } from "../lib/auth.js";
 import { setSessionCookie, clearSessionCookie, requireUserId } from "../lib/session.js";
+import { cookieOpts } from "../lib/cookies.js";
 import {
   buildGoogleLoginAuthorizeUrl,
   exchangeGoogleLoginCode,
@@ -93,19 +94,9 @@ export async function authRoutes(app: FastifyInstance) {
     const forceConsent = consent === "1";
 
     const state = randomBytes(16).toString("hex");
-    reply.setCookie(OAUTH_STATE_COOKIE, state, {
-      httpOnly: true,
-      sameSite: "lax",
-      maxAge: 600,
-      path: "/",
-    });
+    reply.setCookie(OAUTH_STATE_COOKIE, state, cookieOpts({ maxAge: 600 }));
     if (forceConsent) {
-      reply.setCookie(CONSENT_RETRY_COOKIE, "1", {
-        httpOnly: true,
-        sameSite: "lax",
-        maxAge: 600,
-        path: "/",
-      });
+      reply.setCookie(CONSENT_RETRY_COOKIE, "1", cookieOpts({ maxAge: 600 }));
     }
     reply.redirect(buildGoogleLoginAuthorizeUrl(state, forceConsent));
   });

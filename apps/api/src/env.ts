@@ -8,12 +8,21 @@ import { z } from "zod";
 const here = path.dirname(fileURLToPath(import.meta.url));
 loadDotenv({ path: path.resolve(here, "../../../.env") });
 
+/** Public site origin (SPA + API when hosted together on Railway). */
 function defaultWebOrigin(): string {
-  // Railway injects the public hostname for the service.
   const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
   if (railway) return `https://${railway}`;
   return "http://localhost:5174";
 }
+
+/** API origin for OAuth callback URLs (same host as the SPA on Railway). */
+function defaultApiOrigin(): string {
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (railway) return `https://${railway}`;
+  return "http://localhost:8787";
+}
+
+const apiOrigin = defaultApiOrigin();
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -27,16 +36,13 @@ const envSchema = z.object({
 
   WHOOP_CLIENT_ID: z.string().default(""),
   WHOOP_CLIENT_SECRET: z.string().default(""),
-  WHOOP_REDIRECT_URI: z.string().default("http://localhost:8787/api/whoop/oauth/callback"),
+  WHOOP_REDIRECT_URI: z.string().default(`${apiOrigin}/api/whoop/oauth/callback`),
   WHOOP_WEBHOOK_SECRET: z.string().default(""),
 
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),
-  GOOGLE_REDIRECT_URI: z.string().default("http://localhost:8787/api/google/oauth/callback"),
-  // Separate redirect for Sign in with Google (openid/email/profile). Add this URI in GCP.
-  GOOGLE_AUTH_REDIRECT_URI: z
-    .string()
-    .default("http://localhost:8787/api/auth/google/callback"),
+  GOOGLE_REDIRECT_URI: z.string().default(`${apiOrigin}/api/google/oauth/callback`),
+  GOOGLE_AUTH_REDIRECT_URI: z.string().default(`${apiOrigin}/api/auth/google/callback`),
   GOOGLE_WEBHOOK_URL: z.string().default(""),
 
   ANTHROPIC_API_KEY: z.string().default(""),
@@ -58,6 +64,11 @@ const data = parsed.data;
 
 export const env = {
   ...data,
+  GOOGLE_WEBHOOK_URL:
+    data.GOOGLE_WEBHOOK_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/webhooks/google`
+      : ""),
   /** Prefer Railway's PORT when present. */
   listenPort: data.PORT ?? data.API_PORT,
 };

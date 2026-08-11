@@ -1,0 +1,16 @@
+node_modules
+.git
+.pgdata
+.env
+.env.*
+!.env.example
+dist
+apps/web/dist
+apps/api/uploads
+apps/api/dist
+coverage
+*.md
+.cursor
+.turbo
+.cache
+agent-transcripts
