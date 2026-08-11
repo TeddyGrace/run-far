@@ -2,10 +2,58 @@ import type { RecoverySnapshot } from "@run-far/shared";
 import type { RecoveryHistoryEntry } from "../types.js";
 import { zoneForRecovery, ZONE_LABEL, ZONE_HEX } from "../lib/zone.js";
 import { Sparkline } from "./Sparkline.js";
+import { formatMiles } from "../lib/units.js";
 
 interface RecoveryHeroProps {
   snapshot: RecoverySnapshot | null;
   history: RecoveryHistoryEntry[];
+}
+
+const HISTORY_DAYS = 14;
+
+/** Fill a contiguous UTC day window so the sparkline x-axis is a real timescale. */
+function dailySeries(
+  history: RecoveryHistoryEntry[],
+  pick: (entry: RecoveryHistoryEntry | undefined) => number | null,
+  days = HISTORY_DAYS,
+): { date: string; value: number | null }[] {
+  const byDate = new Map(history.map((h) => [h.date, h]));
+  const end = new Date();
+  end.setUTCHours(0, 0, 0, 0);
+  return Array.from({ length: days }, (_, i) => {
+    const d = new Date(end);
+    d.setUTCDate(end.getUTCDate() - (days - 1 - i));
+    const iso = d.toISOString().slice(0, 10);
+    return { date: iso, value: pick(byDate.get(iso)) };
+  });
+}
+
+function Trend({
+  label,
+  points,
+  baseline,
+  color,
+  formatValue,
+}: {
+  label: string;
+  points: { date: string; value: number | null }[];
+  baseline?: number | null;
+  color: string;
+  formatValue: (v: number) => string;
+}) {
+  return (
+    <div>
+      <p className="mb-1 text-xs uppercase tracking-wide text-ink-muted">{label}</p>
+      <Sparkline
+        points={points}
+        baseline={baseline}
+        color={color}
+        width={200}
+        height={72}
+        formatValue={formatValue}
+      />
+    </div>
+  );
 }
 
 /** The dashboard's hero: today's recovery number sits inside an ambient wash tinted by
@@ -15,8 +63,10 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
   const zone = zoneForRecovery(snapshot?.recoveryScore ?? null);
   const hex = ZONE_HEX[zone];
 
-  const hrvPoints = history.map((h) => ({ date: h.date, value: h.recovery?.hrvRmssdMs ?? null }));
-  const rhrPoints = history.map((h) => ({ date: h.date, value: h.recovery?.restingHr ?? null }));
+  const hrvPoints = dailySeries(history, (h) => h?.recovery?.hrvRmssdMs ?? null);
+  const rhrPoints = dailySeries(history, (h) => h?.recovery?.restingHr ?? null);
+  const strainPoints = dailySeries(history, (h) => h?.strain ?? null);
+  const sleepPoints = dailySeries(history, (h) => h?.sleep?.performancePct ?? null);
 
   return (
     <div
@@ -39,35 +89,51 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
             </span>
           </div>
         </div>
-        <div className="flex gap-8">
-          <div>
-            <p className="mb-1 text-xs uppercase tracking-wide text-ink-muted">HRV</p>
-            <Sparkline
-              points={hrvPoints}
-              baseline={snapshot?.hrvBaselineMs ?? null}
-              color={ZONE_HEX.info}
-              width={160}
-              height={48}
-              formatValue={(v) => `${v.toFixed(0)}ms`}
-            />
-          </div>
-          <div>
-            <p className="mb-1 text-xs uppercase tracking-wide text-ink-muted">Resting HR</p>
-            <Sparkline
-              points={rhrPoints}
-              baseline={snapshot?.restingHrBaseline ?? null}
-              color="#9FADA5"
-              width={160}
-              height={48}
-              formatValue={(v) => `${v.toFixed(0)}bpm`}
-            />
-          </div>
+        <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+          <Trend
+            label="HRV · 14d"
+            points={hrvPoints}
+            baseline={snapshot?.hrvBaselineMs ?? null}
+            color={ZONE_HEX.info}
+            formatValue={(v) => `${v.toFixed(0)}ms`}
+          />
+          <Trend
+            label="Resting HR · 14d"
+            points={rhrPoints}
+            baseline={snapshot?.restingHrBaseline ?? null}
+            color="#9FADA5"
+            formatValue={(v) => `${v.toFixed(0)}bpm`}
+          />
+          <Trend
+            label="Strain · 14d"
+            points={strainPoints}
+            color={ZONE_HEX.yellow}
+            formatValue={(v) => v.toFixed(1)}
+          />
+          <Trend
+            label="Sleep score · 14d"
+            points={sleepPoints}
+            color={ZONE_HEX.good}
+            formatValue={(v) => `${v.toFixed(0)}%`}
+          />
         </div>
       </div>
-      <div className="mt-6 flex gap-6 border-t border-border pt-4 text-sm text-ink-secondary">
+      <div className="mt-6 flex flex-wrap gap-6 border-t border-border pt-4 text-sm text-ink-secondary">
         <Stat
-          label="Sleep debt (7d)"
-          value={snapshot?.sleepDebtMin7d != null ? `${(snapshot.sleepDebtMin7d / 60).toFixed(1)}h` : "—"}
+          label="Mileage (week)"
+          value={
+            snapshot?.runDistanceMThisWeek != null
+              ? formatMiles(snapshot.runDistanceMThisWeek, 1)
+              : "—"
+          }
+        />
+        <Stat
+          label="Avg / week (month)"
+          value={
+            snapshot?.runDistanceMPerWeekThisMonth != null
+              ? `${formatMiles(snapshot.runDistanceMPerWeekThisMonth, 1)}/wk`
+              : "—"
+          }
         />
         <Stat label="Strain (7d)" value={snapshot?.strain7d != null ? snapshot.strain7d.toFixed(1) : "—"} />
         <Stat label="ACWR" value={snapshot?.acwr != null ? snapshot.acwr.toFixed(2) : "—"} />

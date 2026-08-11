@@ -46,6 +46,7 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
   const sleepDebtMin = s.score?.sleep_needed.need_from_sleep_debt_milli
     ? s.score.sleep_needed.need_from_sleep_debt_milli / 60_000
     : null;
+  const performancePct = s.score?.sleep_performance_percentage ?? null;
 
   await db
     .insert(sleepRecords)
@@ -55,6 +56,7 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
       date: toDateOnly(s.start),
       durationMin,
       efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
+      performancePct,
       sleepDebtMin,
       respiratoryRate: s.score?.respiratory_rate ?? null,
     })
@@ -63,6 +65,7 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
       set: {
         durationMin,
         efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
+        performancePct,
         sleepDebtMin,
         respiratoryRate: s.score?.respiratory_rate ?? null,
         updatedAt: new Date(),
@@ -71,30 +74,39 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
 }
 
 async function upsertWorkout(userId: string, w: WhoopWorkout): Promise<void> {
+  const startedAt = new Date(w.start);
+  const endedAt = new Date(w.end);
+  const durationMin =
+    Number.isFinite(startedAt.getTime()) && Number.isFinite(endedAt.getTime())
+      ? Math.max(0, (endedAt.getTime() - startedAt.getTime()) / 60_000)
+      : null;
+  const score = w.score;
+  const row = {
+    startedAt: Number.isFinite(startedAt.getTime()) ? startedAt : null,
+    durationMin,
+    sport: w.sport_name ?? null,
+    strain: score?.strain ?? null,
+    avgHr: score?.average_heart_rate ?? null,
+    maxHr: score?.max_heart_rate ?? null,
+    kilojoules: score?.kilojoule ?? null,
+    distanceM: score?.distance_meter ?? null,
+    percentRecorded: score?.percent_recorded ?? null,
+    altitudeGainM: score?.altitude_gain_meter ?? null,
+    altitudeChangeM: score?.altitude_change_meter ?? null,
+    zoneDurations: score?.zone_durations ?? null,
+  };
+
   await db
     .insert(whoopWorkouts)
     .values({
       userId,
       whoopWorkoutId: w.id,
       date: toDateOnly(w.start),
-      sport: w.sport_name ?? null,
-      strain: w.score?.strain ?? null,
-      avgHr: w.score?.average_heart_rate ?? null,
-      maxHr: w.score?.max_heart_rate ?? null,
-      kilojoules: w.score?.kilojoule ?? null,
-      distanceM: w.score?.distance_meter ?? null,
+      ...row,
     })
     .onConflictDoUpdate({
       target: whoopWorkouts.whoopWorkoutId,
-      set: {
-        sport: w.sport_name ?? null,
-        strain: w.score?.strain ?? null,
-        avgHr: w.score?.average_heart_rate ?? null,
-        maxHr: w.score?.max_heart_rate ?? null,
-        kilojoules: w.score?.kilojoule ?? null,
-        distanceM: w.score?.distance_meter ?? null,
-        updatedAt: new Date(),
-      },
+      set: { ...row, updatedAt: new Date() },
     });
 }
 

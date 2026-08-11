@@ -1,23 +1,32 @@
 import type { ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import clsx from "clsx";
 import { useAuth, useLogout } from "../lib/auth.js";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard" },
   { to: "/calendar", label: "Calendar" },
-  { to: "/import", label: "Import" },
+  { to: "/build", label: "Build" },
   { to: "/settings", label: "Settings" },
 ];
+
+// The week grid needs far more horizontal room than the reading-width pages.
+const WIDE_ROUTES = ["/calendar"];
 
 export function Layout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const logout = useLogout();
+  const { pathname } = useLocation();
+  const containerWidth = WIDE_ROUTES.some((route) => pathname.startsWith(route))
+    ? "max-w-[1600px]"
+    : "max-w-5xl";
 
   return (
     <div className="min-h-screen bg-surface-0">
       <header className="border-b border-border">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div
+          className={clsx("mx-auto flex items-center justify-between px-6 py-4", containerWidth)}
+        >
           <div className="flex items-center gap-8">
             <span className="font-display text-lg font-semibold tracking-tight text-ink-primary">
               run-far
@@ -55,7 +64,7 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
         </div>
       </header>
-      <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
+      <main className={clsx("mx-auto px-6 py-8", containerWidth)}>{children}</main>
     </div>
   );
 }

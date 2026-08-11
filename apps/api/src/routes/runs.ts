@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { createPlannedRunSchema, updatePlannedRunSchema } from "@run-far/shared";
 import { db } from "../db/client.js";
 import { plannedRuns } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { pushPlannedRunToGoogle, deletePlannedRunFromGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
+import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 
 export async function runRoutes(app: FastifyInstance) {
   app.get("/api/runs", async (request, reply) => {
@@ -13,9 +14,10 @@ export async function runRoutes(app: FastifyInstance) {
     if (!userId) return;
     const { from, to } = request.query as { from?: string; to?: string };
 
-    const conditions = [eq(plannedRuns.userId, userId)];
-    if (from) conditions.push(gte(plannedRuns.scheduledAt, new Date(from)));
-    if (to) conditions.push(lte(plannedRuns.scheduledAt, new Date(to)));
+    const activePlanId = await getActivePlanId(userId);
+    const conditions = [visibleRunsSql(userId, activePlanId)];
+    if (from) conditions.push(sql`${plannedRuns.scheduledAt} >= ${new Date(from)}`);
+    if (to) conditions.push(sql`${plannedRuns.scheduledAt} <= ${new Date(to)}`);
 
     return db
       .select()
@@ -31,7 +33,13 @@ export async function runRoutes(app: FastifyInstance) {
 
     const [run] = await db
       .insert(plannedRuns)
-      .values({ ...body, userId, scheduledAt: new Date(body.scheduledAt) })
+      .values({
+        ...body,
+        userId,
+        planId: body.planId ?? null,
+        origin: body.origin ?? "manual",
+        scheduledAt: new Date(body.scheduledAt),
+      })
       .returning();
     if (!run) throw new Error("failed to create planned run");
 

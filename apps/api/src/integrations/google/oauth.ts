@@ -1,4 +1,4 @@
-import { OAuth2Client } from "google-auth-library";
+import { OAuth2Client, type Credentials } from "google-auth-library";
 import { eq, and } from "drizzle-orm";
 import { env } from "../../env.js";
 import { db } from "../../db/client.js";
@@ -22,33 +22,65 @@ export function buildAuthorizeUrl(state: string): string {
   });
 }
 
+/**
+ * Upserts a Google connection from a token response. Google only issues a refresh token
+ * on first consent, so a response without one updates the existing row and keeps the
+ * stored refresh token. Returns false when there's no refresh token to fall back on —
+ * the caller then needs to re-authorize with prompt=consent.
+ */
+export async function persistGoogleTokens(
+  userId: string,
+  tokens: Credentials,
+  scopes: string[] = SCOPES,
+): Promise<boolean> {
+  if (!tokens.access_token || !tokens.expiry_date) {
+    throw new Error("Google token response is missing an access token or expiry");
+  }
+  const accessTokenEnc = encryptSecret(tokens.access_token);
+  const expiresAt = new Date(tokens.expiry_date);
+
+  if (tokens.refresh_token) {
+    await db
+      .insert(oauthConnections)
+      .values({
+        userId,
+        provider: "google",
+        accessTokenEnc,
+        refreshTokenEnc: encryptSecret(tokens.refresh_token),
+        expiresAt,
+        scopes,
+      })
+      .onConflictDoUpdate({
+        target: [oauthConnections.userId, oauthConnections.provider],
+        set: {
+          accessTokenEnc,
+          refreshTokenEnc: encryptSecret(tokens.refresh_token),
+          expiresAt,
+          scopes,
+          updatedAt: new Date(),
+        },
+      });
+    return true;
+  }
+
+  const updated = await db
+    .update(oauthConnections)
+    .set({ accessTokenEnc, expiresAt, scopes, updatedAt: new Date() })
+    .where(and(eq(oauthConnections.userId, userId), eq(oauthConnections.provider, "google")))
+    .returning({ id: oauthConnections.id });
+
+  return updated.length > 0;
+}
+
 export async function exchangeCodeAndStore(userId: string, code: string): Promise<void> {
   const client = newOAuthClient();
   const { tokens } = await client.getToken(code);
-  if (!tokens.access_token || !tokens.refresh_token || !tokens.expiry_date) {
+  const stored = await persistGoogleTokens(userId, tokens);
+  if (!stored) {
     throw new Error(
       "Google did not return a refresh token — re-authorize with prompt=consent (already set) or revoke prior access at https://myaccount.google.com/permissions",
     );
   }
-  await db
-    .insert(oauthConnections)
-    .values({
-      userId,
-      provider: "google",
-      accessTokenEnc: encryptSecret(tokens.access_token),
-      refreshTokenEnc: encryptSecret(tokens.refresh_token),
-      expiresAt: new Date(tokens.expiry_date),
-      scopes: SCOPES,
-    })
-    .onConflictDoUpdate({
-      target: [oauthConnections.userId, oauthConnections.provider],
-      set: {
-        accessTokenEnc: encryptSecret(tokens.access_token),
-        refreshTokenEnc: encryptSecret(tokens.refresh_token),
-        expiresAt: new Date(tokens.expiry_date),
-        updatedAt: new Date(),
-      },
-    });
 }
 
 /** Returns an OAuth2Client pre-loaded with this user's tokens; google-auth-library

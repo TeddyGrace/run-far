@@ -8,11 +8,20 @@ import { z } from "zod";
 const here = path.dirname(fileURLToPath(import.meta.url));
 loadDotenv({ path: path.resolve(here, "../../../.env") });
 
+function defaultWebOrigin(): string {
+  // Railway injects the public hostname for the service.
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (railway) return `https://${railway}`;
+  return "http://localhost:5174";
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  // Railway sets PORT; API_PORT remains the local-dev default.
   API_PORT: z.coerce.number().int().positive().default(8787),
-  WEB_ORIGIN: z.string().url().default("http://localhost:5174"),
+  PORT: z.coerce.number().int().positive().optional(),
+  WEB_ORIGIN: z.string().url().default(defaultWebOrigin()),
   SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 characters"),
   ENCRYPTION_KEY: z.string().min(1, "ENCRYPTION_KEY is required (base64, 32 bytes)"),
 
@@ -24,7 +33,14 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),
   GOOGLE_REDIRECT_URI: z.string().default("http://localhost:8787/api/google/oauth/callback"),
+  // Separate redirect for Sign in with Google (openid/email/profile). Add this URI in GCP.
+  GOOGLE_AUTH_REDIRECT_URI: z
+    .string()
+    .default("http://localhost:8787/api/auth/google/callback"),
   GOOGLE_WEBHOOK_URL: z.string().default(""),
+
+  ANTHROPIC_API_KEY: z.string().default(""),
+  ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-20250514"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -38,4 +54,10 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export const env = parsed.data;
+const data = parsed.data;
+
+export const env = {
+  ...data,
+  /** Prefer Railway's PORT when present. */
+  listenPort: data.PORT ?? data.API_PORT,
+};

@@ -59,6 +59,7 @@ async function main() {
         date,
         durationMin: 380 + Math.random() * 90,
         efficiencyPct: 80 + Math.random() * 15,
+        performancePct: 70 + Math.random() * 28,
         sleepDebtMin: Math.random() * 60,
         respiratoryRate: 14 + Math.random() * 2,
       })
@@ -71,12 +72,24 @@ async function main() {
           userId,
           whoopWorkoutId: `seed-workout-${date}`,
           date,
+          startedAt: atHour(i, 6 + Math.floor(Math.random() * 4)),
+          durationMin: 30 + Math.random() * 60,
           sport: "running",
           strain: 8 + Math.random() * 10,
           avgHr: 140 + Math.random() * 20,
           maxHr: 165 + Math.random() * 15,
           kilojoules: 1500 + Math.random() * 1500,
           distanceM: 5000 + Math.random() * 10000,
+          percentRecorded: 100,
+          altitudeGainM: 20 + Math.random() * 80,
+          zoneDurations: {
+            zone_zero_milli: 120_000,
+            zone_one_milli: 300_000,
+            zone_two_milli: 600_000,
+            zone_three_milli: 900_000,
+            zone_four_milli: 400_000,
+            zone_five_milli: 180_000,
+          },
         })
         .onConflictDoNothing();
     }

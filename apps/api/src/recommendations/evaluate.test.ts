@@ -16,6 +16,8 @@ const baseSnapshot: RecoverySnapshot = {
   acuteTss7d: 100,
   chronicTss28d: 400,
   acwr: 1,
+  runDistanceMThisWeek: null,
+  runDistanceMPerWeekThisMonth: null,
   hrvSuppressedConsecutiveDays: 0,
 };
 

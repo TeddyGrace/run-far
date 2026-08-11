@@ -1,4 +1,4 @@
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, eq, gte, lte, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { plannedRuns, recommendations, oauthConnections } from "../db/schema.js";
 import { buildRecoverySnapshot } from "./snapshot.js";
@@ -7,6 +7,7 @@ import { getPrimaryBusyPeriods } from "../integrations/google/calendarClient.js"
 import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
 import type { ProposedChange } from "@run-far/shared";
+import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 
 const LOOKAHEAD_DAYS = 10;
 
@@ -31,11 +32,16 @@ export async function generateRecommendations(userId: string): Promise<string[]>
   const windowEnd = new Date(now);
   windowEnd.setUTCDate(windowEnd.getUTCDate() + LOOKAHEAD_DAYS);
 
+  const activePlanId = await getActivePlanId(userId);
   const upcoming = await db
     .select()
     .from(plannedRuns)
     .where(
-      and(eq(plannedRuns.userId, userId), gte(plannedRuns.scheduledAt, now), lte(plannedRuns.scheduledAt, windowEnd)),
+      and(
+        visibleRunsSql(userId, activePlanId),
+        sql`${plannedRuns.scheduledAt} >= ${now}`,
+        sql`${plannedRuns.scheduledAt} <= ${windowEnd}`,
+      ),
     );
 
   let busyPeriods: Array<{ start: Date; end: Date }> = [];

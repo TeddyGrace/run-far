@@ -28,7 +28,8 @@ export const runTypeEnum = pgEnum("run_type", [
   "rest",
 ]);
 export const runStatusEnum = pgEnum("run_status", ["planned", "completed", "skipped", "moved"]);
-export const runOriginEnum = pgEnum("run_origin", ["imported", "manual", "recommendation"]);
+export const runOriginEnum = pgEnum("run_origin", ["imported", "manual", "recommendation", "ai_generated"]);
+export const planStatusEnum = pgEnum("plan_status", ["active", "inactive", "archived"]);
 export const recommendationSeverityEnum = pgEnum("recommendation_severity", [
   "info",
   "yellow",
@@ -42,12 +43,19 @@ export const recommendationStatusEnum = pgEnum("recommendation_status", [
 
 // --- Core ---
 
-export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  email: text("email").notNull().unique(),
-  passwordHash: text("password_hash").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const users = pgTable(
+  "users",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: text("email").notNull().unique(),
+    // Null for Google-only accounts; password login still works when set (e.g. seed user).
+    passwordHash: text("password_hash"),
+    // Stable Google subject from the ID token — preferred lookup over email.
+    googleSub: text("google_sub"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],
+);
 
 // Tokens are encrypted at rest by apps/api/src/lib/crypto.ts before insert; this table
 // never sees plaintext. accessToken/refreshToken columns hold the ciphertext + iv + tag.
@@ -109,6 +117,8 @@ export const sleepRecords = pgTable(
     date: date("date").notNull(),
     durationMin: doublePrecision("duration_min"),
     efficiencyPct: doublePrecision("efficiency_pct"),
+    // Whoop "Sleep performance" — % of sleep needed that was achieved (the Sleep score).
+    performancePct: doublePrecision("performance_pct"),
     sleepDebtMin: doublePrecision("sleep_debt_min"),
     respiratoryRate: doublePrecision("respiratory_rate"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -129,12 +139,26 @@ export const whoopWorkouts = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     whoopWorkoutId: text("whoop_workout_id").notNull(),
     date: date("date").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    durationMin: doublePrecision("duration_min"),
     sport: text("sport"),
     strain: doublePrecision("strain"),
     avgHr: doublePrecision("avg_hr"),
     maxHr: doublePrecision("max_hr"),
     kilojoules: doublePrecision("kilojoules"),
     distanceM: doublePrecision("distance_m"),
+    // Full Whoop WorkoutScore extras — present for GPS sports and HR-zone breakdowns.
+    percentRecorded: doublePrecision("percent_recorded"),
+    altitudeGainM: doublePrecision("altitude_gain_m"),
+    altitudeChangeM: doublePrecision("altitude_change_m"),
+    zoneDurations: jsonb("zone_durations").$type<{
+      zone_zero_milli: number;
+      zone_one_milli: number;
+      zone_two_milli: number;
+      zone_three_milli: number;
+      zone_four_milli: number;
+      zone_five_milli: number;
+    } | null>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -146,16 +170,29 @@ export const whoopWorkouts = pgTable(
 
 // --- Training plan / calendar ---
 
-export const trainingPlans = pgTable("training_plans", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  source: text("source").notNull().default("trainingpeaks_csv"),
-  rawFile: text("raw_file"), // stored path, kept for re-parsing
-  importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const trainingPlans = pgTable(
+  "training_plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    source: text("source").notNull().default("trainingpeaks_csv"),
+    status: planStatusEnum("status").notNull().default("inactive"),
+    brief: text("brief"),
+    rawFile: text("raw_file"), // stored path, kept for re-parsing
+    importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+  },
+  (t) => [
+    // At most one active training plan per user.
+    uniqueIndex("training_plans_one_active_per_user_idx")
+      .on(t.userId)
+      .where(sql`${t.status} = 'active'`),
+    index("training_plans_user_status_idx").on(t.userId, t.status),
+  ],
+);
 
 export const plannedRuns = pgTable(
   "planned_runs",

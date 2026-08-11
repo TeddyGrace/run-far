@@ -81,16 +81,20 @@ provider's own developer console.
 Once connected (Settings → Whoop → Connect), the app backfills 90 days of
 recovery, sleep, and workout data automatically.
 
-### Google Calendar
+### Google (Sign-In + Calendar)
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com),
    enable the **Google Calendar API**, and configure an OAuth consent screen
-   (internal is fine for a single-user app).
-2. Create an OAuth 2.0 Client ID (type: Web application). Add
-   `GOOGLE_REDIRECT_URI` (`http://localhost:8787/api/google/oauth/callback`
-   for local dev) as an authorized redirect URI.
+   (internal is fine for a single-user app). Add the scopes `openid`, `email`,
+   `profile`, and `https://www.googleapis.com/auth/calendar`.
+2. Create an OAuth 2.0 Client ID (type: Web application). Add **both** redirect
+   URIs:
+   - `GOOGLE_AUTH_REDIRECT_URI` — `http://localhost:8787/api/auth/google/callback`
+     (Sign in with Google on the login screen)
+   - `GOOGLE_REDIRECT_URI` — `http://localhost:8787/api/google/oauth/callback`
+     (Calendar connect under Settings)
 3. Copy the client id/secret into `.env`.
-4. On first connect, the app creates a dedicated **"Running"** calendar —
+4. On first Calendar connect, the app creates a dedicated **"Running"** calendar —
    it never writes to your primary calendar.
 5. Push notifications (`events.watch`) require a public HTTPS URL. Set
    `GOOGLE_WEBHOOK_URL` to a tunnel URL pointing at `/webhooks/google` if you
@@ -98,12 +102,25 @@ recovery, sleep, and workout data automatically.
    "Sync now" button on the Settings page and the periodic channel-renewal
    job's fallback pulls.
 
-## TrainingPeaks import
+Signing in with Google is a single consent step: it creates (or links) the user
+and grants Calendar access at the same time, then creates the Running calendar
+and pulls existing events in the background. The Settings → Google card is only
+needed to repair a revoked connection. Email/password login remains available as
+a fallback for the seeded local account.
 
-There's no personal API for TrainingPeaks — plans come in as a CSV export
-(Settings → Import, or the Import page directly). Uploading previews parsed
-rows with warnings before anything is committed to the calendar; re-uploading
-the same file updates existing runs instead of duplicating them.
+## Training plans (Build)
+
+The **Build** tab manages training plans. Only one plan can be **active** at a
+time — its runs appear on the Dashboard, Calendar, and Google Calendar. Activating
+another plan (or committing a new import / AI plan) removes the previous active
+plan's calendar events. Plans can be archived without deleting them.
+
+Two ways to add a plan:
+
+1. **Import CSV** — TrainingPeaks export. Uploading previews parsed rows with
+   warnings before commit.
+2. **Describe your own** — multi-turn chat with Anthropic that proposes a plan;
+   you preview and confirm before it becomes active. Requires `ANTHROPIC_API_KEY`.
 
 TrainingPeaks' exported column headers vary by export type and account
 tier. The parser (`apps/api/src/integrations/trainingpeaks/columnAliases.ts`)

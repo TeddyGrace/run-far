@@ -5,14 +5,18 @@ import { api } from "../lib/api.js";
 import type { RecoveryHistoryEntry } from "../types.js";
 import { RecoveryHero } from "../components/RecoveryHero.js";
 import { RecommendationCard } from "../components/RecommendationCard.js";
+import { RecentActivities } from "../components/RecentActivities.js";
 import { HARD_RUN_TYPES } from "../lib/runTypes.js";
+import { formatMiles } from "../lib/units.js";
 
+// Snapped to UTC midnight so the value is identical across renders — a timestamp that
+// moves every render would change the query key and refetch in a loop.
 function todayRange() {
-  const now = new Date();
-  const from = now.toISOString();
-  const to = new Date(now);
+  const from = new Date();
+  from.setUTCHours(0, 0, 0, 0);
+  const to = new Date(from);
   to.setUTCDate(to.getUTCDate() + 8);
-  return { from, to: to.toISOString() };
+  return { from: from.toISOString(), to: to.toISOString() };
 }
 
 export function Dashboard() {
@@ -96,7 +100,7 @@ export function Dashboard() {
         <div className="divide-y divide-border rounded-xl border border-border bg-surface-1">
           {runs.isLoading && <p className="p-4 text-sm text-ink-muted">Loading runs…</p>}
           {!runs.isLoading && runs.data?.length === 0 && (
-            <p className="p-4 text-sm text-ink-muted">No runs scheduled — import a plan or add one manually.</p>
+            <p className="p-4 text-sm text-ink-muted">No runs scheduled — build a plan or add one manually.</p>
           )}
           {runs.data?.map((run) => {
             const hard = HARD_RUN_TYPES.has(run.runType);
@@ -113,13 +117,17 @@ export function Dashboard() {
                 </div>
                 <div className="flex gap-4 text-sm text-ink-muted">
                   {run.durationMin != null && <span className="font-mono">{run.durationMin}min</span>}
-                  {run.distanceM != null && <span className="font-mono">{(run.distanceM / 1000).toFixed(1)}km</span>}
+                  {run.distanceM != null && (
+                    <span className="font-mono">{formatMiles(run.distanceM, 1)}</span>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
       </div>
+
+      <RecentActivities />
     </div>
   );
 }

@@ -1,10 +1,10 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, RequireAuth } from "./lib/auth.js";
 import { Layout } from "./components/Layout.js";
 import { Login } from "./pages/Login.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { Calendar } from "./pages/Calendar.js";
-import { Import } from "./pages/Import.js";
+import { Build } from "./pages/Build.js";
 import { Settings } from "./pages/Settings.js";
 
 export function App() {
@@ -20,7 +20,8 @@ export function App() {
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/calendar" element={<Calendar />} />
-                  <Route path="/import" element={<Import />} />
+                  <Route path="/build" element={<Build />} />
+                  <Route path="/import" element={<Navigate to="/build" replace />} />
                   <Route path="/settings" element={<Settings />} />
                 </Routes>
               </Layout>

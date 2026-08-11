@@ -1,8 +1,12 @@
-import { and, eq, gte, lte, desc } from "drizzle-orm";
+import { and, eq, gte, lte, desc, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns } from "../db/schema.js";
 import { RECOMMENDATION_CONFIG } from "./config.js";
 import type { RecoverySnapshot } from "@run-far/shared";
+import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
+
+/** Whoop sport_name values that count as "runs" for mileage stats. */
+const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
 
 function mean(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -23,6 +27,17 @@ function daysAgo(n: number): Date {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() - n);
   return d;
+}
+
+function startOfUtcWeek(d: Date): Date {
+  const day = d.getUTCDay(); // 0 = Sun
+  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  monday.setUTCDate(monday.getUTCDate() - ((day + 6) % 7));
+  return monday;
+}
+
+function startOfUtcMonth(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 }
 
 /**
@@ -99,12 +114,13 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
 
   const acuteWindowStart = daysAgo(6);
   const chronicWindowStart = daysAgo(27);
+  const activePlanId = await getActivePlanId(userId);
   const acuteRuns = await db
     .select()
     .from(plannedRuns)
     .where(
       and(
-        eq(plannedRuns.userId, userId),
+        visibleRunsSql(userId, activePlanId),
         gte(plannedRuns.scheduledAt, acuteWindowStart),
         lte(plannedRuns.scheduledAt, today),
       ),
@@ -114,7 +130,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     .from(plannedRuns)
     .where(
       and(
-        eq(plannedRuns.userId, userId),
+        visibleRunsSql(userId, activePlanId),
         gte(plannedRuns.scheduledAt, chronicWindowStart),
         lte(plannedRuns.scheduledAt, today),
       ),
@@ -132,6 +148,40 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
       ? acuteTss7d / chronicWeeklyEquivalent
       : null;
 
+  const weekStartIso = isoDate(startOfUtcWeek(today));
+  const monthStartIso = isoDate(startOfUtcMonth(today));
+  const runWorkouts = await db
+    .select({ date: whoopWorkouts.date, distanceM: whoopWorkouts.distanceM })
+    .from(whoopWorkouts)
+    .where(
+      and(
+        eq(whoopWorkouts.userId, userId),
+        inArray(whoopWorkouts.sport, [...RUN_SPORTS]),
+        gte(whoopWorkouts.date, monthStartIso),
+        lte(whoopWorkouts.date, todayIso),
+      ),
+    );
+
+  let weekMeters = 0;
+  let monthMeters = 0;
+  let weekHasDistance = false;
+  let monthHasDistance = false;
+  for (const w of runWorkouts) {
+    if (w.distanceM == null || w.distanceM <= 0) continue;
+    monthMeters += w.distanceM;
+    monthHasDistance = true;
+    if (w.date >= weekStartIso) {
+      weekMeters += w.distanceM;
+      weekHasDistance = true;
+    }
+  }
+
+  // Weekly average for the month so far: scale month total by days elapsed / 7.
+  const dayOfMonth = today.getUTCDate();
+  const runDistanceMPerWeekThisMonth = monthHasDistance
+    ? monthMeters / Math.max(dayOfMonth / 7, 1 / 7)
+    : null;
+
   return {
     date: todayIso,
     recoveryScore: todayRow?.recoveryScore ?? null,
@@ -145,6 +195,8 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     acuteTss7d,
     chronicTss28d,
     acwr,
+    runDistanceMThisWeek: weekHasDistance ? weekMeters : null,
+    runDistanceMPerWeekThisMonth,
     hrvSuppressedConsecutiveDays,
   };
 }

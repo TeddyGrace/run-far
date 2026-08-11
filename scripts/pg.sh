@@ -13,7 +13,13 @@ case "${1:-}" in
     if [ ! -d "$DATADIR" ]; then
       "$PGBIN/initdb" -D "$DATADIR" -U "$(whoami)" --auth=trust
     fi
-    "$PGBIN/pg_ctl" -D "$DATADIR" -l "$DATADIR/server.log" -o "-p 5432" start
+    # Idempotent: skip start if this data dir (or anything on :5432) is already up.
+    if "$PGBIN/pg_ctl" -D "$DATADIR" status >/dev/null 2>&1 || \
+       "$PGBIN/pg_isready" -h localhost -p 5432 >/dev/null 2>&1; then
+      echo "Postgres already running on localhost:5432"
+    else
+      "$PGBIN/pg_ctl" -D "$DATADIR" -l "$DATADIR/server.log" -o "-p 5432" start
+    fi
     # Idempotent: only create the role/db if they don't already exist.
     "$PGBIN/psql" -h localhost -p 5432 -U "$(whoami)" -d postgres -tc \
       "SELECT 1 FROM pg_roles WHERE rolname='runfar'" | grep -q 1 || \

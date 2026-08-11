@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { PlannedRun, RunType } from "@run-far/shared";
 import { RUN_TYPE_OPTIONS } from "../lib/runTypes.js";
+import { metersToMiles, milesToMeters } from "../lib/units.js";
 
 interface RunEditModalProps {
   run: PlannedRun;
@@ -13,14 +14,16 @@ interface RunEditModalProps {
 export function RunEditModal({ run, onClose, onSave, onDelete, saving }: RunEditModalProps) {
   const [runType, setRunType] = useState<RunType>(run.runType);
   const [durationMin, setDurationMin] = useState(run.durationMin?.toString() ?? "");
-  const [distanceKm, setDistanceKm] = useState(run.distanceM != null ? (run.distanceM / 1000).toString() : "");
+  const [distanceMi, setDistanceMi] = useState(
+    run.distanceM != null ? metersToMiles(run.distanceM).toFixed(2) : "",
+  );
   const [description, setDescription] = useState(run.description ?? "");
 
   function submit() {
     onSave({
       runType,
       durationMin: durationMin ? Number(durationMin) : null,
-      distanceM: distanceKm ? Number(distanceKm) * 1000 : null,
+      distanceM: distanceMi ? milesToMeters(Number(distanceMi)) : null,
       description: description || null,
     });
   }
@@ -58,11 +61,12 @@ export function RunEditModal({ run, onClose, onSave, onDelete, saving }: RunEdit
               />
             </div>
             <div className="flex-1">
-              <label className="mb-1.5 block text-sm text-ink-secondary">Distance (km)</label>
+              <label className="mb-1.5 block text-sm text-ink-secondary">Distance (mi)</label>
               <input
                 type="number"
-                value={distanceKm}
-                onChange={(e) => setDistanceKm(e.target.value)}
+                step="0.01"
+                value={distanceMi}
+                onChange={(e) => setDistanceMi(e.target.value)}
                 className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-ink-primary"
               />
             </div>

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, gte, lte, desc } from "drizzle-orm";
+import { and, eq, gte, lte, desc, count, sql, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
@@ -71,5 +71,75 @@ export async function recoveryRoutes(app: FastifyInstance) {
     }
 
     return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  });
+
+  // Individual workouts, newest first — the dashboard's recent-activity cards. Distinct
+  // from /history, which collapses workouts into one strain total per day.
+  app.get("/api/recovery/activities", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { limit, offset, sport } = request.query as {
+      limit?: string;
+      offset?: string;
+      sport?: string;
+    };
+    const take = Math.min(Math.max(Number(limit) || 7, 1), 50);
+    const skip = Math.min(Math.max(Number(offset) || 0, 0), 500);
+    // Comma-separated sport keys, e.g. sport=running,cycling — empty means "all recent".
+    const sportFilters = (sport ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const conditions = [eq(whoopWorkouts.userId, userId)];
+    if (sportFilters.length === 1) conditions.push(eq(whoopWorkouts.sport, sportFilters[0]!));
+    else if (sportFilters.length > 1) conditions.push(inArray(whoopWorkouts.sport, sportFilters));
+    const where = and(...conditions);
+
+    const [items, countRows, sportRows] = await Promise.all([
+      db
+        .select({
+          id: whoopWorkouts.id,
+          date: whoopWorkouts.date,
+          startedAt: whoopWorkouts.startedAt,
+          durationMin: whoopWorkouts.durationMin,
+          sport: whoopWorkouts.sport,
+          strain: whoopWorkouts.strain,
+          avgHr: whoopWorkouts.avgHr,
+          maxHr: whoopWorkouts.maxHr,
+          kilojoules: whoopWorkouts.kilojoules,
+          distanceM: whoopWorkouts.distanceM,
+          percentRecorded: whoopWorkouts.percentRecorded,
+          altitudeGainM: whoopWorkouts.altitudeGainM,
+          altitudeChangeM: whoopWorkouts.altitudeChangeM,
+          zoneDurations: whoopWorkouts.zoneDurations,
+        })
+        .from(whoopWorkouts)
+        .where(where)
+        // Start time is the real ordering within a day; createdAt only reflects sync order.
+        // Rows synced before startedAt existed fall back to the end of their day.
+        .orderBy(
+          desc(whoopWorkouts.date),
+          sql`${whoopWorkouts.startedAt} DESC NULLS LAST`,
+          desc(whoopWorkouts.createdAt),
+        )
+        .limit(take)
+        .offset(skip),
+      db.select({ value: count() }).from(whoopWorkouts).where(where),
+      // Distinct sports for the filter chips, independent of the active sport filter.
+      db
+        .selectDistinct({ sport: whoopWorkouts.sport })
+        .from(whoopWorkouts)
+        .where(eq(whoopWorkouts.userId, userId))
+        .orderBy(whoopWorkouts.sport),
+    ]);
+
+    const total = Number(countRows[0]?.value ?? 0);
+    return {
+      items,
+      total,
+      hasMore: skip + items.length < total,
+      sports: sportRows.map((r) => r.sport).filter((s): s is string => Boolean(s)),
+    };
   });
 }

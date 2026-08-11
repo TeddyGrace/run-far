@@ -103,7 +103,7 @@ export function Calendar() {
       </div>
 
       <DndContext onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-7 gap-2">
+        <div className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 xl:min-h-[calc(100vh-14rem)]">
           {days.map((day) => (
             <DayColumn key={day.toISOString()} date={day} runs={runsForDay(day)} onSelectRun={setSelectedRun} />
           ))}

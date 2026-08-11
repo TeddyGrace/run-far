@@ -1,17 +1,16 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { cookieOpts } from "./cookies.js";
 
 export const SESSION_COOKIE = "session";
 const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 30; // 30 days
 
 /** Sets the signed session cookie for a logged-in user. */
 export function setSessionCookie(reply: FastifyReply, userId: string): void {
-  reply.setCookie(SESSION_COOKIE, userId, {
-    httpOnly: true,
-    sameSite: "lax",
-    signed: true,
-    path: "/",
-    maxAge: SESSION_MAX_AGE_SEC,
-  });
+  reply.setCookie(
+    SESSION_COOKIE,
+    userId,
+    cookieOpts({ signed: true, maxAge: SESSION_MAX_AGE_SEC }),
+  );
 }
 
 export function clearSessionCookie(reply: FastifyReply): void {

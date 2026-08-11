@@ -19,6 +19,9 @@ export const recoverySnapshotSchema = z.object({
   acuteTss7d: z.number().nullable(),
   chronicTss28d: z.number().nullable(),
   acwr: z.number().nullable(),
+  // Whoop run mileage (meters): calendar week total, and calendar-month weekly average so far.
+  runDistanceMThisWeek: z.number().nullable(),
+  runDistanceMPerWeekThisMonth: z.number().nullable(),
   // Consecutive days (including today) with HRV >= 1 SD below baseline. A single
   // suppressed day is common noise; the hrv-suppressed rule requires a run of them.
   hrvSuppressedConsecutiveDays: z.number().int().nonnegative(),

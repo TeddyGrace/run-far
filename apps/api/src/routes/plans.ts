@@ -1,17 +1,204 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
-import { commitImportSchema } from "@run-far/shared";
+import { and, count, desc, eq, ne, sql } from "drizzle-orm";
+import {
+  aiPlanDraftSchema,
+  commitAiPlanSchema,
+  commitImportSchema,
+  planAiChatRequestSchema,
+  type RunType,
+} from "@run-far/shared";
 import { requireUserId } from "../lib/session.js";
 import { parseTrainingPeaksCsv } from "../integrations/trainingpeaks/parser.js";
 import { newUploadToken, saveUpload, loadUpload } from "../integrations/trainingpeaks/uploadStore.js";
-import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { db } from "../db/client.js";
 import { trainingPlans, plannedRuns } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
-import type { RunType } from "@run-far/shared";
+import { activatePlan, archivePlan, unarchivePlan } from "../plans/lifecycle.js";
+import { isAnthropicConfigured, runPlanChatTurn } from "../integrations/anthropic/planChat.js";
+import { loadAiDraft } from "../integrations/anthropic/draftStore.js";
 
 export async function planRoutes(app: FastifyInstance) {
-  // Multipart upload -> parse -> preview. Nothing is written to planned_runs yet.
+  app.get("/api/plans", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { includeArchived } = request.query as { includeArchived?: string };
+    const showArchived = includeArchived === "1" || includeArchived === "true";
+
+    const conditions = [eq(trainingPlans.userId, userId)];
+    if (!showArchived) conditions.push(ne(trainingPlans.status, "archived"));
+
+    const rows = await db
+      .select({
+        id: trainingPlans.id,
+        name: trainingPlans.name,
+        source: trainingPlans.source,
+        status: trainingPlans.status,
+        brief: trainingPlans.brief,
+        importedAt: trainingPlans.importedAt,
+        archivedAt: trainingPlans.archivedAt,
+        runCount: count(plannedRuns.id),
+      })
+      .from(trainingPlans)
+      .leftJoin(plannedRuns, eq(plannedRuns.planId, trainingPlans.id))
+      .where(and(...conditions))
+      .groupBy(trainingPlans.id)
+      .orderBy(
+        sql`CASE ${trainingPlans.status}
+          WHEN 'active' THEN 0
+          WHEN 'inactive' THEN 1
+          ELSE 2 END`,
+        desc(trainingPlans.importedAt),
+      );
+
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        source: r.source,
+        status: r.status,
+        brief: r.brief,
+        importedAt: r.importedAt.toISOString(),
+        archivedAt: r.archivedAt?.toISOString() ?? null,
+        runCount: Number(r.runCount),
+      })),
+    };
+  });
+
+  app.post("/api/plans/:id/activate", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+    try {
+      await activatePlan(userId, id);
+    } catch (err) {
+      const code = err instanceof Error ? err.message : "UNKNOWN";
+      if (code === "PLAN_NOT_FOUND") {
+        reply.status(404).send({ error: { message: "Plan not found", code } });
+        return;
+      }
+      if (code === "PLAN_ARCHIVED") {
+        reply.status(400).send({ error: { message: "Unarchive the plan before activating", code } });
+        return;
+      }
+      throw err;
+    }
+    return { ok: true, planId: id };
+  });
+
+  app.post("/api/plans/:id/archive", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+    try {
+      await archivePlan(userId, id);
+    } catch (err) {
+      const code = err instanceof Error ? err.message : "UNKNOWN";
+      if (code === "PLAN_NOT_FOUND") {
+        reply.status(404).send({ error: { message: "Plan not found", code } });
+        return;
+      }
+      throw err;
+    }
+    return { ok: true, planId: id };
+  });
+
+  app.post("/api/plans/:id/unarchive", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+    try {
+      await unarchivePlan(userId, id);
+    } catch (err) {
+      const code = err instanceof Error ? err.message : "UNKNOWN";
+      if (code === "PLAN_NOT_FOUND") {
+        reply.status(404).send({ error: { message: "Plan not found", code } });
+        return;
+      }
+      throw err;
+    }
+    return { ok: true, planId: id };
+  });
+
+  app.post("/api/plans/ai/chat", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+
+    if (!isAnthropicConfigured()) {
+      reply.status(503).send({
+        error: {
+          message: "Anthropic is not configured. Set ANTHROPIC_API_KEY in .env.",
+          code: "AI_NOT_CONFIGURED",
+        },
+      });
+      return;
+    }
+
+    const body = planAiChatRequestSchema.parse(request.body);
+    try {
+      return await runPlanChatTurn({ userId, messages: body.messages });
+    } catch (err) {
+      logger.error({ err, userId }, "plan AI chat failed");
+      reply.status(502).send({
+        error: {
+          message: err instanceof Error ? err.message : "AI chat failed",
+          code: "AI_CHAT_FAILED",
+        },
+      });
+    }
+  });
+
+  app.post("/api/plans/ai/commit", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+
+    const body = commitAiPlanSchema.parse(request.body);
+    const stored = await loadAiDraft(body.draftToken);
+    if (!stored || stored.meta.userId !== userId) {
+      reply.status(404).send({ error: { message: "Draft not found or expired", code: "DRAFT_NOT_FOUND" } });
+      return;
+    }
+
+    const draft = aiPlanDraftSchema.parse(stored.draft);
+    const planName = body.planName?.trim() || draft.name;
+
+    const [plan] = await db
+      .insert(trainingPlans)
+      .values({
+        userId,
+        name: planName,
+        source: "ai_generated",
+        status: "inactive",
+        brief: stored.meta.brief,
+      })
+      .returning();
+    if (!plan) throw new Error("failed to create AI training plan");
+
+    let inserted = 0;
+    for (const row of draft.runs) {
+      await db.insert(plannedRuns).values({
+        userId,
+        planId: plan.id,
+        scheduledAt: new Date(row.scheduledAt),
+        durationMin: row.durationMin ?? null,
+        distanceM: row.distanceM ?? null,
+        runType: row.runType as RunType,
+        targetPaceSPerKm: row.targetPaceSPerKm ?? null,
+        plannedTss: row.plannedTss ?? null,
+        description: row.description ?? null,
+        structure: null,
+        status: "planned",
+        origin: "ai_generated",
+      });
+      inserted++;
+    }
+
+    await activatePlan(userId, plan.id);
+
+    logger.info({ userId, planId: plan.id, inserted }, "AI training plan committed");
+
+    return { planId: plan.id, inserted, updated: 0, skipped: 0 };
+  });
+
   app.post("/api/plans/import/preview", async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
@@ -52,8 +239,6 @@ export async function planRoutes(app: FastifyInstance) {
     };
   });
 
-  // Commits a previously previewed upload. Re-parses from the saved file (not the client's
-  // preview payload) so the server is the single source of truth for what actually gets written.
   app.post("/api/plans/import/commit", async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
@@ -78,6 +263,7 @@ export async function planRoutes(app: FastifyInstance) {
         userId,
         name: body.planName,
         source: "trainingpeaks_csv",
+        status: "inactive",
         rawFile: upload.csvContent.length < 200_000 ? upload.csvContent : null,
       })
       .returning();
@@ -89,14 +275,13 @@ export async function planRoutes(app: FastifyInstance) {
       if (!row.scheduledAt || !row.runType) continue;
       const scheduledAt = new Date(row.scheduledAt);
 
-      // Reconcile against a prior import of the same plan: match on (plan, time, type)
-      // rather than blind-inserting, so re-uploading the same file doesn't duplicate rows.
       const [existing] = await db
         .select({ id: plannedRuns.id })
         .from(plannedRuns)
         .where(
           and(
             eq(plannedRuns.userId, userId),
+            eq(plannedRuns.planId, plan.id),
             eq(plannedRuns.scheduledAt, scheduledAt),
             eq(plannedRuns.runType, row.runType as RunType),
           ),
@@ -117,25 +302,19 @@ export async function planRoutes(app: FastifyInstance) {
         origin: "imported" as const,
       };
 
-      let runId: string;
       if (existing) {
         await db
           .update(plannedRuns)
           .set({ ...values, updatedAt: new Date() })
           .where(eq(plannedRuns.id, existing.id));
-        runId = existing.id;
         updated++;
       } else {
-        const [created] = await db.insert(plannedRuns).values(values).returning({ id: plannedRuns.id });
-        runId = created!.id;
+        await db.insert(plannedRuns).values(values);
         inserted++;
       }
-      // Bulk imports can be dozens of rows; push to Google in the background so the
-      // commit response doesn't wait on one Calendar API call per row.
-      pushPlannedRunToGoogle(runId, userId).catch((err) =>
-        logger.error({ err, runId }, "failed to push imported run to google"),
-      );
     }
+
+    await activatePlan(userId, plan.id);
 
     logger.info({ userId, planId: plan.id, inserted, updated, skipped }, "training plan import committed");
 

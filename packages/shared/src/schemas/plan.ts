@@ -14,8 +14,14 @@ export type RunType = z.infer<typeof runTypeSchema>;
 export const runStatusSchema = z.enum(["planned", "completed", "skipped", "moved"]);
 export type RunStatus = z.infer<typeof runStatusSchema>;
 
-export const runOriginSchema = z.enum(["imported", "manual", "recommendation"]);
+export const runOriginSchema = z.enum(["imported", "manual", "recommendation", "ai_generated"]);
 export type RunOrigin = z.infer<typeof runOriginSchema>;
+
+export const planStatusSchema = z.enum(["active", "inactive", "archived"]);
+export type PlanStatus = z.infer<typeof planStatusSchema>;
+
+export const planSourceSchema = z.enum(["trainingpeaks_csv", "ai_generated"]);
+export type PlanSource = z.infer<typeof planSourceSchema>;
 
 export const runIntervalSchema = z.object({
   label: z.string().optional(),
@@ -67,8 +73,12 @@ export type UpdatePlannedRunInput = z.infer<typeof updatePlannedRunSchema>;
 export const trainingPlanSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  source: z.literal("trainingpeaks_csv"),
+  source: planSourceSchema,
+  status: planStatusSchema,
+  brief: z.string().nullable(),
   importedAt: z.string(),
+  archivedAt: z.string().nullable(),
+  runCount: z.number().int().nonnegative().optional(),
 });
 export type TrainingPlan = z.infer<typeof trainingPlanSchema>;
 
@@ -108,3 +118,50 @@ export const commitImportSchema = z.object({
   includeRowIndexes: z.array(z.number().int()).optional(),
 });
 export type CommitImportInput = z.infer<typeof commitImportSchema>;
+
+// --- AI plan chat ---
+
+export const planChatRoleSchema = z.enum(["user", "assistant"]);
+export type PlanChatRole = z.infer<typeof planChatRoleSchema>;
+
+export const planChatMessageSchema = z.object({
+  role: planChatRoleSchema,
+  content: z.string().min(1).max(12_000),
+});
+export type PlanChatMessage = z.infer<typeof planChatMessageSchema>;
+
+export const planAiChatRequestSchema = z.object({
+  messages: z.array(planChatMessageSchema).min(1).max(40),
+});
+export type PlanAiChatRequest = z.infer<typeof planAiChatRequestSchema>;
+
+export const aiPlanDraftRunSchema = z.object({
+  scheduledAt: z.string(), // ISO datetime
+  runType: runTypeSchema,
+  durationMin: z.number().positive().nullable().optional(),
+  distanceM: z.number().positive().nullable().optional(),
+  targetPaceSPerKm: z.number().positive().nullable().optional(),
+  plannedTss: z.number().nonnegative().nullable().optional(),
+  description: z.string().nullable().optional(),
+});
+export type AiPlanDraftRun = z.infer<typeof aiPlanDraftRunSchema>;
+
+export const aiPlanDraftSchema = z.object({
+  name: z.string().min(1).max(120),
+  summary: z.string().max(2000).optional(),
+  runs: z.array(aiPlanDraftRunSchema).min(1).max(200),
+});
+export type AiPlanDraft = z.infer<typeof aiPlanDraftSchema>;
+
+export const planAiChatResponseSchema = z.object({
+  assistantMessage: z.string(),
+  draftToken: z.string().nullable(),
+  draft: aiPlanDraftSchema.nullable(),
+});
+export type PlanAiChatResponse = z.infer<typeof planAiChatResponseSchema>;
+
+export const commitAiPlanSchema = z.object({
+  draftToken: z.string().min(1),
+  planName: z.string().min(1).max(120).optional(),
+});
+export type CommitAiPlanInput = z.infer<typeof commitAiPlanSchema>;

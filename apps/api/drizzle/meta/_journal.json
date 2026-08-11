@@ -8,6 +8,41 @@
       "when": 1786467250859,
       "tag": "0000_ambiguous_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786469000000,
+      "tag": "0001_google_login",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786474800000,
+      "tag": "0002_sleep_performance",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786475400000,
+      "tag": "0003_workout_duration",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786476000000,
+      "tag": "0004_workout_score_extras",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786477200000,
+      "tag": "0005_plan_lifecycle",
+      "breakpoints": true
     }
   ]
 }

@@ -49,7 +49,18 @@ export interface WhoopSleep {
       need_from_sleep_debt_milli: number;
     };
     respiratory_rate?: number;
+    sleep_performance_percentage?: number;
+    sleep_consistency_percentage?: number;
   };
+}
+
+export interface WhoopZoneDurations {
+  zone_zero_milli: number;
+  zone_one_milli: number;
+  zone_two_milli: number;
+  zone_three_milli: number;
+  zone_four_milli: number;
+  zone_five_milli: number;
 }
 
 export interface WhoopWorkout {
@@ -66,7 +77,11 @@ export interface WhoopWorkout {
     average_heart_rate: number;
     max_heart_rate: number;
     kilojoule: number;
+    percent_recorded: number;
     distance_meter?: number;
+    altitude_gain_meter?: number;
+    altitude_change_meter?: number;
+    zone_durations: WhoopZoneDurations;
   };
 }
 

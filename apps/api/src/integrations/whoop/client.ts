@@ -6,8 +6,9 @@ import { refreshAndStore } from "./oauth.js";
 import { logger } from "../../lib/logger.js";
 import type { WhoopPaginated } from "./types.js";
 
-// Base REST URL; callers pass paths like "/v2/recovery", "/v2/activity/sleep", etc.
-const API_BASE = "https://api.prod.whoop.com";
+// Developer REST base. Paths are "/v2/recovery", "/v2/activity/sleep", etc.
+// (OAuth authorize/token stay on api.prod.whoop.com/oauth — no /developer prefix.)
+const API_BASE = "https://api.prod.whoop.com/developer";
 
 // Refresh tokens rotate: two concurrent refreshes for the same connection would race,
 // with the second call's refresh_token already invalidated by the first. Serialize
