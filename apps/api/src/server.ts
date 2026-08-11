@@ -21,6 +21,7 @@ import { whoopWebhookRoutes } from "./integrations/whoop/webhooks.js";
 import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
 import { startGoogleChannelRenewalJob } from "./integrations/google/channelRenewal.js";
+import { runMigrations } from "./db/migrate.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -118,15 +119,28 @@ export async function buildServer() {
 async function main() {
   const app = await buildServer();
   try {
+    // Listen before migrating so the platform health check passes immediately; a slow or
+    // failing migration then shows up as a logged error instead of a failed deploy.
     await app.listen({ port: env.listenPort, host: "0.0.0.0" });
     logger.info(`API listening on http://0.0.0.0:${env.listenPort}`);
-    startWhoopNightlySync();
-    startGoogleChannelRenewalJob();
   } catch (err) {
-    logger.error(err);
+    logger.error({ err }, "failed to bind port");
     process.exit(1);
   }
+
+  try {
+    await runMigrations();
+    logger.info("migrations applied");
+  } catch (err) {
+    logger.error({ err }, "migrations failed — API is up but the schema may be stale");
+  }
+
+  startWhoopNightlySync();
+  startGoogleChannelRenewalJob();
 }
+
+process.on("unhandledRejection", (err) => logger.error({ err }, "unhandled rejection"));
+process.on("uncaughtException", (err) => logger.error({ err }, "uncaught exception"));
 
 // Only auto-start when run directly (not when imported by tests).
 const entry = process.argv[1] ?? "";

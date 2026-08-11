@@ -1,13 +1,11 @@
-node_modules
+**/node_modules
 .git
 .pgdata
 .env
 .env.*
 !.env.example
-dist
-apps/web/dist
+**/dist
 apps/api/uploads
-apps/api/dist
 coverage
 *.md
 .cursor
