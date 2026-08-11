@@ -12,7 +12,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   API_PORT: z.coerce.number().int().positive().default(8787),
-  WEB_ORIGIN: z.string().url().default("http://localhost:5173"),
+  WEB_ORIGIN: z.string().url().default("http://localhost:5174"),
   SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 characters"),
   ENCRYPTION_KEY: z.string().min(1, "ENCRYPTION_KEY is required (base64, 32 bytes)"),
 

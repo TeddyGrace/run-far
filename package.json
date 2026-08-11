@@ -6,7 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter ./apps/* run dev",
+    "dev": "pnpm --parallel --filter @run-far/api --filter @run-far/web run dev",
     "dev:api": "pnpm --filter @run-far/api run dev",
     "dev:web": "pnpm --filter @run-far/web run dev",
     "build": "pnpm --recursive run build",

@@ -49,10 +49,10 @@ Then:
 pnpm db:migrate   # apply the schema
 pnpm db:seed      # a fake week of recovery data + planned runs, so the UI
                   # is usable before any integration is connected
-pnpm dev          # runs apps/api on :8787 and apps/web on :5173 in parallel
+pnpm dev          # runs apps/api on :8787 and apps/web on :5174 in parallel
 ```
 
-Open `http://localhost:5173` and sign in with the seeded account:
+Open `http://localhost:5174` and sign in with the seeded account:
 `dev@run-far.local` / `devpassword123`.
 
 ## Registering the OAuth apps

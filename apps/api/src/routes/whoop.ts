@@ -54,7 +54,7 @@ export async function whoopRoutes(app: FastifyInstance) {
 
     backfillWhoop(userId).catch((err) => logger.error({ err, userId }, "whoop backfill failed"));
 
-    reply.redirect(`${process.env.WEB_ORIGIN ?? "http://localhost:5173"}/settings?connected=whoop`);
+    reply.redirect(`${process.env.WEB_ORIGIN ?? "http://localhost:5174"}/settings?connected=whoop`);
   });
 
   app.get("/api/whoop/status", async (request, reply) => {
