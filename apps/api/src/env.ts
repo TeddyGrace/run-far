@@ -24,6 +24,28 @@ function defaultApiOrigin(): string {
 
 const apiOrigin = defaultApiOrigin();
 
+/**
+ * Platform dashboards make it easy to set a variable to an empty string or to a bare
+ * hostname (e.g. a `RAILWAY_PUBLIC_DOMAIN` reference). Drop blanks so schema defaults
+ * apply, and add the scheme so origins parse as URLs.
+ */
+function normalizeOrigin(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, "");
+  return `https://${trimmed.replace(/\/+$/, "")}`;
+}
+
+const rawEnv = {
+  ...process.env,
+  PORT: process.env.PORT?.trim() || undefined,
+  API_PORT: process.env.API_PORT?.trim() || undefined,
+  WEB_ORIGIN: normalizeOrigin(process.env.WEB_ORIGIN),
+  WHOOP_REDIRECT_URI: process.env.WHOOP_REDIRECT_URI?.trim() || undefined,
+  GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI?.trim() || undefined,
+  GOOGLE_AUTH_REDIRECT_URI: process.env.GOOGLE_AUTH_REDIRECT_URI?.trim() || undefined,
+};
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
@@ -49,12 +71,18 @@ const envSchema = z.object({
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-20250514"),
 });
 
-const parsed = envSchema.safeParse(process.env);
+const parsed = envSchema.safeParse(rawEnv);
 
 if (!parsed.success) {
+  // Names safe to echo back: knowing the bad value is what makes the error actionable.
+  const printable = new Set(["WEB_ORIGIN", "PORT", "API_PORT", "NODE_ENV"]);
   console.error("Invalid environment configuration:");
   for (const issue of parsed.error.issues) {
-    console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
+    const key = issue.path.join(".");
+    const received = printable.has(key)
+      ? ` (received: ${JSON.stringify(process.env[key] ?? null)})`
+      : "";
+    console.error(`  - ${key}: ${issue.message}${received}`);
   }
   console.error("Copy .env.example to .env and fill in the required values.");
   process.exit(1);
