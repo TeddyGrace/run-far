@@ -1,13 +1,14 @@
 import { OAuth2Client, type Credentials } from "google-auth-library";
 import { env } from "../../env.js";
 
-// Sign-in asks for Calendar up front so connecting the calendar isn't a second
-// consent screen after login.
+// Sign-in asks for Calendar (and Gmail send, for the recovery digest email) up front so
+// connecting them isn't a second consent screen after login.
 export const LOGIN_SCOPES = [
   "openid",
   "email",
   "profile",
   "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/gmail.send",
 ];
 
 function newAuthOAuthClient(): OAuth2Client {
