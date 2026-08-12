@@ -10,7 +10,7 @@ export const RECOMMENDATION_CONFIG = {
     minConsecutiveDays: 2,
   },
   sleepDebt: {
-    thresholdMin7d: 180, // cumulative 7-day sleep debt (minutes) that triggers a shift
+    thresholdMin: 90, // today's rolling sleep debt (minutes, Whoop's own figure) that triggers a shift
   },
   acwr: {
     spikeThreshold: 1.5, // acute:chronic training load ratio above this is a ramp-rate warning

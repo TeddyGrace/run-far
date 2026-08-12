@@ -46,7 +46,7 @@ function buildDigest(
     ["Recovery", fmt(snapshot.recoveryScore)],
     ["HRV", `${fmt(snapshot.hrvRmssdMs, 0, "ms")} (baseline ${fmt(snapshot.hrvBaselineMs, 0, "ms")})`],
     ["Resting HR", fmt(snapshot.restingHr, 0, "bpm")],
-    ["Sleep debt (7d)", fmtDuration(snapshot.sleepDebtMin7d)],
+    ["Sleep debt (today)", fmtDuration(snapshot.sleepDebtMinToday)],
     ["Strain (avg/day, 7d)", fmt(snapshot.strain7d != null ? snapshot.strain7d / 7 : null, 1)],
     ["ACWR", fmt(snapshot.acwr, 2)],
   ];

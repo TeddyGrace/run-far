@@ -14,7 +14,7 @@ export const recoverySnapshotSchema = z.object({
   hrvBaselineSd: z.number().nullable(),
   restingHr: z.number().nullable(),
   restingHrBaseline: z.number().nullable(),
-  sleepDebtMin7d: z.number().nullable(),
+  sleepDebtMinToday: z.number().nullable(),
   strain7d: z.number().nullable(),
   acuteTss7d: z.number().nullable(),
   chronicTss28d: z.number().nullable(),

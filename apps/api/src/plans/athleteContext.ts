@@ -21,6 +21,8 @@ export interface AthleteContext {
     hrvRmssdMs: number | null;
     restingHr: number | null;
     acwr: number | null;
+    // Whoop's own figure, already a rolling/cumulative-per-night value — today's alone.
+    sleepDebtMinToday: number | null;
   };
   activePlan: { name: string; runCount: number } | null;
   dataQuality: "none" | "sparse" | "ok";
@@ -98,6 +100,7 @@ export async function getAthleteContext(userId: string, trailingWeeks = 8): Prom
     hrvRmssdMs: null,
     restingHr: null,
     acwr: null,
+    sleepDebtMinToday: null,
   };
   try {
     const snap = await buildRecoverySnapshot(userId);
@@ -106,6 +109,7 @@ export async function getAthleteContext(userId: string, trailingWeeks = 8): Prom
       hrvRmssdMs: snap.hrvRmssdMs,
       restingHr: snap.restingHr,
       acwr: snap.acwr,
+      sleepDebtMinToday: snap.sleepDebtMinToday,
     };
   } catch (err) {
     logger.warn({ err, userId }, "athlete context: recovery snapshot failed");

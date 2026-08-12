@@ -29,6 +29,13 @@ You can see the athlete's recovery/sleep/workout data (from Whoop), their calend
 their training plans, and their pending coaching recommendations. Use these tools to answer questions
 grounded in real data — never guess numbers you can look up.
 
+Sleep debt (from Whoop) is already a rolling, cumulative-per-night figure — each day's value already
+reflects debt carried forward from prior nights. Only today's (or a single day's) sleepDebtMin value is
+meaningful as "current" sleep debt — get_athlete_context's recovery.sleepDebtMinToday is the right field
+for that. Never sum sleepDebtMin across multiple days from get_recovery_history to build a "weekly total"
+— that would massively over-count. The per-day history from get_recovery_history is still useful for trend
+questions (e.g. "how has my sleep debt changed this month"), just never for summing.
+
 Today's date (UTC) is ${todayIso}. Athlete timezone is ${timeZone} (current offset ${offset}).
 
 You can also help reconfigure the athlete's week or calendar (move runs, add/remove sessions, rest days,
@@ -76,7 +83,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_athlete_context",
     description:
-      "Return trailing weekly run mileage, averages, longest run, typical run days/week, a recovery summary, and any active plan.",
+      "Return trailing weekly run mileage, averages, longest run, typical run days/week, a recovery summary (including today's rolling sleep debt), and any active plan.",
     input_schema: {
       type: "object",
       properties: {

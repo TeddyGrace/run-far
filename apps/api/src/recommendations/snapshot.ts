@@ -42,9 +42,10 @@ function startOfUtcMonth(d: Date): Date {
 
 /**
  * Builds today's RecoverySnapshot for a user: recovery/HRV/RHR vs 30-day rolling baseline,
- * 7-day sleep debt, 7-day strain, and the 7d:28d planned-load ratio (ACWR). This is the only
- * place in the recommendation engine that touches the database — everything downstream
- * (the rules) is pure, taking this snapshot as input.
+ * today's sleep debt (Whoop's own figure is already a rolling/cumulative metric — never
+ * re-aggregate it over multiple days), 7-day strain, and the 7d:28d planned-load ratio
+ * (ACWR). This is the only place in the recommendation engine that touches the database —
+ * everything downstream (the rules) is pure, taking this snapshot as input.
  */
 export async function buildRecoverySnapshot(userId: string): Promise<RecoverySnapshot> {
   const today = new Date();
@@ -85,18 +86,13 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     }
   }
 
-  const sleepWindowStart = isoDate(daysAgo(6));
-  const sleepRows = await db
+  const strainWindowStart = isoDate(daysAgo(6));
+
+  const [todaySleepRow] = await db
     .select()
     .from(sleepRecords)
-    .where(
-      and(
-        eq(sleepRecords.userId, userId),
-        gte(sleepRecords.date, sleepWindowStart),
-        lte(sleepRecords.date, todayIso),
-      ),
-    );
-  const sleepDebtMin7d = sleepRows.reduce((sum, r) => sum + (r.sleepDebtMin ?? 0), 0);
+    .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.date, todayIso)));
+  const sleepDebtMinToday = todaySleepRow?.sleepDebtMin ?? null;
 
   const strainRows = await db
     .select()
@@ -104,7 +100,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     .where(
       and(
         eq(whoopWorkouts.userId, userId),
-        gte(whoopWorkouts.date, sleepWindowStart),
+        gte(whoopWorkouts.date, strainWindowStart),
         lte(whoopWorkouts.date, todayIso),
       ),
     );
@@ -190,7 +186,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     hrvBaselineSd,
     restingHr: todayRow?.restingHr ?? null,
     restingHrBaseline,
-    sleepDebtMin7d: sleepRows.length ? sleepDebtMin7d : null,
+    sleepDebtMinToday,
     strain7d,
     acuteTss7d,
     chronicTss28d,

@@ -11,7 +11,7 @@ const baseSnapshot: RecoverySnapshot = {
   hrvBaselineSd: 5,
   restingHr: 50,
   restingHrBaseline: 50,
-  sleepDebtMin7d: 0,
+  sleepDebtMinToday: 0,
   strain7d: 50,
   acuteTss7d: 100,
   chronicTss28d: 400,
@@ -149,7 +149,7 @@ describe("sleep-debt", () => {
   it("shifts the next hard session a day later when debt exceeds the threshold", () => {
     const run = makeRun({ runType: "interval", scheduledAt: new Date("2026-08-12T14:00:00Z") });
     const result = evaluate(
-      makeContext({ snapshot: { ...baseSnapshot, sleepDebtMin7d: 200 }, upcoming: [run] }),
+      makeContext({ snapshot: { ...baseSnapshot, sleepDebtMinToday: 200 }, upcoming: [run] }),
     );
     expect(result.primary?.ruleId).toBe("sleep-debt");
     expect(result.primary?.proposedChanges).toEqual([
@@ -165,7 +165,7 @@ describe("sleep-debt", () => {
   it("does not fire below the debt threshold", () => {
     const run = makeRun({ runType: "interval" });
     const result = evaluate(
-      makeContext({ snapshot: { ...baseSnapshot, sleepDebtMin7d: 50 }, upcoming: [run] }),
+      makeContext({ snapshot: { ...baseSnapshot, sleepDebtMinToday: 50 }, upcoming: [run] }),
     );
     expect(result.primary).toBeNull();
   });
