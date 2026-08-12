@@ -4,6 +4,7 @@ import { plannedRuns, oauthConnections, syncConflicts } from "../../db/schema.js
 import { ensureRunningCalendar, insertEvent, updateEvent, deleteEvent } from "./calendarClient.js";
 import type { EventUpsertInput } from "./calendarClient.js";
 import { logger } from "../../lib/logger.js";
+import { formatMiles } from "../../lib/units.js";
 
 export async function hasGoogleConnection(userId: string): Promise<boolean> {
   const [conn] = await db
@@ -17,10 +18,8 @@ function toEventInput(run: typeof plannedRuns.$inferSelect): EventUpsertInput {
   const durationMin = run.durationMin ?? 30;
   const start = run.scheduledAt;
   const end = new Date(start.getTime() + durationMin * 60_000);
-  const distanceKm = run.distanceM ? (run.distanceM / 1000).toFixed(1) : null;
-  const parts = [run.description, distanceKm ? `${distanceKm} km` : null, `${durationMin} min`].filter(
-    Boolean,
-  );
+  const distanceMiles = formatMiles(run.distanceM);
+  const parts = [run.description, distanceMiles, `${durationMin} min`].filter(Boolean);
   return {
     plannedRunId: run.id,
     summary: `${capitalize(run.runType)} run`,
