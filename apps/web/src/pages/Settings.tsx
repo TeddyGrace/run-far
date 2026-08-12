@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ConnectionStatus, UserSettings } from "@run-far/shared";
 import { AI_MODEL_OPTIONS } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
-import { useAuth } from "../lib/auth.js";
+import { useAuth, useLogout } from "../lib/auth.js";
 
 function ConnectionCard({
   title,
@@ -160,6 +160,28 @@ function AiModelsCard() {
   );
 }
 
+function AccountCard() {
+  const { user } = useAuth();
+  const logout = useLogout();
+
+  return (
+    <div className="rounded-xl border border-border bg-surface-1 p-5">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h3 className="font-display font-semibold text-ink-primary">Account</h3>
+          <p className="mt-1 text-sm text-ink-secondary">Signed in as {user?.email}</p>
+        </div>
+        <button
+          onClick={() => logout()}
+          className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EmailSignInCard() {
   const { user } = useAuth();
   const [email, setEmail] = useState(user?.email ?? "");
@@ -217,7 +239,7 @@ function EmailSignInCard() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-primary"
+            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
           />
         </div>
         <div>
@@ -231,7 +253,7 @@ function EmailSignInCard() {
             minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-primary"
+            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
           />
         </div>
         <div>
@@ -245,7 +267,7 @@ function EmailSignInCard() {
             minLength={8}
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
-            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-primary"
+            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
           />
         </div>
         <button
@@ -295,6 +317,7 @@ export function Settings() {
   return (
     <div className="max-w-2xl space-y-4">
       <h1 className="mb-2 font-display text-xl font-semibold text-ink-primary">Settings</h1>
+      <AccountCard />
       <ConnectionCard
         title="Whoop"
         description="Recovery, HRV, sleep, and workout data driving today's recommendation. Until Whoop webhooks are hosted live, use Sync now to pull the last 90 days."

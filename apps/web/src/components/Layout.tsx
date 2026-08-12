@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import clsx from "clsx";
-import { useAuth, useLogout } from "../lib/auth.js";
+import { useAuth } from "../lib/auth.js";
 import { AssistantChat } from "./AssistantChat.js";
 
 const NAV_ITEMS = [
@@ -16,7 +16,6 @@ const WIDE_ROUTES = ["/calendar"];
 
 export function Layout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const logout = useLogout();
   const { pathname } = useLocation();
   const containerWidth = WIDE_ROUTES.some((route) => pathname.startsWith(route))
     ? "max-w-[1600px]"
@@ -49,14 +48,8 @@ export function Layout({ children }: { children: ReactNode }) {
             ))}
           </nav>
           {user && (
-            <div className="flex shrink-0 items-center gap-3 text-sm text-ink-secondary">
-              <span className="hidden sm:inline">{user.email}</span>
-              <button
-                onClick={() => logout()}
-                className="rounded-md px-2.5 py-1 text-ink-secondary transition-colors hover:bg-surface-1 hover:text-ink-primary"
-              >
-                Sign out
-              </button>
+            <div className="hidden shrink-0 items-center gap-3 text-sm text-ink-secondary sm:flex">
+              <span>{user.email}</span>
             </div>
           )}
         </div>

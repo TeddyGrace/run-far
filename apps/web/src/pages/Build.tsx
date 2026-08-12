@@ -522,7 +522,7 @@ function DescribePlan({
           }}
           rows={2}
           placeholder="Message the coach…"
-          className="min-h-[2.75rem] flex-1 resize-y rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-ink-primary"
+          className="min-h-[2.75rem] flex-1 resize-y rounded-md border border-border bg-surface-1 px-3 py-2 text-base text-ink-primary sm:text-sm"
         />
         <button
           type="button"

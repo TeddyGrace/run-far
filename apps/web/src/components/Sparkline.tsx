@@ -183,8 +183,16 @@ export function Sparkline({
       )}
 
       {active && activeValue != null && (
-        <g transform={`translate(${Math.min(Math.max(activeX, 36), width - 36)}, ${Math.max(10, activeY - 10)})`}>
-          <text textAnchor="middle" fontSize={10} className="fill-ink-secondary font-mono">
+        <g transform={`translate(${Math.min(Math.max(activeX, 36), width - 36)}, ${Math.max(14, activeY - 14)})`}>
+          <text
+            textAnchor="middle"
+            fontSize={10}
+            stroke="#1B2320"
+            strokeWidth={3}
+            strokeLinejoin="round"
+            paintOrder="stroke"
+            className="fill-ink-secondary font-mono"
+          >
             {hoverIndex != null
               ? `${formatAxisDate(active.date)} · ${formatValue ? formatValue(activeValue) : activeValue.toFixed(0)}`
               : formatValue
