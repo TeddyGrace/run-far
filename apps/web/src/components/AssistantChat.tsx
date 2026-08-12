@@ -304,7 +304,7 @@ export function AssistantChat() {
                   }}
                   rows={1}
                   placeholder="Ask the assistant…"
-                  className="min-h-[2.5rem] flex-1 resize-none rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-ink-primary"
+                  className="min-h-[2.5rem] flex-1 resize-none rounded-md border border-border bg-surface-1 px-3 py-2 text-base text-ink-primary sm:text-sm"
                 />
                 <button
                   type="button"
