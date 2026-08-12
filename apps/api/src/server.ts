@@ -17,6 +17,7 @@ import { runRoutes } from "./routes/runs.js";
 import { googleRoutes } from "./routes/google.js";
 import { recommendationRoutes } from "./routes/recommendations.js";
 import { recoveryRoutes } from "./routes/recovery.js";
+import { assistantRoutes } from "./routes/assistant.js";
 import { whoopWebhookRoutes } from "./integrations/whoop/webhooks.js";
 import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
@@ -88,6 +89,7 @@ export async function buildServer() {
   await app.register(googleWebhookRoutes);
   await app.register(recommendationRoutes);
   await app.register(recoveryRoutes);
+  await app.register(assistantRoutes);
 
   // Production: serve the Vite SPA from the same origin so `/api` cookie auth just works.
   const webDist = env.NODE_ENV === "production" ? webDistPath() : null;

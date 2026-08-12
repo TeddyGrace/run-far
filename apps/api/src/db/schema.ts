@@ -40,6 +40,7 @@ export const recommendationStatusEnum = pgEnum("recommendation_status", [
   "accepted",
   "dismissed",
 ]);
+export const chatRoleEnum = pgEnum("chat_role", ["user", "assistant"]);
 
 // --- Core ---
 
@@ -244,6 +245,36 @@ export const recommendations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("recommendations_user_date_idx").on(t.userId, t.date)],
+);
+
+// --- Global AI assistant chat ---
+
+export const chatSessions = pgTable(
+  "chat_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default("New chat"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_sessions_user_updated_idx").on(t.userId, t.updatedAt)],
+);
+
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: "cascade" }),
+    role: chatRoleEnum("role").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_messages_session_created_idx").on(t.sessionId, t.createdAt)],
 );
 
 // --- Sync bookkeeping ---

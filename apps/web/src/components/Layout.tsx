@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import clsx from "clsx";
 import { useAuth, useLogout } from "../lib/auth.js";
+import { AssistantChat } from "./AssistantChat.js";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard" },
@@ -65,6 +66,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </header>
       <main className={clsx("mx-auto px-6 py-8", containerWidth)}>{children}</main>
+      <AssistantChat />
     </div>
   );
 }
