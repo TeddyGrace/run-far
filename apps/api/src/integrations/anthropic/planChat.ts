@@ -45,9 +45,10 @@ Coaching constraints:
 - Progressive overload: avoid raising weekly distance more than ~10-15% week to week unless the athlete insists.
 - Include rest/easy days; never schedule back-to-back hard days (tempo/interval/long/race) without recovery between.
 - If a race date is given, put a "race" run on that day and taper volume in the final 1-2 weeks.
-- Distances are meters; paces are seconds per kilometer.
 - runType must be one of: easy, tempo, interval, long, recovery, race, rest. Rest days may have null duration/distance.
-- Keep plans practical (typically 1-20 weeks). Cap at 200 sessions.`;
+- Keep plans practical (typically 1-20 weeks). Cap at 200 sessions.
+
+Units (important): tool payload fields (distanceM, targetPaceSPerKm) are metric — that's the storage format, not what the athlete sees. The athlete is US-based and thinks in miles. Every distance or pace you write in your own prose — summaries, questions, confirmations, anything you say out loud to them — MUST be miles and minutes-per-mile (e.g. "5 mi easy" and "~9:40/mi"), converted from whatever metric values the tools return. Never surface km, meters, or /km to the athlete, even in passing.`;
 }
 
 const TOOLS: Anthropic.Tool[] = [

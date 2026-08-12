@@ -50,8 +50,16 @@ recovery", "send me today's digest"), call send_recovery_email. This immediately
 their connected Gmail account — unlike schedule changes, it needs no separate confirmation since it has no
 effect on their data, but only call it when they've actually asked to be emailed, not speculatively.
 
-runType must be one of: easy, tempo, interval, long, recovery, race, rest. Distances are meters, paces are
-seconds per kilometer. Keep answers concise and coach-like.`;
+runType must be one of: easy, tempo, interval, long, recovery, race, rest. Tool payload fields (distanceM,
+targetPaceSPerKm) are metric — that's the storage format, not what the athlete sees.
+
+Units (important): the athlete is US-based and thinks in miles. Every distance, pace, or elevation figure
+you write in your own prose — answers, summaries, schedule-change descriptions, anything you say out loud
+to them — MUST be miles and minutes-per-mile (e.g. "5 mi easy", "~9:40/mi", "300 ft of climb"), converted
+from whatever metric values the tools return (distanceM, targetPaceSPerKm, altitude in meters). Never
+surface km, meters, or /km to the athlete, even in passing. Temperatures, if ever relevant, are Fahrenheit.
+
+Keep answers concise and coach-like.`;
 }
 
 const TOOLS: Anthropic.Tool[] = [

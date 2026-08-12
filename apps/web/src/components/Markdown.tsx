@@ -28,6 +28,20 @@ export function Markdown({ content }: { content: string }) {
             </ol>
           );
         }
+        if (block.type === "h") {
+          const Tag = (`h${block.level}` as const) satisfies keyof JSX.IntrinsicElements;
+          const sizeClass =
+            block.level === 1
+              ? "text-base font-semibold"
+              : block.level === 2
+                ? "text-sm font-semibold"
+                : "text-sm font-medium";
+          return (
+            <Tag key={i} className={`${sizeClass} text-ink-primary`}>
+              {renderInline(block.text)}
+            </Tag>
+          );
+        }
         if (block.type === "table") {
           return (
             <div key={i} className="overflow-x-auto rounded-lg border border-border">
@@ -70,10 +84,12 @@ type Block =
   | { type: "p"; text: string }
   | { type: "ul"; items: string[] }
   | { type: "ol"; items: string[] }
-  | { type: "table"; headers: string[]; rows: string[][] };
+  | { type: "table"; headers: string[]; rows: string[][] }
+  | { type: "h"; level: 1 | 2 | 3; text: string };
 
 const UL_RE = /^\s*[-*]\s+(.*)$/;
 const OL_RE = /^\s*\d+[.)]\s+(.*)$/;
+const HEADING_RE = /^\s*(#{1,6})\s+(.*)$/;
 const TABLE_ROW_RE = /^\s*\|(.*)\|\s*$/;
 const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
@@ -101,6 +117,15 @@ function splitBlocks(content: string): Block[] {
       flushParagraph();
       continue;
     }
+    const heading = line.match(HEADING_RE);
+    if (heading) {
+      flushParagraph();
+      // Collapse h4-h6 into h3 — the chat panel is too narrow for finer heading tiers.
+      const level = Math.min(heading[1]!.length, 3) as 1 | 2 | 3;
+      blocks.push({ type: "h", level, text: heading[2]!.trim() });
+      continue;
+    }
+
     if (TABLE_ROW_RE.test(line) && i + 1 < lines.length && TABLE_SEPARATOR_RE.test(lines[i + 1]!)) {
       flushParagraph();
       const headers = parseTableRow(line);

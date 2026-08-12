@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useLayoutEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import type {
@@ -19,6 +19,11 @@ interface SessionMessagesResponse {
 export function AssistantChat() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  // Panel stays mounted slightly past `open` going false so the closing transition can play,
+  // and `visible` flips a frame after mount so the opening transition animates from its
+  // initial (closed) styles instead of snapping straight to open.
+  const [panelMounted, setPanelMounted] = useState(false);
+  const [visible, setVisible] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -47,6 +52,24 @@ export function AssistantChat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messagesQuery.data, pendingProposal]);
 
+  useEffect(() => {
+    if (open) {
+      setPanelMounted(true);
+    } else {
+      setVisible(false);
+      const t = setTimeout(() => setPanelMounted(false), 180);
+      return () => clearTimeout(t);
+    }
+  }, [open]);
+
+  // Flips to true one paint after mount so the transition animates from the closed styles
+  // rather than starting already-open.
+  useLayoutEffect(() => {
+    if (!panelMounted) return;
+    const raf = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(raf);
+  }, [panelMounted]);
+
   const createSession = useMutation({
     mutationFn: () => api.post<{ id: string }>("/assistant/sessions", {}),
     onSuccess: (data) => {
@@ -70,15 +93,19 @@ export function AssistantChat() {
   });
 
   const send = useMutation({
-    mutationFn: (content: string) =>
-      api.post<ChatTurnResponse>(`/assistant/sessions/${activeSessionId}/chat`, { content }),
-    onSuccess: (data) => {
+    // sessionId is passed explicitly rather than read from `activeSessionId` state: when
+    // starting a brand-new chat, submit() calls this immediately after setActiveSessionId(),
+    // before React has re-rendered — a closure over `activeSessionId` would still see the
+    // old `null` and send a literal "null" as the URL's session id.
+    mutationFn: ({ sessionId, content }: { sessionId: string; content: string }) =>
+      api.post<ChatTurnResponse>(`/assistant/sessions/${sessionId}/chat`, { content }),
+    onSuccess: (data, variables) => {
       setPendingProposal(
         data.proposal && data.proposalToken
-          ? { proposal: data.proposal, token: data.proposalToken, sessionId: activeSessionId! }
+          ? { proposal: data.proposal, token: data.proposalToken, sessionId: variables.sessionId }
           : null,
       );
-      void qc.invalidateQueries({ queryKey: ["assistant", "messages", activeSessionId] });
+      void qc.invalidateQueries({ queryKey: ["assistant", "messages", variables.sessionId] });
       void qc.invalidateQueries({ queryKey: ["assistant", "sessions"] });
       setError(null);
     },
@@ -115,18 +142,20 @@ export function AssistantChat() {
         onSuccess: (data) => {
           setActiveSessionId(data.id);
           setInput("");
-          send.mutate(text, { onError: () => setInput(text) });
+          send.mutate({ sessionId: data.id, content: text }, { onError: () => setInput(text) });
         },
       });
       return;
     }
     setInput("");
-    send.mutate(text, { onError: () => setInput(text) });
+    send.mutate({ sessionId: activeSessionId, content: text }, { onError: () => setInput(text) });
   }
 
   const messages = messagesQuery.data?.messages ?? [];
   const optimisticUser =
-    send.isPending && send.variables ? { id: "pending", role: "user" as const, content: send.variables, createdAt: "" } : null;
+    send.isPending && send.variables
+      ? { id: "pending", role: "user" as const, content: send.variables.content, createdAt: "" }
+      : null;
 
   return (
     <>
@@ -151,8 +180,14 @@ export function AssistantChat() {
         )}
       </button>
 
-      {open && (
-        <div className="fixed bottom-20 right-5 z-40 flex h-[32rem] w-[26rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-surface-0 shadow-2xl">
+      {panelMounted && (
+        <div
+          className={clsx(
+            "fixed bottom-20 right-5 z-40 flex h-[32rem] w-[26rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-2xl border border-border bg-surface-0 shadow-2xl",
+            "origin-bottom-right transition-all duration-200 ease-out",
+            visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-95 opacity-0",
+          )}
+        >
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2">
               <button
