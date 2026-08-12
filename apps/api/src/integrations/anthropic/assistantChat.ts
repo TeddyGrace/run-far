@@ -14,6 +14,8 @@ import { getActivePlanId, visibleRunsSql } from "../../plans/lifecycle.js";
 import { offsetStringForZone, dateYmdInZone } from "../../lib/zonedTime.js";
 import { formatFeet, formatMiles, withImperialRunFields } from "../../lib/units.js";
 import { sendRecoveryDigestNow } from "../google/recoveryDigest.js";
+import { hasGoogleConnection } from "../google/push.js";
+import { listPrimaryEvents } from "../google/calendarClient.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 
 const MAX_TOOL_ITERATIONS = 8;
@@ -55,6 +57,14 @@ Only call propose_schedule_changes once you have enough information (don't guess
 given and that aren't already on the calendar). Ask clarifying questions first if the request is ambiguous
 (e.g. "reconfigure my week" with no detail — ask what's driving it: fatigue, a scheduling conflict, wanting
 more/less volume, etc, and confirm which days are in play).
+
+Whenever the athlete asks you to review, look at, or optimize their week's schedule, call get_runs AND
+get_calendar_events for the same date range before saying anything substantive. get_calendar_events returns
+the athlete's real personal commitments (event titles + times) from their Google Calendar — call out any
+specific runs that overlap one by name (e.g. "your Thursday tempo run overlaps Dentist, 3-4pm"), and never
+propose a scheduledAt in propose_schedule_changes that overlaps one of those events. If Google isn't
+connected, get_calendar_events tells you so — mention that you can't check for calendar conflicts rather
+than silently skipping the check.
 
 If the athlete asks you to email/send them today's recovery summary or recommendations (e.g. "email me my
 recovery", "send me today's digest"), call send_recovery_email. This immediately sends a real email via
@@ -120,6 +130,20 @@ const TOOLS: Anthropic.Tool[] = [
     name: "get_runs",
     description:
       "Return planned runs (calendar entries) in a date range. Defaults to the next 14 days if no range given. Use this before proposing changes so you know current runIds.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "YYYY-MM-DD, inclusive. Defaults to today." },
+        to: { type: "string", description: "YYYY-MM-DD, inclusive. Defaults to 14 days from `from`." },
+      },
+    },
+  },
+  {
+    name: "get_calendar_events",
+    description:
+      "Return the athlete's personal Google Calendar events (not runs) in a date range — their real " +
+      "commitments, with titles and times. Defaults to the next 14 days if no range given. Call this " +
+      "alongside get_runs whenever reviewing or optimizing the week, so you can flag and avoid conflicts.",
     input_schema: {
       type: "object",
       properties: {
@@ -260,6 +284,18 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         )
         .orderBy(plannedRuns.scheduledAt);
       return rows.map(withImperialRunFields);
+    }
+    case "get_calendar_events": {
+      if (!(await hasGoogleConnection(userId))) {
+        return { connected: false, events: [] };
+      }
+      const from = typeof input.from === "string" ? input.from : isoDate(new Date());
+      const fromDate = new Date(`${from}T00:00:00Z`);
+      const to =
+        typeof input.to === "string" ? input.to : isoDate(new Date(fromDate.getTime() + 14 * 86_400_000));
+      const toDate = new Date(`${to}T23:59:59Z`);
+      const events = await listPrimaryEvents(userId, fromDate.toISOString(), toDate.toISOString());
+      return { connected: true, events };
     }
     case "get_active_plan": {
       const plan = await getActivePlanSnapshot(userId);

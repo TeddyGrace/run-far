@@ -169,6 +169,44 @@ export async function getPrimaryBusyPeriods(
     .map((b) => ({ start: new Date(b.start!), end: new Date(b.end!) }));
 }
 
+export interface CalendarEvent {
+  id: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+}
+
+/** Titled events on the user's primary calendar in a date range — unlike
+ * `getPrimaryBusyPeriods` (free/busy only), this keeps the summary/title so callers
+ * (the AI assistant) can talk about *what* a conflict is, not just that one exists. */
+export async function listPrimaryEvents(
+  userId: string,
+  timeMinIso: string,
+  timeMaxIso: string,
+): Promise<CalendarEvent[]> {
+  const api = await getCalendarApi(userId);
+  const { data } = await api.events.list({
+    calendarId: "primary",
+    timeMin: timeMinIso,
+    timeMax: timeMaxIso,
+    singleEvents: true,
+    orderBy: "startTime",
+  });
+  return (data.items ?? [])
+    .filter((e) => e.start && e.end)
+    .map((e) => {
+      const allDay = Boolean(e.start!.date);
+      return {
+        id: e.id ?? "",
+        summary: e.summary ?? "(untitled event)",
+        start: (e.start!.dateTime ?? e.start!.date)!,
+        end: (e.end!.dateTime ?? e.end!.date)!,
+        allDay,
+      };
+    });
+}
+
 /** One page of an incremental (or, with no syncToken, full) events.list call. */
 export async function listEventsPage(
   userId: string,

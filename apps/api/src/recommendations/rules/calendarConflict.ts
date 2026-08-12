@@ -1,7 +1,7 @@
 import type { Rule } from "../types.js";
-import { nextRun } from "./shared.js";
 import type { BusyPeriod } from "../types.js";
 import type { PlannedRunRow } from "../types.js";
+import type { ProposedChange } from "@run-far/shared";
 
 function overlaps(runStart: Date, runEnd: Date, busy: BusyPeriod): boolean {
   return runStart < busy.end && runEnd > busy.start;
@@ -26,36 +26,54 @@ function findNearestOpenSlot(run: PlannedRunRow, busyPeriods: BusyPeriod[]): Dat
   return null;
 }
 
-/** The next planned run overlaps something on the user's primary calendar: propose the
- * nearest open slot the same day. */
+/** Every planned run this week that overlaps something on the user's primary calendar:
+ * propose the nearest open slot the same day for each one that has a viable slot. */
 export const calendarConflict: Rule = ({ upcoming, busyPeriods }) => {
   if (busyPeriods.length === 0) return null;
-  const run = nextRun(upcoming);
-  if (!run) return null;
 
-  const runStart = run.scheduledAt;
-  const runEnd = new Date(runStart.getTime() + (run.durationMin ?? 30) * 60_000);
-  const conflict = busyPeriods.find((b) => overlaps(runStart, runEnd, b));
-  if (!conflict) return null;
+  const conflicting = [...upcoming]
+    .sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime())
+    .filter((run) => {
+      const runStart = run.scheduledAt;
+      const runEnd = new Date(runStart.getTime() + (run.durationMin ?? 30) * 60_000);
+      return busyPeriods.some((b) => overlaps(runStart, runEnd, b));
+    });
+  if (conflicting.length === 0) return null;
 
-  const openSlot = findNearestOpenSlot(run, busyPeriods);
-  if (!openSlot) {
-    return {
-      ruleId: "calendar-conflict",
-      severity: "info",
-      summary: `Your ${run.runType} run conflicts with something on your calendar today`,
-      reason: `The planned ${run.runType} run at ${runStart.toLocaleTimeString()} overlaps a busy period on your calendar, and no clear open slot was found today between 5am and 9pm.`,
-      proposedChanges: [],
-    };
+  const proposedChanges: ProposedChange[] = [];
+  const notes: string[] = [];
+
+  for (const run of conflicting) {
+    const runStart = run.scheduledAt;
+    const dayLabel = runStart.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    const openSlot = findNearestOpenSlot(run, busyPeriods);
+    if (!openSlot) {
+      notes.push(
+        `${dayLabel} ${run.runType} run at ${runStart.toLocaleTimeString()} overlaps your calendar, and no clear open slot was found that day between 5am and 9pm.`,
+      );
+      continue;
+    }
+    notes.push(
+      `${dayLabel} ${run.runType} run overlaps your calendar — ${openSlot.toLocaleTimeString()} looks open and fits the run's duration.`,
+    );
+    proposedChanges.push({
+      plannedRunId: run.id,
+      field: "scheduledAt",
+      from: runStart.toISOString(),
+      to: openSlot.toISOString(),
+    });
   }
+
+  const summary =
+    conflicting.length === 1 && conflicting[0]
+      ? `Your ${conflicting[0].runType} run conflicts with your calendar this week`
+      : `${conflicting.length} runs this week conflict with your calendar`;
 
   return {
     ruleId: "calendar-conflict",
     severity: "info",
-    summary: `Your ${run.runType} run conflicts with your calendar — move it to ${openSlot.toLocaleTimeString()}`,
-    reason: `The planned ${run.runType} run overlaps a busy period on your calendar. ${openSlot.toLocaleTimeString()} looks open today and fits the run's duration.`,
-    proposedChanges: [
-      { plannedRunId: run.id, field: "scheduledAt", from: runStart.toISOString(), to: openSlot.toISOString() },
-    ],
+    summary,
+    reason: notes.join(" "),
+    proposedChanges,
   };
 };

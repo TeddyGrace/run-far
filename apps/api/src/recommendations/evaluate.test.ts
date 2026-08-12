@@ -237,6 +237,21 @@ describe("calendar-conflict", () => {
     const result = evaluate(makeContext({ upcoming: [run], busyPeriods: [busy] }));
     expect(result.primary).toBeNull();
   });
+
+  it("flags every conflicting run in the week, not just the next one", () => {
+    const runA = makeRun({ scheduledAt: new Date("2026-08-12T14:00:00Z"), durationMin: 60 });
+    const runB = makeRun({ scheduledAt: new Date("2026-08-14T14:00:00Z"), durationMin: 60 });
+    const clean = makeRun({ scheduledAt: new Date("2026-08-13T14:00:00Z"), durationMin: 60 });
+    const busyA = { start: new Date("2026-08-12T14:00:00Z"), end: new Date("2026-08-12T15:00:00Z") };
+    const busyB = { start: new Date("2026-08-14T14:00:00Z"), end: new Date("2026-08-14T15:00:00Z") };
+    const result = evaluate(
+      makeContext({ upcoming: [runA, clean, runB], busyPeriods: [busyA, busyB] }),
+    );
+    expect(result.primary?.ruleId).toBe("calendar-conflict");
+    expect(result.primary?.summary).toContain("2 runs");
+    const touchedRunIds = result.primary?.proposedChanges.map((c) => c.plannedRunId);
+    expect(touchedRunIds).toEqual([runA.id, runB.id]);
+  });
 });
 
 describe("evaluate priority ordering", () => {
