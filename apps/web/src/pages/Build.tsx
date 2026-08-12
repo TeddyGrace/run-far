@@ -22,6 +22,7 @@ export function Build() {
   const [result, setResult] = useState<{ inserted: number; updated: number; skipped: number } | null>(
     null,
   );
+  const [resyncMessage, setResyncMessage] = useState<string | null>(null);
 
   const plansQuery = useQuery({
     queryKey: ["plans", showArchived],
@@ -53,6 +54,21 @@ export function Build() {
     onError: (err) => setError(err instanceof ApiError ? err.message : "Couldn't unarchive plan"),
   });
 
+  const resyncGoogle = useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ synced: number; failed: number }>(`/plans/${id}/resync-google`, {}),
+    onSuccess: (data) => {
+      setError(null);
+      setResyncMessage(
+        `Resynced ${data.synced} run${data.synced === 1 ? "" : "s"} to Google Calendar${
+          data.failed ? ` (${data.failed} failed)` : ""
+        }`,
+      );
+      void qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Couldn't resync Google Calendar"),
+  });
+
   function onPlanCreated(data: { inserted: number; updated: number; skipped: number }) {
     setResult(data);
     setAddMode(null);
@@ -82,6 +98,8 @@ export function Build() {
           {result.skipped > 0 && `, skipped ${result.skipped}`}. This plan is now active.
         </p>
       )}
+
+      {resyncMessage && <p className="text-sm text-ink-primary">{resyncMessage}</p>}
 
       <section>
         <div className="mb-3 flex items-baseline justify-between gap-4">
@@ -134,6 +152,19 @@ export function Build() {
                         className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
                       >
                         Activate
+                      </button>
+                    )}
+                    {plan.status === "active" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResyncMessage(null);
+                          resyncGoogle.mutate(plan.id);
+                        }}
+                        disabled={resyncGoogle.isPending}
+                        className="rounded-md border border-border px-2.5 py-1 text-xs text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                      >
+                        {resyncGoogle.isPending ? "Resyncing…" : "Resync Google Calendar"}
                       </button>
                     )}
                     <button

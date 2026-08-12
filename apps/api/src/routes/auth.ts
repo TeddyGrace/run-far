@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
+import { setPasswordSchema } from "@run-far/shared";
 import { db } from "../db/client.js";
 import { users } from "../db/schema.js";
-import { verifyPassword } from "../lib/auth.js";
+import { hashPassword, verifyPassword } from "../lib/auth.js";
 import { setSessionCookie, clearSessionCookie, requireUserId } from "../lib/session.js";
 import { cookieOpts } from "../lib/cookies.js";
 import {
@@ -150,6 +151,37 @@ export async function authRoutes(app: FastifyInstance) {
       logger.error({ err }, "google login failed");
       reply.redirect(`${env.WEB_ORIGIN}/login?error=google_failed`);
     }
+  });
+
+  // Lets an already-signed-in user (e.g. via Google) set an email + password on their
+  // same account, so they can also log in without Google.
+  app.post("/api/auth/set-password", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+
+    const body = setPasswordSchema.parse(request.body);
+    const email = body.email.trim().toLowerCase();
+
+    const [conflict] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.email, email), ne(users.id, userId)));
+    if (conflict) {
+      reply.status(409).send({ error: { message: "That email is already in use", code: "EMAIL_TAKEN" } });
+      return;
+    }
+
+    const [updated] = await db
+      .update(users)
+      .set({ email, passwordHash: hashPassword(body.password) })
+      .where(eq(users.id, userId))
+      .returning();
+    if (!updated) {
+      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+      return;
+    }
+
+    return { id: updated.id, email: updated.email };
   });
 
   app.post("/api/auth/logout", async (_request, reply) => {

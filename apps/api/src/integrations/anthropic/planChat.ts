@@ -1,12 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { eq } from "drizzle-orm";
 import { aiPlanDraftSchema, type AiPlanDraft, type PlanChatMessage } from "@run-far/shared";
 import { env } from "../../env.js";
+import { db } from "../../db/client.js";
+import { users } from "../../db/schema.js";
 import { newDraftToken, saveAiDraft } from "./draftStore.js";
 import { computePlanWindow } from "../../plans/planWindow.js";
 import { validatePlanDraft } from "../../plans/validate.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { offsetStringForZone, shiftRunsToLocalTime } from "../../plans/zonedTime.js";
+import { withImperialRunFields } from "../../lib/units.js";
 
 const MAX_TOOL_ITERATIONS = 8;
 
@@ -48,7 +52,7 @@ Coaching constraints:
 - runType must be one of: easy, tempo, interval, long, recovery, race, rest. Rest days may have null duration/distance.
 - Keep plans practical (typically 1-20 weeks). Cap at 200 sessions.
 
-Units (important): tool payload fields (distanceM, targetPaceSPerKm) are metric — that's the storage format, not what the athlete sees. The athlete is US-based and thinks in miles. Every distance or pace you write in your own prose — summaries, questions, confirmations, anything you say out loud to them — MUST be miles and minutes-per-mile (e.g. "5 mi easy" and "~9:40/mi"), converted from whatever metric values the tools return. Never surface km, meters, or /km to the athlete, even in passing.`;
+Units (important): tool payload fields (distanceM, targetPaceSPerKm) are metric — that's the storage format, not what the athlete sees. The athlete is US-based and thinks in miles. Every distance or pace you write in your own prose — summaries, questions, confirmations, anything you say out loud to them — MUST be miles and minutes-per-mile (e.g. "5 mi easy" and "~9:40/mi"). Do NOT convert these yourself: get_active_plan already includes distanceMiles/paceMinPerMile fields alongside the raw metric ones — quote those in prose. Never surface km, meters, or /km to the athlete, even in passing.`;
 }
 
 const TOOLS: Anthropic.Tool[] = [
@@ -224,9 +228,9 @@ async function executeTool(
       const plan = await getActivePlanSnapshot(ctx.userId);
       if (!plan) return { activePlan: null, message: "No active plan — build a new one instead." };
       return {
-        activePlan: plan,
+        activePlan: { ...plan, runs: plan.runs.map(withImperialRunFields) },
         timeZone: env.ATHLETE_TIMEZONE,
-        hint: 'To change time of day, pass activePlan.runs to shift_run_times with localTime like "16:30".',
+        hint: 'To change time of day, pass activePlan.runs to shift_run_times with localTime like "16:30". Use distanceMiles/paceMinPerMile (not distanceM/targetPaceSPerKm) when describing runs to the athlete.',
       };
     }
     case "shift_run_times": {
@@ -317,6 +321,12 @@ export async function runPlanChatTurn(params: {
   const todayIso = new Date().toISOString().slice(0, 10);
   const bounds: ToolBounds = {};
 
+  const [user] = await db
+    .select({ planModel: users.planModel })
+    .from(users)
+    .where(eq(users.id, params.userId));
+  const model = user?.planModel || env.ANTHROPIC_MODEL;
+
   const conversation: Anthropic.MessageParam[] = params.messages.map((m) => ({
     role: m.role,
     content: m.content,
@@ -328,7 +338,7 @@ export async function runPlanChatTurn(params: {
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const response = await client.messages.create({
-      model: env.ANTHROPIC_MODEL,
+      model,
       max_tokens: 8192,
       system: systemPrompt(todayIso, env.ATHLETE_TIMEZONE),
       tools: TOOLS,

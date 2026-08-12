@@ -7,11 +7,12 @@ import {
 } from "@run-far/shared";
 import { env } from "../../env.js";
 import { db } from "../../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns, recommendations } from "../../db/schema.js";
+import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns, recommendations, users } from "../../db/schema.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { getActivePlanId, visibleRunsSql } from "../../plans/lifecycle.js";
 import { offsetStringForZone } from "../../plans/zonedTime.js";
+import { formatFeet, formatMiles, withImperialRunFields } from "../../lib/units.js";
 import { sendRecoveryDigestNow } from "../google/recoveryDigest.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 
@@ -55,9 +56,13 @@ targetPaceSPerKm) are metric — that's the storage format, not what the athlete
 
 Units (important): the athlete is US-based and thinks in miles. Every distance, pace, or elevation figure
 you write in your own prose — answers, summaries, schedule-change descriptions, anything you say out loud
-to them — MUST be miles and minutes-per-mile (e.g. "5 mi easy", "~9:40/mi", "300 ft of climb"), converted
-from whatever metric values the tools return (distanceM, targetPaceSPerKm, altitude in meters). Never
-surface km, meters, or /km to the athlete, even in passing. Temperatures, if ever relevant, are Fahrenheit.
+to them — MUST be miles and minutes-per-mile (e.g. "5 mi easy", "~9:40/mi", "300 ft of climb"). Do NOT do
+this conversion yourself: get_runs, get_active_plan, and get_recent_activities already include
+distanceMiles/paceMinPerMile/altitudeGainFeet fields alongside the raw metric ones — always quote those
+pre-computed fields in your prose. The raw metric fields (distanceM, targetPaceSPerKm) exist only because
+tool-call payloads (propose_schedule_changes, shift_run_times) require metric — use them there, never in
+text. Never surface km, meters, or /km to the athlete, even in passing. Temperatures, if relevant, are
+Fahrenheit.
 
 Keep answers concise and coach-like.`;
 }
@@ -213,12 +218,17 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       if (typeof input.sport === "string" && input.sport.trim()) {
         conditions.push(eq(whoopWorkouts.sport, input.sport.trim()));
       }
-      return db
+      const rows = await db
         .select()
         .from(whoopWorkouts)
         .where(and(...conditions))
         .orderBy(desc(whoopWorkouts.date), desc(whoopWorkouts.createdAt))
         .limit(limit);
+      return rows.map((r) => ({
+        ...r,
+        distanceMiles: formatMiles(r.distanceM),
+        altitudeGainFeet: formatFeet(r.altitudeGainM),
+      }));
     }
     case "get_runs": {
       const from = typeof input.from === "string" ? input.from : isoDate(new Date());
@@ -228,7 +238,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       const toDate = new Date(`${to}T23:59:59Z`);
 
       const activePlanId = await getActivePlanId(userId);
-      return db
+      const rows = await db
         .select()
         .from(plannedRuns)
         .where(
@@ -239,11 +249,15 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
           ),
         )
         .orderBy(plannedRuns.scheduledAt);
+      return rows.map(withImperialRunFields);
     }
     case "get_active_plan": {
       const plan = await getActivePlanSnapshot(userId);
       if (!plan) return { activePlan: null };
-      return { activePlan: plan, timeZone: env.ATHLETE_TIMEZONE };
+      return {
+        activePlan: { ...plan, runs: plan.runs.map(withImperialRunFields) },
+        timeZone: env.ATHLETE_TIMEZONE,
+      };
     }
     case "get_recommendations": {
       return db
@@ -279,6 +293,12 @@ export async function runAssistantChatTurn(params: {
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const todayIso = isoDate(new Date());
 
+  const [user] = await db
+    .select({ assistantModel: users.assistantModel })
+    .from(users)
+    .where(eq(users.id, params.userId));
+  const model = user?.assistantModel || env.ANTHROPIC_MODEL;
+
   const conversation: Anthropic.MessageParam[] = params.messages.map((m) => ({
     role: m.role,
     content: m.content,
@@ -290,7 +310,7 @@ export async function runAssistantChatTurn(params: {
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const response = await client.messages.create({
-      model: env.ANTHROPIC_MODEL,
+      model,
       max_tokens: 4096,
       system: systemPrompt(todayIso, env.ATHLETE_TIMEZONE),
       tools: TOOLS,

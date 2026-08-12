@@ -5,7 +5,7 @@ import { ensureRunningCalendar, insertEvent, updateEvent, deleteEvent } from "./
 import type { EventUpsertInput } from "./calendarClient.js";
 import { logger } from "../../lib/logger.js";
 
-async function hasGoogleConnection(userId: string): Promise<boolean> {
+export async function hasGoogleConnection(userId: string): Promise<boolean> {
   const [conn] = await db
     .select({ id: oauthConnections.id })
     .from(oauthConnections)
@@ -44,6 +44,19 @@ export async function pushPlannedRunToGoogle(plannedRunId: string, userId: strin
 
   const [run] = await db.select().from(plannedRuns).where(eq(plannedRuns.id, plannedRunId));
   if (!run) return;
+
+  if (run.runType === "rest") {
+    // Rest days aren't real events — never push them, and remove any that were
+    // synced before this filter existed.
+    if (run.gcalEventId) {
+      await deletePlannedRunFromGoogle(run.gcalEventId, userId);
+      await db
+        .update(plannedRuns)
+        .set({ gcalEventId: null, gcalEtag: null })
+        .where(eq(plannedRuns.id, run.id));
+    }
+    return;
+  }
 
   const calendarId = await ensureRunningCalendar(userId);
   const input = toEventInput(run);

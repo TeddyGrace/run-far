@@ -3,6 +3,7 @@ import { db } from "../db/client.js";
 import { plannedRuns, trainingPlans } from "../db/schema.js";
 import {
   deletePlannedRunFromGoogle,
+  hasGoogleConnection,
   pushPlannedRunToGoogle,
 } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
@@ -101,6 +102,43 @@ export async function activatePlan(userId: string, planId: string): Promise<void
       logger.error({ err, runId: run.id, planId }, "failed to push activated plan run to google"),
     );
   }
+}
+
+/**
+ * Re-pushes every run on this plan to Google Calendar so it matches the app's current
+ * state — fixes drift from manual edits on the Google side or events missed by past bugs
+ * (e.g. rest days that were synced before that filter existed).
+ */
+export async function resyncPlanToGoogle(
+  userId: string,
+  planId: string,
+): Promise<{ synced: number; failed: number }> {
+  const [plan] = await db
+    .select({ id: trainingPlans.id })
+    .from(trainingPlans)
+    .where(and(eq(trainingPlans.id, planId), eq(trainingPlans.userId, userId)));
+  if (!plan) throw new Error("PLAN_NOT_FOUND");
+
+  if (!(await hasGoogleConnection(userId))) throw new Error("GOOGLE_NOT_CONNECTED");
+
+  const runs = await db
+    .select({ id: plannedRuns.id })
+    .from(plannedRuns)
+    .where(and(eq(plannedRuns.userId, userId), eq(plannedRuns.planId, planId)));
+
+  let synced = 0;
+  let failed = 0;
+  for (const run of runs) {
+    try {
+      await pushPlannedRunToGoogle(run.id, userId);
+      synced++;
+    } catch (err) {
+      failed++;
+      logger.error({ err, runId: run.id, planId }, "failed to resync plan run to google");
+    }
+  }
+
+  return { synced, failed };
 }
 
 export async function archivePlan(userId: string, planId: string): Promise<void> {

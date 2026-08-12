@@ -19,18 +19,26 @@ export function DayColumn({ date, runs, onSelectRun }: DayColumnProps) {
       ref={setNodeRef}
       className={clsx(
         "flex min-h-[260px] flex-col rounded-xl border p-3 transition-colors",
-        isOver ? "border-accent bg-accent/5" : "border-border bg-surface-1",
-        isToday && !isOver && "border-accent/40",
+        isOver
+          ? "border-accent bg-accent/5"
+          : isToday
+            ? "border-accent bg-accent/[0.06] ring-1 ring-accent/30"
+            : "border-border bg-surface-1",
       )}
     >
       <div className="mb-3 flex items-baseline justify-between border-b border-border pb-2">
         <span
           className={clsx(
-            "text-sm font-medium uppercase tracking-wide",
+            "flex items-center gap-1.5 text-sm font-medium uppercase tracking-wide",
             isToday ? "text-accent" : "text-ink-secondary",
           )}
         >
-          {date.toLocaleDateString(undefined, { weekday: "short" })}
+          {date.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}
+          {isToday && (
+            <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-surface-0">
+              Today
+            </span>
+          )}
         </span>
         <span
           className={clsx(
@@ -38,7 +46,7 @@ export function DayColumn({ date, runs, onSelectRun }: DayColumnProps) {
             isToday ? "text-accent" : "text-ink-muted",
           )}
         >
-          {date.getDate()}
+          {date.getUTCDate()}
         </span>
       </div>
       <div className="flex-1 space-y-2">

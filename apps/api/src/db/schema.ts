@@ -55,6 +55,9 @@ export const users = pgTable(
     googleSub: text("google_sub"),
     // Gates the daily recovery/recommendations digest email to at most one per calendar day.
     lastRecoveryEmailDate: date("last_recovery_email_date"),
+    // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.
+    assistantModel: text("assistant_model"),
+    planModel: text("plan_model"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],

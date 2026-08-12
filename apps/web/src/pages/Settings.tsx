@@ -1,6 +1,9 @@
+import { useEffect, useState, type FormEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ConnectionStatus } from "@run-far/shared";
+import type { ConnectionStatus, UserSettings } from "@run-far/shared";
+import { AI_MODEL_OPTIONS } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
+import { useAuth } from "../lib/auth.js";
 
 function ConnectionCard({
   title,
@@ -62,6 +65,200 @@ function ConnectionCard({
         )}
       </div>
       {syncError && <p className="mt-3 text-sm text-zone-red">{syncError}</p>}
+    </div>
+  );
+}
+
+function ModelSelect({
+  label,
+  description,
+  value,
+  defaultModel,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  description: string;
+  value: string | null | undefined;
+  defaultModel: string;
+  onChange: (value: string | null) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-ink-primary">{label}</label>
+      <p className="mb-2 text-xs text-ink-muted">{description}</p>
+      <select
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-ink-primary disabled:opacity-50"
+      >
+        <option value="">Default ({defaultModel})</option>
+        {AI_MODEL_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function AiModelsCard() {
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery<UserSettings>({
+    queryKey: ["settings"],
+    queryFn: () => api.get<UserSettings>("/settings"),
+  });
+
+  const updateSettings = useMutation({
+    mutationFn: (body: { assistantModel?: string | null; planModel?: string | null }) =>
+      api.patch<UserSettings>("/settings", body),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings"], data);
+    },
+  });
+
+  const settings = settingsQuery.data;
+
+  return (
+    <div className="rounded-xl border border-border bg-surface-1 p-5">
+      <h3 className="font-display font-semibold text-ink-primary">AI models</h3>
+      <p className="mt-1 text-sm text-ink-secondary">
+        Choose which Claude model powers each AI agent. Leave on default unless you have a reason to
+        change it.
+      </p>
+      {settingsQuery.isLoading ? (
+        <p className="mt-4 text-sm text-ink-muted">Loading…</p>
+      ) : (
+        <div className="mt-4 space-y-4">
+          <ModelSelect
+            label="Assistant"
+            description="The chat assistant embedded across the app (recovery, calendar, schedule changes)."
+            value={settings?.assistantModel}
+            defaultModel={settings?.defaultAssistantModel ?? "server default"}
+            disabled={updateSettings.isPending}
+            onChange={(assistantModel) => updateSettings.mutate({ assistantModel })}
+          />
+          <ModelSelect
+            label="Plan builder"
+            description="The coach that drafts and revises training plans."
+            value={settings?.planModel}
+            defaultModel={settings?.defaultPlanModel ?? "server default"}
+            disabled={updateSettings.isPending}
+            onChange={(planModel) => updateSettings.mutate({ planModel })}
+          />
+        </div>
+      )}
+      {updateSettings.isError && (
+        <p className="mt-3 text-sm text-zone-red">
+          {updateSettings.error instanceof ApiError ? updateSettings.error.message : "Failed to save"}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EmailSignInCard() {
+  const { user } = useAuth();
+  const [email, setEmail] = useState(user?.email ?? "");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    if (user?.email) setEmail((current) => current || user.email);
+  }, [user?.email]);
+
+  const setPasswordMutation = useMutation({
+    mutationFn: () => api.post<{ id: string; email: string }>("/auth/set-password", { email, password }),
+    onSuccess: () => {
+      setSuccess(true);
+      setPassword("");
+      setConfirmPassword("");
+    },
+  });
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    setSuccess(false);
+    if (password !== confirmPassword) {
+      setFormError("Passwords don't match");
+      return;
+    }
+    setPasswordMutation.mutate();
+  }
+
+  const mutationError =
+    setPasswordMutation.error instanceof ApiError
+      ? setPasswordMutation.error.message
+      : setPasswordMutation.isError
+        ? "Failed to set password"
+        : null;
+
+  return (
+    <div className="rounded-xl border border-border bg-surface-1 p-5">
+      <h3 className="font-display font-semibold text-ink-primary">Email sign-in</h3>
+      <p className="mt-1 text-sm text-ink-secondary">
+        Set a password on your account so you can sign in with email instead of Google. This links to
+        the same account — your data doesn't change.
+      </p>
+      <form onSubmit={onSubmit} className="mt-4 space-y-3">
+        <div>
+          <label htmlFor="settings-email" className="mb-1.5 block text-sm text-ink-secondary">
+            Email
+          </label>
+          <input
+            id="settings-email"
+            type="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-primary"
+          />
+        </div>
+        <div>
+          <label htmlFor="settings-password" className="mb-1.5 block text-sm text-ink-secondary">
+            Password
+          </label>
+          <input
+            id="settings-password"
+            type="password"
+            required
+            minLength={8}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-primary"
+          />
+        </div>
+        <div>
+          <label htmlFor="settings-confirm-password" className="mb-1.5 block text-sm text-ink-secondary">
+            Confirm password
+          </label>
+          <input
+            id="settings-confirm-password"
+            type="password"
+            required
+            minLength={8}
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-primary"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={setPasswordMutation.isPending}
+          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+        >
+          {setPasswordMutation.isPending ? "Saving…" : "Save password"}
+        </button>
+      </form>
+      {formError && <p className="mt-3 text-sm text-zone-red">{formError}</p>}
+      {mutationError && <p className="mt-3 text-sm text-zone-red">{mutationError}</p>}
+      {success && <p className="mt-3 text-sm text-zone-good">Password saved — you can now sign in with email.</p>}
     </div>
   );
 }
@@ -129,6 +326,8 @@ export function Settings() {
             : null
         }
       />
+      <EmailSignInCard />
+      <AiModelsCard />
     </div>
   );
 }

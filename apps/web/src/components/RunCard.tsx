@@ -39,7 +39,7 @@ export function RunCard({ run, onClick }: { run: PlannedRun; onClick: () => void
         </div>
       )}
       {run.description && (
-        <p className="mt-1 line-clamp-2 text-sm leading-snug text-ink-muted">{run.description}</p>
+        <p className="mt-1 whitespace-pre-wrap text-sm leading-snug text-ink-muted">{run.description}</p>
       )}
     </button>
   );

@@ -13,7 +13,7 @@ import { newUploadToken, saveUpload, loadUpload } from "../integrations/training
 import { db } from "../db/client.js";
 import { trainingPlans, plannedRuns } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
-import { activatePlan, archivePlan, unarchivePlan } from "../plans/lifecycle.js";
+import { activatePlan, archivePlan, resyncPlanToGoogle, unarchivePlan } from "../plans/lifecycle.js";
 import { isAnthropicConfigured, runPlanChatTurn } from "../integrations/anthropic/planChat.js";
 import { loadAiDraft } from "../integrations/anthropic/draftStore.js";
 
@@ -100,6 +100,29 @@ export async function planRoutes(app: FastifyInstance) {
       throw err;
     }
     return { ok: true, planId: id };
+  });
+
+  app.post("/api/plans/:id/resync-google", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+    try {
+      const result = await resyncPlanToGoogle(userId, id);
+      return { ok: true, planId: id, ...result };
+    } catch (err) {
+      const code = err instanceof Error ? err.message : "UNKNOWN";
+      if (code === "PLAN_NOT_FOUND") {
+        reply.status(404).send({ error: { message: "Plan not found", code } });
+        return;
+      }
+      if (code === "GOOGLE_NOT_CONNECTED") {
+        reply
+          .status(400)
+          .send({ error: { message: "Connect Google Calendar in Settings first", code } });
+        return;
+      }
+      throw err;
+    }
   });
 
   app.post("/api/plans/:id/unarchive", async (request, reply) => {
