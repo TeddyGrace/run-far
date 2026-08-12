@@ -48,7 +48,10 @@ export function Sparkline({
   const values = points.map((p) => p.value).filter((v): v is number => v != null);
   if (points.length === 0 || values.length === 0) {
     return (
-      <div style={{ width, height }} className="flex items-center justify-center text-xs text-ink-muted">
+      <div
+        style={{ height }}
+        className="flex w-full items-center justify-center text-xs text-ink-muted"
+      >
         No data yet
       </div>
     );
@@ -109,11 +112,13 @@ export function Sparkline({
 
   return (
     <svg
-      width={width}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      width="100%"
       height={height}
       role="img"
       aria-label={label}
-      className="overflow-visible"
+      className="w-full overflow-visible"
       onPointerLeave={() => setHoverIndex(null)}
     >
       {baselineY != null && (

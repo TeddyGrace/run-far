@@ -38,13 +38,12 @@ function Trend({
   max?: number;
 }) {
   return (
-    <div>
+    <div className="min-w-0">
       <p className="mb-1 text-xs uppercase tracking-wide text-ink-muted">{label}</p>
       <Sparkline
         points={points}
         baseline={baseline}
         color={color}
-        width={200}
         height={72}
         formatValue={formatValue}
         min={min}
@@ -87,7 +86,7 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
             </span>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+        <div className="grid w-full grid-cols-1 gap-5 sm:w-auto sm:min-w-[420px] sm:grid-cols-2 sm:gap-x-8 sm:gap-y-5">
           <Trend
             label="HRV · 14d"
             points={hrvPoints}

@@ -25,34 +25,32 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-surface-0">
       <header className="border-b border-border">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-8">
-            <span className="font-display text-lg font-semibold tracking-tight text-ink-primary">
-              run-far
-            </span>
-            <nav className="flex gap-1">
-              {NAV_ITEMS.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.to === "/"}
-                  className={({ isActive }) =>
-                    clsx(
-                      "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                      isActive
-                        ? "bg-surface-2 text-ink-primary"
-                        : "text-ink-secondary hover:text-ink-primary",
-                    )
-                  }
-                >
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
-          </div>
+        <div className="mx-auto flex max-w-5xl items-center gap-4 px-6 py-4">
+          <span className="shrink-0 font-display text-lg font-semibold tracking-tight text-ink-primary">
+            run-far
+          </span>
+          <nav className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                className={({ isActive }) =>
+                  clsx(
+                    "shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-surface-2 text-ink-primary"
+                      : "text-ink-secondary hover:text-ink-primary",
+                  )
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
           {user && (
-            <div className="flex items-center gap-3 text-sm text-ink-secondary">
-              <span>{user.email}</span>
+            <div className="flex shrink-0 items-center gap-3 text-sm text-ink-secondary">
+              <span className="hidden sm:inline">{user.email}</span>
               <button
                 onClick={() => logout()}
                 className="rounded-md px-2.5 py-1 text-ink-secondary transition-colors hover:bg-surface-1 hover:text-ink-primary"
