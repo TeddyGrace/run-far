@@ -1,5 +1,10 @@
 export interface RecoveryHistoryEntry {
+  cycleId: string;
+  // The cycle's local start date — a label for charting, not the aggregation key
+  // (the row itself is already one physiological cycle, not a calendar day).
   date: string;
+  cycleStart: string;
+  cycleEnd: string | null;
   recovery: {
     recoveryScore: number | null;
     hrvRmssdMs: number | null;
@@ -12,7 +17,10 @@ export interface RecoveryHistoryEntry {
     performancePct: number | null;
     sleepDebtMin: number | null;
   } | null;
+  // Whoop's own 0-21 cycle strain score.
   strain: number | null;
+  // Linear load (kilojoule, or an approximated fallback) — for ratio/sum math, not display.
+  load: number | null;
 }
 
 export interface ZoneDurations {

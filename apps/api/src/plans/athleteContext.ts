@@ -3,6 +3,8 @@ import { db } from "../db/client.js";
 import { trainingPlans, whoopWorkouts } from "../db/schema.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
 import { logger } from "../lib/logger.js";
+import { env } from "../env.js";
+import { dateYmdInZone } from "../lib/zonedTime.js";
 
 const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
 const DAY_MS = 86_400_000;
@@ -28,16 +30,24 @@ export interface AthleteContext {
   dataQuality: "none" | "sparse" | "ok";
 }
 
+// whoopWorkouts.date stores the athlete-local date (see integrations/whoop/sync.ts), so
+// real instants (now, a window start) must resolve to a date the same way, not by slicing a
+// UTC ISO string.
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return dateYmdInZone(d, env.ATHLETE_TIMEZONE);
 }
 
+// Monday of the calendar week containing an already-local YYYY-MM-DD date string. Pure
+// calendar-string arithmetic (day-of-week, step back to Monday) — the Date object here is
+// only a UTC-anchored scratch value for that math, not a real instant, so it must be
+// formatted back with a plain slice, not run through isoDate's timezone conversion (which
+// would reinterpret UTC midnight as the previous local day for negative offsets).
 function mondayKey(dateStr: string): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   const date = new Date(Date.UTC(y!, m! - 1, d!));
   const day = date.getUTCDay();
   const monday = new Date(date.getTime() - ((day + 6) % 7) * DAY_MS);
-  return isoDate(monday);
+  return monday.toISOString().slice(0, 10);
 }
 
 /**

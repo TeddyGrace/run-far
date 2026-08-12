@@ -9,23 +9,15 @@ interface RecoveryHeroProps {
   history: RecoveryHistoryEntry[];
 }
 
-const HISTORY_DAYS = 14;
-
-/** Fill a contiguous UTC day window so the sparkline x-axis is a real timescale. */
+/** One point per returned cycle, labeled by its local start date — cycles are near-1/day
+ * but can cross midnight or run long/short, so this deliberately doesn't force-fill a
+ * contiguous day grid. A missing sync shows as a genuine gap in the series rather than
+ * being silently smoothed over. */
 function dailySeries(
   history: RecoveryHistoryEntry[],
-  pick: (entry: RecoveryHistoryEntry | undefined) => number | null,
-  days = HISTORY_DAYS,
+  pick: (entry: RecoveryHistoryEntry) => number | null,
 ): { date: string; value: number | null }[] {
-  const byDate = new Map(history.map((h) => [h.date, h]));
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  return Array.from({ length: days }, (_, i) => {
-    const d = new Date(end);
-    d.setUTCDate(end.getUTCDate() - (days - 1 - i));
-    const iso = d.toISOString().slice(0, 10);
-    return { date: iso, value: pick(byDate.get(iso)) };
-  });
+  return history.map((h) => ({ date: h.date, value: pick(h) }));
 }
 
 function Trend({
@@ -69,10 +61,10 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
   const zone = zoneForRecovery(snapshot?.recoveryScore ?? null);
   const hex = ZONE_HEX[zone];
 
-  const hrvPoints = dailySeries(history, (h) => h?.recovery?.hrvRmssdMs ?? null);
-  const rhrPoints = dailySeries(history, (h) => h?.recovery?.restingHr ?? null);
-  const strainPoints = dailySeries(history, (h) => h?.strain ?? null);
-  const sleepPoints = dailySeries(history, (h) => h?.sleep?.performancePct ?? null);
+  const hrvPoints = dailySeries(history, (h) => h.recovery?.hrvRmssdMs ?? null);
+  const rhrPoints = dailySeries(history, (h) => h.recovery?.restingHr ?? null);
+  const strainPoints = dailySeries(history, (h) => h.strain ?? null);
+  const sleepPoints = dailySeries(history, (h) => h.sleep?.performancePct ?? null);
 
   return (
     <div
@@ -111,10 +103,12 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
             formatValue={(v) => `${v.toFixed(0)}bpm`}
           />
           <Trend
-            label="Strain · 14d"
+            label="Cycle strain · 14d"
             points={strainPoints}
             color={ZONE_HEX.yellow}
             formatValue={(v) => v.toFixed(1)}
+            min={0}
+            max={21}
           />
           <Trend
             label="Sleep score · 14d"
@@ -143,7 +137,10 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
               : "—"
           }
         />
-        <Stat label="Strain (7d)" value={snapshot?.strain7d != null ? snapshot.strain7d.toFixed(1) : "—"} />
+        <Stat
+          label={`Avg strain (${snapshot?.cyclesCounted7d ?? 0}c)`}
+          value={snapshot?.cycleStrainAvg7d != null ? snapshot.cycleStrainAvg7d.toFixed(1) : "—"}
+        />
         <Stat label="ACWR" value={snapshot?.acwr != null ? snapshot.acwr.toFixed(2) : "—"} />
       </div>
     </div>

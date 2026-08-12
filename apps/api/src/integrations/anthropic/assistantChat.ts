@@ -11,15 +11,18 @@ import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns, recommendati
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { getActivePlanId, visibleRunsSql } from "../../plans/lifecycle.js";
-import { offsetStringForZone } from "../../plans/zonedTime.js";
+import { offsetStringForZone, dateYmdInZone } from "../../lib/zonedTime.js";
 import { formatFeet, formatMiles, withImperialRunFields } from "../../lib/units.js";
 import { sendRecoveryDigestNow } from "../google/recoveryDigest.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 
 const MAX_TOOL_ITERATIONS = 8;
 
+// recoveryMetrics/sleepRecords/whoopWorkouts store the athlete-local date (see
+// integrations/whoop/sync.ts), so window bounds must be computed the same way — a UTC slice
+// here would drift the window off by a day for evening activity, same as the bug fixed there.
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return dateYmdInZone(d, env.ATHLETE_TIMEZONE);
 }
 
 function systemPrompt(todayIso: string, timeZone: string): string {

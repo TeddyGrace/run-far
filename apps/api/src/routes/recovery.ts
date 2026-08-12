@@ -1,19 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, gte, lte, desc, count, sql, inArray } from "drizzle-orm";
+import { and, eq, gte, desc, count, sql, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts } from "../db/schema.js";
+import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - n);
-  return d;
-}
+import { cycleLocalDate, cycleLoad } from "../metrics/cycleMetrics.js";
 
 export async function recoveryRoutes(app: FastifyInstance) {
   // Today's snapshot independent of whether any recommendation rule fired — the dashboard's
@@ -24,57 +15,67 @@ export async function recoveryRoutes(app: FastifyInstance) {
     return buildRecoverySnapshot(userId);
   });
 
-  // Merged recovery + sleep + workout rows for the last N days, oldest first — exactly
-  // what the dashboard's sparklines and strain-vs-load chart need in one call.
+  // One row per Whoop physiological cycle for the last N days, oldest first — exactly what
+  // the dashboard's sparklines and strain-vs-load chart need in one call. Cycles (not
+  // calendar days) are the unit here: a cycle is wake-to-wake and can cross midnight, so a
+  // day-string rollup would double-count or drop data at cycle boundaries. `date` is each
+  // cycle's local start date (its own recorded timezone offset, see cycleLocalDate) purely
+  // for chart labeling — it is not the aggregation key.
   app.get("/api/recovery/history", async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
     const { days } = request.query as { days?: string };
     const windowDays = Math.min(Math.max(Number(days) || 14, 1), 90);
-    const startIso = isoDate(daysAgo(windowDays - 1));
-    const endIso = isoDate(new Date());
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - windowDays);
 
-    const [recoveryRows, sleepRows, workoutRows] = await Promise.all([
+    const cycleRows = await db
+      .select()
+      .from(cycles)
+      .where(and(eq(cycles.userId, userId), gte(cycles.start, cutoff)))
+      .orderBy(cycles.start);
+
+    if (cycleRows.length === 0) return [];
+
+    const whoopCycleIds = cycleRows.map((c) => c.whoopCycleId);
+    const [recoveryRows, sleepRows] = await Promise.all([
       db
         .select()
         .from(recoveryMetrics)
-        .where(and(eq(recoveryMetrics.userId, userId), gte(recoveryMetrics.date, startIso), lte(recoveryMetrics.date, endIso)))
-        .orderBy(desc(recoveryMetrics.date)),
+        .where(and(eq(recoveryMetrics.userId, userId), inArray(recoveryMetrics.cycleId, whoopCycleIds))),
       db
         .select()
         .from(sleepRecords)
-        .where(and(eq(sleepRecords.userId, userId), gte(sleepRecords.date, startIso), lte(sleepRecords.date, endIso)))
-        .orderBy(desc(sleepRecords.date)),
-      db
-        .select()
-        .from(whoopWorkouts)
-        .where(and(eq(whoopWorkouts.userId, userId), gte(whoopWorkouts.date, startIso), lte(whoopWorkouts.date, endIso)))
-        .orderBy(desc(whoopWorkouts.date)),
+        .where(
+          and(
+            eq(sleepRecords.userId, userId),
+            inArray(sleepRecords.cycleId, whoopCycleIds),
+            eq(sleepRecords.nap, false),
+          ),
+        ),
     ]);
 
-    const byDate = new Map<
-      string,
-      { date: string; recovery: (typeof recoveryRows)[number] | null; sleep: (typeof sleepRows)[number] | null; strain: number | null }
-    >();
-    for (const r of recoveryRows) {
-      byDate.set(r.date, { date: r.date, recovery: r, sleep: null, strain: null });
-    }
-    for (const s of sleepRows) {
-      const entry = byDate.get(s.date) ?? { date: s.date, recovery: null, sleep: null, strain: null };
-      entry.sleep = s;
-      byDate.set(s.date, entry);
-    }
-    for (const w of workoutRows) {
-      const entry = byDate.get(w.date) ?? { date: w.date, recovery: null, sleep: null, strain: null };
-      entry.strain = (entry.strain ?? 0) + (w.strain ?? 0);
-      byDate.set(w.date, entry);
-    }
+    const recoveryByCycle = new Map(
+      recoveryRows.filter((r) => r.cycleId != null).map((r) => [r.cycleId as string, r]),
+    );
+    const sleepByCycle = new Map(
+      sleepRows.filter((s) => s.cycleId != null).map((s) => [s.cycleId as string, s]),
+    );
 
-    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+    return cycleRows.map((c) => ({
+      cycleId: c.whoopCycleId,
+      date: cycleLocalDate(c),
+      cycleStart: c.start.toISOString(),
+      cycleEnd: c.end ? c.end.toISOString() : null,
+      strain: c.strain ?? null,
+      load: cycleLoad(c),
+      recovery: recoveryByCycle.get(c.whoopCycleId) ?? null,
+      sleep: sleepByCycle.get(c.whoopCycleId) ?? null,
+    }));
   });
 
   // Individual workouts, newest first — the dashboard's recent-activity cards. Distinct
-  // from /history, which collapses workouts into one strain total per day.
+  // from /history, which is per-cycle rather than per-workout.
   app.get("/api/recovery/activities", async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;

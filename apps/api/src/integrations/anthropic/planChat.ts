@@ -9,7 +9,7 @@ import { computePlanWindow } from "../../plans/planWindow.js";
 import { validatePlanDraft } from "../../plans/validate.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
-import { offsetStringForZone, shiftRunsToLocalTime } from "../../plans/zonedTime.js";
+import { offsetStringForZone, shiftRunsToLocalTime } from "../../lib/zonedTime.js";
 import { withImperialRunFields } from "../../lib/units.js";
 
 const MAX_TOOL_ITERATIONS = 8;

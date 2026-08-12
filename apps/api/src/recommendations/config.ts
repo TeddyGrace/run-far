@@ -18,6 +18,14 @@ export const RECOMMENDATION_CONFIG = {
   volumeReduction: {
     yellowPct: 0.2, // reduce volume/intensity ~20% on a yellow-zone hard day
   },
+  cycleLoad: {
+    // Fallback only, used when a cycle has no kilojoule reading (kilojoule is a real
+    // linear measure and is always preferred when present). WHOOP doesn't publish the
+    // exact curve behind its 0-21 strain score, so this is our own monotonic
+    // approximation, not a WHOOP-documented formula: load = exp(strain / strainToLoadDivisor).
+    // Chosen so strain 21 (max) maps to roughly 1000 "load" units.
+    strainToLoadDivisor: 3.04,
+  },
 } as const;
 
 export const HARD_RUN_TYPES = ["tempo", "interval", "long", "race"] as const;

@@ -4,9 +4,17 @@ import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles, syncState } from 
 import { whoopGet, whoopPaginate } from "./client.js";
 import type { WhoopCycle, WhoopRecovery, WhoopSleep, WhoopWorkout } from "./types.js";
 import { logger } from "../../lib/logger.js";
+import { env } from "../../env.js";
+import { dateYmdInZone } from "../../lib/zonedTime.js";
+import { cycleLocalDate } from "../../metrics/cycleMetrics.js";
 
-function toDateOnly(iso: string): string {
-  return iso.slice(0, 10);
+/** Athlete-local calendar date for a raw Whoop ISO timestamp. Whoop's sleep/workout payloads
+ * don't carry a per-event timezone offset, so the configured athlete timezone is the best
+ * available signal — unlike cycles, which do carry their own offset (see cycleLocalDate).
+ * Exported for testing: this is what fixes the bug where an evening workout landed on the
+ * following UTC calendar day. */
+export function toLocalDateOnly(iso: string): string {
+  return dateYmdInZone(new Date(iso), env.ATHLETE_TIMEZONE);
 }
 
 async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
@@ -34,14 +42,28 @@ async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
     });
 }
 
+/** The date a recovery describes is the cycle it belongs to (wake-to-wake), not the instant
+ * Whoop finished scoring it (r.created_at, which can land after local midnight). Cycles sync
+ * before recovery in a full range sync, but a webhook-triggered single upsert can race ahead
+ * of its cycle — fall back to created_at (best-effort) only when the cycle isn't there yet. */
+async function recoveryLocalDate(userId: string, r: WhoopRecovery): Promise<string> {
+  const [cycle] = await db
+    .select({ start: cycles.start, timezoneOffset: cycles.timezoneOffset })
+    .from(cycles)
+    .where(and(eq(cycles.userId, userId), eq(cycles.whoopCycleId, String(r.cycle_id))));
+  if (cycle) return cycleLocalDate(cycle);
+  return toLocalDateOnly(r.created_at);
+}
+
 async function upsertRecovery(userId: string, r: WhoopRecovery): Promise<void> {
+  const date = await recoveryLocalDate(userId, r);
   await db
     .insert(recoveryMetrics)
     .values({
       userId,
       whoopSleepId: r.sleep_id,
       cycleId: String(r.cycle_id),
-      date: toDateOnly(r.created_at),
+      date,
       recoveryScore: r.score?.recovery_score ?? null,
       hrvRmssdMs: r.score?.hrv_rmssd_milli ?? null,
       restingHr: r.score?.resting_heart_rate ?? null,
@@ -53,6 +75,7 @@ async function upsertRecovery(userId: string, r: WhoopRecovery): Promise<void> {
       target: recoveryMetrics.whoopSleepId,
       set: {
         cycleId: String(r.cycle_id),
+        date,
         recoveryScore: r.score?.recovery_score ?? null,
         hrvRmssdMs: r.score?.hrv_rmssd_milli ?? null,
         restingHr: r.score?.resting_heart_rate ?? null,
@@ -80,7 +103,7 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
       whoopSleepId: s.id,
       cycleId: String(s.cycle_id),
       nap: s.nap ?? false,
-      date: toDateOnly(s.start),
+      date: toLocalDateOnly(s.start),
       durationMin,
       efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
       performancePct,
@@ -130,7 +153,7 @@ async function upsertWorkout(userId: string, w: WhoopWorkout): Promise<void> {
     .values({
       userId,
       whoopWorkoutId: w.id,
-      date: toDateOnly(w.start),
+      date: toLocalDateOnly(w.start),
       ...row,
     })
     .onConflictDoUpdate({
@@ -235,9 +258,10 @@ export async function syncSingleResource(
         start: since,
       })) {
         if (r.sleep_id === id) {
-          await upsertRecovery(userId, r);
-          // Recovery finalizing is usually when a cycle's score stabilizes.
+          // Sync the cycle first: recoveryLocalDate() needs it in the DB to derive the
+          // correct wake-to-wake date instead of falling back to created_at.
           await syncCycleById(userId, r.cycle_id);
+          await upsertRecovery(userId, r);
           return;
         }
       }

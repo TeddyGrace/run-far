@@ -1,8 +1,10 @@
 import "dotenv/config";
 import { db, pool } from "./client.js";
-import { users, recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns } from "./schema.js";
+import { users, recoveryMetrics, sleepRecords, whoopWorkouts, cycles, plannedRuns } from "./schema.js";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "../lib/auth.js";
+import { env } from "../env.js";
+import { offsetStringForZone } from "../lib/zonedTime.js";
 
 const SEED_EMAIL = "dev@run-far.local";
 const SEED_PASSWORD = "devpassword123";
@@ -31,16 +33,40 @@ async function main() {
   if (!user) throw new Error("failed to create seed user");
   const userId = user.id;
 
-  // Last 7 days of recovery, sleep, and a few completed workouts.
+  // Last 7 days of cycles, recovery, sleep, and a few completed workouts. Cycles are
+  // wake-to-wake (not calendar-day), so this gives every day a real cycle a snapshot's
+  // strain/load aggregation can read — mirroring what a real Whoop sync produces, unlike the
+  // old one-fake-cycle-per-calendar-date seed that never exercised the cycle-based paths.
+  const seedTzOffset = offsetStringForZone(env.ATHLETE_TIMEZONE);
   for (let i = -6; i <= 0; i++) {
     const date = isoDate(i);
+    const whoopCycleId = `seed-cycle-${date}`;
+    const cycleStrain = 6 + Math.random() * 12; // 0-21 scale
+    const cycleKilojoule = 4000 + Math.random() * 4000;
+
+    await db
+      .insert(cycles)
+      .values({
+        userId,
+        whoopCycleId,
+        start: atHour(i, 7),
+        end: i < 0 ? atHour(i + 1, 7) : null, // today's cycle is still open
+        timezoneOffset: seedTzOffset,
+        scoreState: "SCORED",
+        strain: cycleStrain,
+        kilojoule: cycleKilojoule,
+        avgHr: 60 + Math.round(Math.random() * 10),
+        maxHr: 150 + Math.round(Math.random() * 20),
+      })
+      .onConflictDoNothing();
+
     const recoveryScore = 40 + Math.round(Math.random() * 45);
     await db
       .insert(recoveryMetrics)
       .values({
         userId,
         whoopSleepId: `seed-sleep-${date}`,
-        cycleId: `seed-cycle-${date}`,
+        cycleId: whoopCycleId,
         date,
         recoveryScore,
         hrvRmssdMs: 45 + Math.random() * 20,
@@ -56,6 +82,8 @@ async function main() {
       .values({
         userId,
         whoopSleepId: `seed-sleep-${date}`,
+        cycleId: whoopCycleId,
+        nap: false,
         date,
         durationMin: 380 + Math.random() * 90,
         efficiencyPct: 80 + Math.random() * 15,

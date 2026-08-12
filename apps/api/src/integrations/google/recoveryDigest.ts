@@ -47,7 +47,10 @@ function buildDigest(
     ["HRV", `${fmt(snapshot.hrvRmssdMs, 0, "ms")} (baseline ${fmt(snapshot.hrvBaselineMs, 0, "ms")})`],
     ["Resting HR", fmt(snapshot.restingHr, 0, "bpm")],
     ["Sleep debt (today)", fmtDuration(snapshot.sleepDebtMinToday)],
-    ["Strain (avg/day, 7d)", fmt(snapshot.strain7d != null ? snapshot.strain7d / 7 : null, 1)],
+    [
+      `Avg cycle strain (${snapshot.cyclesCounted7d} cycles)`,
+      fmt(snapshot.cycleStrainAvg7d, 1),
+    ],
     ["ACWR", fmt(snapshot.acwr, 2)],
   ];
 
@@ -89,8 +92,8 @@ function buildDigest(
 
 /**
  * Sends the daily recovery/recommendations digest via Gmail (as the athlete's own connected
- * Google account) at most once per calendar day (`snapshot.date`, already the athlete-local
- * date the recommendation engine computed against). Only meant to be called from the
+ * Google account) at most once per calendar day (`snapshot.date`, the athlete-local date
+ * buildRecoverySnapshot computed against — see snapshot.ts). Only meant to be called from the
  * ingestion path (Whoop webhooks) — never from a passive dashboard read — so the gate
  * reflects "new data landed today," not "someone opened the app today." No-op (and never
  * throws) if Google isn't connected.

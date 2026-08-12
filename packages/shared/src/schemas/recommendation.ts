@@ -15,7 +15,22 @@ export const recoverySnapshotSchema = z.object({
   restingHr: z.number().nullable(),
   restingHrBaseline: z.number().nullable(),
   sleepDebtMinToday: z.number().nullable(),
-  strain7d: z.number().nullable(),
+  // @deprecated sum of individual workout strains over a calendar week — physiologically
+  // meaningless (strain is a log scale) and superseded by the cycle-based fields below.
+  // Kept optional so historical rows already persisted in recommendations.inputSnapshot
+  // still parse.
+  strain7d: z.number().nullable().optional(),
+  // Mean of cycles.strain (Whoop's own 0-21 score) over the last 7 *completed* cycles.
+  cycleStrainAvg7d: z.number().nullable(),
+  // Linear load (kilojoule, or an approximated fallback) summed over the same cycles —
+  // the figure to use for ratio math like ACWR, where summing must be physically valid.
+  cycleLoadSum7d: z.number().nullable(),
+  // The current (possibly still-open) cycle's strain, reported separately since an
+  // in-progress cycle is excluded from the 7-cycle rolling window above.
+  cycleStrainToday: z.number().nullable(),
+  // How many of the last 7 cycles actually had a strain value — the denominator behind
+  // cycleStrainAvg7d, so a thin history (e.g. 3 cycles synced) doesn't read as a full week.
+  cyclesCounted7d: z.number().int().nonnegative(),
   acuteTss7d: z.number().nullable(),
   chronicTss28d: z.number().nullable(),
   acwr: z.number().nullable(),
