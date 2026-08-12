@@ -8,6 +8,7 @@ import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
 import type { ProposedChange } from "@run-far/shared";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
+import { maybeSendRecoveryDigest } from "../integrations/google/recoveryDigest.js";
 
 const LOOKAHEAD_DAYS = 10;
 
@@ -25,8 +26,15 @@ async function hasGoogleConnection(userId: string): Promise<boolean> {
  * primary and the rest collapsed). Re-running for the same day replaces prior *pending*
  * rows for the same rule rather than piling up duplicates — accepted/dismissed history
  * is left alone.
+ *
+ * `notify: true` also fires the once-daily recovery digest email — reserve that for real
+ * ingestion events (Whoop webhooks), not passive dashboard reads, or the "new data landed"
+ * gate stops meaning anything.
  */
-export async function generateRecommendations(userId: string): Promise<string[]> {
+export async function generateRecommendations(
+  userId: string,
+  opts: { notify?: boolean } = {},
+): Promise<string[]> {
   const snapshot = await buildRecoverySnapshot(userId);
   const now = new Date();
   const windowEnd = new Date(now);
@@ -84,6 +92,11 @@ export async function generateRecommendations(userId: string): Promise<string[]>
       .returning({ id: recommendations.id });
     if (row) ids.push(row.id);
   }
+
+  if (opts.notify) {
+    await maybeSendRecoveryDigest(userId, snapshot, fired);
+  }
+
   return ids;
 }
 
@@ -91,9 +104,12 @@ export async function generateRecommendations(userId: string): Promise<string[]>
  * Best-effort regenerate for webhook / background callers. Never throws — callers
  * (Whoop webhooks especially) must still ACK even if the rules engine fails.
  */
-export async function generateRecommendationsSafe(userId: string): Promise<void> {
+export async function generateRecommendationsSafe(
+  userId: string,
+  opts: { notify?: boolean } = {},
+): Promise<void> {
   try {
-    const ids = await generateRecommendations(userId);
+    const ids = await generateRecommendations(userId, opts);
     logger.info({ userId, count: ids.length }, "recommendations regenerated");
   } catch (err) {
     logger.error({ err, userId }, "failed to regenerate recommendations");

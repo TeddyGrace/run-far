@@ -83,8 +83,9 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
   switch (payload.type) {
     case "recovery.updated":
       // Recovery score/HRV land here — regenerate so red/yellow/green rules see fresh data.
+      // notify: true — this is real ingestion, so it's eligible to trigger today's digest email.
       await syncSingleResource(userId, "recovery", id);
-      await generateRecommendationsSafe(userId);
+      await generateRecommendationsSafe(userId, { notify: true });
       return;
     case "recovery.deleted":
       await db.delete(recoveryMetrics).where(eq(recoveryMetrics.whoopSleepId, id));
@@ -92,7 +93,7 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
     case "sleep.updated":
       // Morning sleep sync is the primary cue to refresh today's recommendation.
       await syncSingleResource(userId, "sleep", id);
-      await generateRecommendationsSafe(userId);
+      await generateRecommendationsSafe(userId, { notify: true });
       return;
     case "sleep.deleted":
       await db.delete(sleepRecords).where(eq(sleepRecords.whoopSleepId, id));

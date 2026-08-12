@@ -50,6 +50,13 @@
       "when": 1786478000000,
       "tag": "0006_assistant_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786478600000,
+      "tag": "0007_recovery_digest_email",
+      "breakpoints": true
     }
   ]
 }

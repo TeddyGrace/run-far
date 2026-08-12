@@ -53,6 +53,8 @@ export const users = pgTable(
     passwordHash: text("password_hash"),
     // Stable Google subject from the ID token — preferred lookup over email.
     googleSub: text("google_sub"),
+    // Gates the daily recovery/recommendations digest email to at most one per calendar day.
+    lastRecoveryEmailDate: date("last_recovery_email_date"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],

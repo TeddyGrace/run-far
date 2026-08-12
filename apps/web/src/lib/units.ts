@@ -1,7 +1,12 @@
 const METERS_PER_MILE = 1609.344;
+const METERS_PER_FOOT = 0.3048;
 
 export function metersToMiles(m: number): number {
   return m / METERS_PER_MILE;
+}
+
+export function metersToFeet(m: number): number {
+  return m / METERS_PER_FOOT;
 }
 
 export function milesToMeters(mi: number): number {

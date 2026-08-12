@@ -34,12 +34,16 @@ function Trend({
   baseline,
   color,
   formatValue,
+  min,
+  max,
 }: {
   label: string;
   points: { date: string; value: number | null }[];
   baseline?: number | null;
   color: string;
   formatValue: (v: number) => string;
+  min?: number;
+  max?: number;
 }) {
   return (
     <div>
@@ -51,6 +55,8 @@ function Trend({
         width={200}
         height={72}
         formatValue={formatValue}
+        min={min}
+        max={max}
       />
     </div>
   );
@@ -115,6 +121,8 @@ export function RecoveryHero({ snapshot, history }: RecoveryHeroProps) {
             points={sleepPoints}
             color={ZONE_HEX.good}
             formatValue={(v) => `${v.toFixed(0)}%`}
+            min={0}
+            max={100}
           />
         </div>
       </div>

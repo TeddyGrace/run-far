@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { RecentActivity, ZoneDurations } from "../types.js";
 import { sportLabel } from "../lib/sports.js";
-import { formatMiles, formatPacePerMile } from "../lib/units.js";
+import { formatMiles, formatPacePerMile, metersToFeet } from "../lib/units.js";
 
 /** Strain runs 0–21; tint once it crosses into a genuinely hard effort. */
 function strainTone(strain: number | null): string {
@@ -168,11 +168,11 @@ function metricsFor(activity: RecentActivity): Metric[] {
     if (pace) out.push({ label: "Pace", value: pace });
   }
   if (activity.altitudeGainM != null && Math.abs(activity.altitudeGainM) >= 1) {
-    out.push({ label: "Elev ↑", value: `+${Math.round(activity.altitudeGainM)} m` });
+    out.push({ label: "Elev ↑", value: `+${Math.round(metersToFeet(activity.altitudeGainM))} ft` });
   }
   if (activity.altitudeChangeM != null && Math.abs(activity.altitudeChangeM) >= 1) {
-    const n = Math.round(activity.altitudeChangeM);
-    out.push({ label: "Elev Δ", value: `${n > 0 ? "+" : ""}${n} m` });
+    const n = Math.round(metersToFeet(activity.altitudeChangeM));
+    out.push({ label: "Elev Δ", value: `${n > 0 ? "+" : ""}${n} ft` });
   }
   if (activity.avgHr != null) {
     out.push({ label: "Avg HR", value: `${Math.round(activity.avgHr)} bpm` });

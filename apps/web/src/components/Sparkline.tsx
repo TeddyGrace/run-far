@@ -12,6 +12,9 @@ interface SparklineProps {
   width?: number;
   height?: number;
   formatValue?: (v: number) => string;
+  /** Fix the y-axis range instead of auto-scaling to the data's min/max (e.g. a 0-100 score). */
+  min?: number;
+  max?: number;
 }
 
 function formatAxisDate(iso: string): string {
@@ -37,6 +40,8 @@ export function Sparkline({
   width = 220,
   height = 72,
   formatValue,
+  min: fixedMin,
+  max: fixedMax,
 }: SparklineProps) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
@@ -56,8 +61,8 @@ export function Sparkline({
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
 
-  const min = Math.min(...values, baseline ?? values[0]!);
-  const max = Math.max(...values, baseline ?? values[0]!);
+  const min = fixedMin ?? Math.min(...values, baseline ?? values[0]!);
+  const max = fixedMax ?? Math.max(...values, baseline ?? values[0]!);
   const range = max - min || 1;
 
   const xAt = (i: number) =>

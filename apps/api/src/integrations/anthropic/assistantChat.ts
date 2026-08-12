@@ -12,6 +12,7 @@ import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { getActivePlanId, visibleRunsSql } from "../../plans/lifecycle.js";
 import { offsetStringForZone } from "../../plans/zonedTime.js";
+import { sendRecoveryDigestNow } from "../google/recoveryDigest.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 
 const MAX_TOOL_ITERATIONS = 8;
@@ -43,6 +44,11 @@ Only call propose_schedule_changes once you have enough information (don't guess
 given and that aren't already on the calendar). Ask clarifying questions first if the request is ambiguous
 (e.g. "reconfigure my week" with no detail — ask what's driving it: fatigue, a scheduling conflict, wanting
 more/less volume, etc, and confirm which days are in play).
+
+If the athlete asks you to email/send them today's recovery summary or recommendations (e.g. "email me my
+recovery", "send me today's digest"), call send_recovery_email. This immediately sends a real email via
+their connected Gmail account — unlike schedule changes, it needs no separate confirmation since it has no
+effect on their data, but only call it when they've actually asked to be emailed, not speculatively.
 
 runType must be one of: easy, tempo, interval, long, recovery, race, rest. Distances are meters, paces are
 seconds per kilometer. Keep answers concise and coach-like.`;
@@ -107,6 +113,12 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_recommendations",
     description: "Return pending coaching recommendations (e.g. flagged overreach, sleep debt, calendar conflicts).",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "send_recovery_email",
+    description:
+      "Immediately email the athlete today's recovery stats + pending recommendations via their connected Gmail account. Use only when they explicitly ask to be emailed/sent a summary.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -231,6 +243,9 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
         .from(recommendations)
         .where(and(eq(recommendations.userId, userId), eq(recommendations.status, "pending")))
         .orderBy(desc(recommendations.createdAt));
+    }
+    case "send_recovery_email": {
+      return sendRecoveryDigestNow(userId);
     }
     default:
       return { error: `Unknown tool ${name}` };

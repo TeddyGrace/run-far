@@ -28,6 +28,34 @@ export function Markdown({ content }: { content: string }) {
             </ol>
           );
         }
+        if (block.type === "table") {
+          return (
+            <div key={i} className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-surface-2 text-left text-ink-secondary">
+                  <tr>
+                    {block.headers.map((h, j) => (
+                      <th key={j} className="px-3 py-1.5 font-medium">
+                        {renderInline(h)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {block.rows.map((row, r) => (
+                    <tr key={r}>
+                      {row.map((cell, c) => (
+                        <td key={c} className="px-3 py-1.5 text-ink-primary">
+                          {renderInline(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
         return (
           <p key={i} className="whitespace-pre-wrap">
             {renderInline(block.text)}
@@ -41,10 +69,19 @@ export function Markdown({ content }: { content: string }) {
 type Block =
   | { type: "p"; text: string }
   | { type: "ul"; items: string[] }
-  | { type: "ol"; items: string[] };
+  | { type: "ol"; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][] };
 
 const UL_RE = /^\s*[-*]\s+(.*)$/;
 const OL_RE = /^\s*\d+[.)]\s+(.*)$/;
+const TABLE_ROW_RE = /^\s*\|(.*)\|\s*$/;
+const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+
+function parseTableRow(line: string): string[] {
+  const match = line.match(TABLE_ROW_RE);
+  const inner = match ? match[1]! : line;
+  return inner.split("|").map((cell) => cell.trim());
+}
 
 function splitBlocks(content: string): Block[] {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
@@ -64,6 +101,20 @@ function splitBlocks(content: string): Block[] {
       flushParagraph();
       continue;
     }
+    if (TABLE_ROW_RE.test(line) && i + 1 < lines.length && TABLE_SEPARATOR_RE.test(lines[i + 1]!)) {
+      flushParagraph();
+      const headers = parseTableRow(line);
+      i += 2; // skip header + separator
+      const rows: string[][] = [];
+      while (i < lines.length && TABLE_ROW_RE.test(lines[i]!)) {
+        rows.push(parseTableRow(lines[i]!));
+        i++;
+      }
+      i--; // step back; the for-loop will advance past the last consumed line
+      blocks.push({ type: "table", headers, rows });
+      continue;
+    }
+
     const ordered = OL_RE.test(line);
     const unordered = UL_RE.test(line);
     if (ordered || unordered) {
