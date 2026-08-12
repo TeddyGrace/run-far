@@ -24,7 +24,7 @@ function fmtDuration(min: number | null): string {
   const total = Math.round(min);
   const h = Math.floor(total / 60);
   const m = total % 60;
-  return `${h}:${String(m).padStart(2, "0")}`;
+  return `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
 function escapeHtml(s: string): string {

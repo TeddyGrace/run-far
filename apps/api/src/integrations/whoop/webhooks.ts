@@ -80,6 +80,9 @@ export async function whoopWebhookRoutes(app: FastifyInstance) {
 
 async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promise<void> {
   const id = String(payload.id);
+  // No cycle.updated/cycle.deleted event exists in Whoop's webhook model — cycles are kept
+  // fresh by syncSingleResource piggybacking a cycle refresh onto the sleep/recovery cases
+  // below (both reference a cycle_id), plus the nightly full-range safety net.
   switch (payload.type) {
     case "recovery.updated":
       // Recovery score/HRV land here — regenerate so red/yellow/green rules see fresh data.

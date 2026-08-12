@@ -31,8 +31,30 @@ export interface WhoopRecovery {
   };
 }
 
+/** A Whoop Physiological Cycle — see https://developer.whoop.com/docs/developing/user-data/cycle.
+ * `end` is absent while the cycle is still open/ongoing. No cycle.* webhooks exist. */
+export interface WhoopCycle {
+  id: number;
+  user_id: number;
+  created_at: string;
+  updated_at: string;
+  start: string;
+  end?: string;
+  timezone_offset: string;
+  score_state: WhoopScoreState;
+  score?: {
+    strain: number;
+    kilojoule: number;
+    average_heart_rate: number;
+    max_heart_rate: number;
+  };
+}
+
 export interface WhoopSleep {
   id: string;
+  cycle_id: number;
+  // True for a nap; false for the primary sleep that starts the cycle.
+  nap: boolean;
   user_id: number;
   created_at: string;
   updated_at: string;

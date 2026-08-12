@@ -1,6 +1,6 @@
 import { and, eq, gte, lte, desc, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns } from "../db/schema.js";
+import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns, cycles } from "../db/schema.js";
 import { RECOMMENDATION_CONFIG } from "./config.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
@@ -46,10 +46,23 @@ function startOfUtcMonth(d: Date): Date {
  * re-aggregate it over multiple days), 7-day strain, and the 7d:28d planned-load ratio
  * (ACWR). This is the only place in the recommendation engine that touches the database —
  * everything downstream (the rules) is pure, taking this snapshot as input.
+ *
+ * "Today" for recovery/sleep debt is resolved via Whoop's own Physiological Cycle, not a
+ * naive UTC calendar-date match: a cycle is wake-to-wake and can cross midnight, and a
+ * calendar day can have both a nap and a main sleep, so date-string matching alone can pick
+ * the wrong row. We look up the athlete's current (most recent) cycle and prefer rows tied to
+ * it, falling back to the old date match only if no cycle data exists yet (new/unsynced user).
  */
 export async function buildRecoverySnapshot(userId: string): Promise<RecoverySnapshot> {
   const today = new Date();
   const todayIso = isoDate(today);
+
+  const [currentCycle] = await db
+    .select()
+    .from(cycles)
+    .where(eq(cycles.userId, userId))
+    .orderBy(desc(cycles.start))
+    .limit(1);
 
   const baselineWindowStart = isoDate(daysAgo(30));
   const baselineRows = await db
@@ -64,7 +77,9 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     )
     .orderBy(desc(recoveryMetrics.date));
 
-  const [todayRow] = baselineRows.filter((r) => r.date === todayIso);
+  const todayRow =
+    (currentCycle && baselineRows.find((r) => r.cycleId === currentCycle.whoopCycleId)) ||
+    baselineRows.find((r) => r.date === todayIso);
 
   const hrvValues = baselineRows.map((r) => r.hrvRmssdMs).filter((v): v is number => v != null);
   const rhrValues = baselineRows.map((r) => r.restingHr).filter((v): v is number => v != null);
@@ -88,10 +103,27 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
 
   const strainWindowStart = isoDate(daysAgo(6));
 
-  const [todaySleepRow] = await db
-    .select()
-    .from(sleepRecords)
-    .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.date, todayIso)));
+  let todaySleepRow: typeof sleepRecords.$inferSelect | undefined;
+  if (currentCycle) {
+    // The primary (non-nap) sleep tied to the current cycle — deterministic, unlike a same-date
+    // match, which can't tell a nap from the main sleep when both land on the same calendar date.
+    [todaySleepRow] = await db
+      .select()
+      .from(sleepRecords)
+      .where(
+        and(
+          eq(sleepRecords.userId, userId),
+          eq(sleepRecords.cycleId, currentCycle.whoopCycleId),
+          eq(sleepRecords.nap, false),
+        ),
+      );
+  }
+  if (!todaySleepRow) {
+    [todaySleepRow] = await db
+      .select()
+      .from(sleepRecords)
+      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.date, todayIso)));
+  }
   const sleepDebtMinToday = todaySleepRow?.sleepDebtMin ?? null;
 
   const strainRows = await db

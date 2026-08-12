@@ -112,6 +112,35 @@ export const recoveryMetrics = pgTable(
   ],
 );
 
+// Whoop's Physiological Cycle — the actual unit Whoop organizes a member's data around
+// (wake-to-wake, can cross midnight, can run longer than 24h), not a calendar day. `end` is
+// null while the cycle is still open/ongoing. No cycle.* webhooks exist, so this table is
+// kept fresh by polling (full sync) and by piggybacking on the sleep/recovery webhook handlers.
+export const cycles = pgTable(
+  "cycles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    whoopCycleId: text("whoop_cycle_id").notNull(),
+    start: timestamp("start", { withTimezone: true }).notNull(),
+    end: timestamp("end", { withTimezone: true }),
+    timezoneOffset: text("timezone_offset"),
+    scoreState: scoreStateEnum("score_state").notNull().default("PENDING_SCORE"),
+    strain: doublePrecision("strain"),
+    kilojoule: doublePrecision("kilojoule"),
+    avgHr: integer("avg_hr"),
+    maxHr: integer("max_hr"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("cycles_whoop_cycle_id_idx").on(t.whoopCycleId),
+    index("cycles_user_start_idx").on(t.userId, t.start),
+  ],
+);
+
 export const sleepRecords = pgTable(
   "sleep_records",
   {
@@ -120,6 +149,10 @@ export const sleepRecords = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     whoopSleepId: text("whoop_sleep_id").notNull(),
+    cycleId: text("cycle_id"),
+    // True for a nap; false for the primary sleep that starts the cycle. Needed to pick the
+    // right row when a cycle has both — see buildRecoverySnapshot's sleepDebtMinToday lookup.
+    nap: boolean("nap").notNull().default(false),
     date: date("date").notNull(),
     durationMin: doublePrecision("duration_min"),
     efficiencyPct: doublePrecision("efficiency_pct"),

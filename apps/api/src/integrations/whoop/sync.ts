@@ -1,12 +1,37 @@
 import { eq, and } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, syncState } from "../../db/schema.js";
+import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles, syncState } from "../../db/schema.js";
 import { whoopGet, whoopPaginate } from "./client.js";
-import type { WhoopRecovery, WhoopSleep, WhoopWorkout } from "./types.js";
+import type { WhoopCycle, WhoopRecovery, WhoopSleep, WhoopWorkout } from "./types.js";
 import { logger } from "../../lib/logger.js";
 
 function toDateOnly(iso: string): string {
   return iso.slice(0, 10);
+}
+
+async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
+  const row = {
+    start: new Date(c.start),
+    end: c.end ? new Date(c.end) : null,
+    timezoneOffset: c.timezone_offset,
+    scoreState: c.score_state,
+    strain: c.score?.strain ?? null,
+    kilojoule: c.score?.kilojoule ?? null,
+    avgHr: c.score?.average_heart_rate ?? null,
+    maxHr: c.score?.max_heart_rate ?? null,
+  };
+
+  await db
+    .insert(cycles)
+    .values({
+      userId,
+      whoopCycleId: String(c.id),
+      ...row,
+    })
+    .onConflictDoUpdate({
+      target: cycles.whoopCycleId,
+      set: { ...row, updatedAt: new Date() },
+    });
 }
 
 async function upsertRecovery(userId: string, r: WhoopRecovery): Promise<void> {
@@ -53,6 +78,8 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
     .values({
       userId,
       whoopSleepId: s.id,
+      cycleId: String(s.cycle_id),
+      nap: s.nap ?? false,
       date: toDateOnly(s.start),
       durationMin,
       efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
@@ -63,6 +90,8 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
     .onConflictDoUpdate({
       target: sleepRecords.whoopSleepId,
       set: {
+        cycleId: String(s.cycle_id),
+        nap: s.nap ?? false,
         durationMin,
         efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
         performancePct,
@@ -110,8 +139,16 @@ async function upsertWorkout(userId: string, w: WhoopWorkout): Promise<void> {
     });
 }
 
-/** Full sync of recovery/sleep/workout for a date range. Used for backfill and as a nightly safety net. */
+/** Full sync of cycle/recovery/sleep/workout for a date range. Used for backfill and as a nightly safety net. */
 export async function syncWhoopRange(userId: string, start: string, end?: string): Promise<void> {
+  // Cycles first: recovery/sleep rows reference cycleId, and there are no cycle.* webhooks,
+  // so a full range sync is the only way cycles ever get backfilled/refreshed in bulk.
+  let cycleCount = 0;
+  for await (const c of whoopPaginate<WhoopCycle>(userId, "/v2/cycle", { start, end })) {
+    await upsertCycle(userId, c);
+    cycleCount++;
+  }
+
   let recoveryCount = 0;
   for await (const r of whoopPaginate<WhoopRecovery>(userId, "/v2/recovery", { start, end })) {
     await upsertRecovery(userId, r);
@@ -142,7 +179,7 @@ export async function syncWhoopRange(userId: string, start: string, end?: string
     });
 
   logger.info(
-    { userId, recoveryCount, sleepCount, workoutCount, start, end },
+    { userId, cycleCount, recoveryCount, sleepCount, workoutCount, start, end },
     "whoop sync complete",
   );
 }
@@ -168,6 +205,19 @@ export async function incrementalSyncWhoop(userId: string): Promise<void> {
   await syncWhoopRange(userId, start.toISOString());
 }
 
+/** Whoop has no cycle.* webhooks, so a cycle only gets refreshed by piggybacking on the
+ * sleep/recovery webhook handlers (both of which reference a cycle_id) — this fetches and
+ * upserts just that one cycle. Best-effort: a failure here shouldn't fail the sleep/recovery
+ * sync that triggered it, since a later full sync (nightly safety net) will catch it up. */
+async function syncCycleById(userId: string, whoopCycleId: number): Promise<void> {
+  try {
+    const c = await whoopGet<WhoopCycle>(userId, `/v2/cycle/${whoopCycleId}`);
+    await upsertCycle(userId, c);
+  } catch (err) {
+    logger.warn({ err, userId, whoopCycleId }, "failed to refresh cycle after webhook");
+  }
+}
+
 /** Fetches and upserts a single resource by id — used by the webhook handler. */
 export async function syncSingleResource(
   userId: string,
@@ -186,6 +236,8 @@ export async function syncSingleResource(
       })) {
         if (r.sleep_id === id) {
           await upsertRecovery(userId, r);
+          // Recovery finalizing is usually when a cycle's score stabilizes.
+          await syncCycleById(userId, r.cycle_id);
           return;
         }
       }
@@ -195,6 +247,9 @@ export async function syncSingleResource(
     case "sleep": {
       const s = await whoopGet<WhoopSleep>(userId, `/v2/activity/sleep/${id}`);
       await upsertSleep(userId, s);
+      // The primary sleep starts a new cycle; a nap attaches to the current one — either way,
+      // refresh that cycle now rather than waiting for the next full sync.
+      await syncCycleById(userId, s.cycle_id);
       return;
     }
     case "workout": {
