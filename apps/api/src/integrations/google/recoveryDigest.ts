@@ -19,6 +19,14 @@ function fmt(n: number | null, digits = 0, suffix = ""): string {
   return n == null ? "—" : `${n.toFixed(digits)}${suffix}`;
 }
 
+function fmtDuration(min: number | null): string {
+  if (min == null) return "—";
+  const total = Math.round(min);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${h}:${String(m).padStart(2, "0")}`;
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -38,8 +46,8 @@ function buildDigest(
     ["Recovery", fmt(snapshot.recoveryScore)],
     ["HRV", `${fmt(snapshot.hrvRmssdMs, 0, "ms")} (baseline ${fmt(snapshot.hrvBaselineMs, 0, "ms")})`],
     ["Resting HR", fmt(snapshot.restingHr, 0, "bpm")],
-    ["Sleep debt (7d)", fmt(snapshot.sleepDebtMin7d, 0, "min")],
-    ["Strain (7d)", fmt(snapshot.strain7d, 1)],
+    ["Sleep debt (7d)", fmtDuration(snapshot.sleepDebtMin7d)],
+    ["Strain (avg/day, 7d)", fmt(snapshot.strain7d != null ? snapshot.strain7d / 7 : null, 1)],
     ["ACWR", fmt(snapshot.acwr, 2)],
   ];
 
