@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, ne, or } from "drizzle-orm";
 import type { RecoverySnapshot } from "@run-far/shared";
 import { db } from "../../db/client.js";
 import { recommendations, users } from "../../db/schema.js";
@@ -105,16 +105,39 @@ export async function maybeSendRecoveryDigest(
 ): Promise<void> {
   if (!(await hasGoogleConnection(userId))) return;
 
-  try {
-    const [user] = await db.select().from(users).where(eq(users.id, userId));
-    if (!user) return;
-    if (user.lastRecoveryEmailDate === snapshot.date) return; // already sent today
+  // Claim the day atomically *before* sending, via a single conditional UPDATE, instead of the
+  // read-then-write this replaced (check lastRecoveryEmailDate, send, then set it) — that gap
+  // let two concurrent callers for the same user (paired webhooks, or a webhook racing a
+  // dashboard read) both read "not sent yet" and both send. Only the caller whose UPDATE
+  // actually matches a row has won the claim.
+  const previous = await db
+    .select({ lastRecoveryEmailDate: users.lastRecoveryEmailDate })
+    .from(users)
+    .where(eq(users.id, userId));
+  if (!previous[0]) return;
+  const prevDate = previous[0].lastRecoveryEmailDate;
 
+  const claimed = await db
+    .update(users)
+    .set({ lastRecoveryEmailDate: snapshot.date })
+    .where(
+      and(
+        eq(users.id, userId),
+        or(isNull(users.lastRecoveryEmailDate), ne(users.lastRecoveryEmailDate, snapshot.date)),
+      ),
+    )
+    .returning({ email: users.email });
+  const claimedUser = claimed[0];
+  if (!claimedUser) return; // another caller already claimed today
+
+  try {
     const { subject, html, text } = buildDigest(snapshot, fired);
-    await sendGmail(userId, { to: user.email, subject, html, text });
-    await db.update(users).set({ lastRecoveryEmailDate: snapshot.date }).where(eq(users.id, userId));
+    await sendGmail(userId, { to: claimedUser.email, subject, html, text });
     logger.info({ userId, date: snapshot.date }, "recovery digest email sent");
   } catch (err) {
+    // Send failed after we'd already claimed the day — release the claim so a retry (or
+    // tomorrow's regen re-running today's date, e.g. a late-night cycle) can still go out.
+    await db.update(users).set({ lastRecoveryEmailDate: prevDate }).where(eq(users.id, userId));
     logger.error({ err, userId }, "failed to send recovery digest email");
   }
 }

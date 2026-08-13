@@ -28,8 +28,9 @@ async function hasGoogleConnection(userId: string): Promise<boolean> {
  * is left alone.
  *
  * `notify: true` also fires the once-daily recovery digest email — reserve that for real
- * ingestion events (Whoop webhooks), not passive dashboard reads, or the "new data landed"
- * gate stops meaning anything.
+ * ingestion events (Whoop webhooks, the nightly safety-net sync), not passive dashboard
+ * reads, or the "new data landed" gate stops meaning anything. The email itself still waits
+ * for both today's recovery and sleep data to be present before sending.
  */
 export async function generateRecommendations(
   userId: string,
@@ -66,16 +67,10 @@ export async function generateRecommendations(
 
   const ids: string[] = [];
   for (const rule of fired) {
-    await db
-      .delete(recommendations)
-      .where(
-        and(
-          eq(recommendations.userId, userId),
-          eq(recommendations.date, snapshot.date),
-          eq(recommendations.ruleId, rule.ruleId),
-          eq(recommendations.status, "pending"),
-        ),
-      );
+    // Upsert against the partial unique index (user, date, ruleId) WHERE status='pending' —
+    // atomic under concurrency, unlike the delete-then-insert this replaced, which let two
+    // regenerations racing for the same user (a webhook and a dashboard read, or two paired
+    // webhooks) each insert their own row for the same rule/day.
     const [row] = await db
       .insert(recommendations)
       .values({
@@ -89,12 +84,31 @@ export async function generateRecommendations(
         proposedChanges: rule.proposedChanges,
         status: "pending",
       })
+      .onConflictDoUpdate({
+        target: [recommendations.userId, recommendations.date, recommendations.ruleId],
+        targetWhere: eq(recommendations.status, "pending"),
+        set: {
+          severity: rule.severity,
+          summary: rule.summary,
+          reason: rule.reason,
+          inputSnapshot: snapshot,
+          proposedChanges: rule.proposedChanges,
+          createdAt: new Date(),
+        },
+      })
       .returning({ id: recommendations.id });
     if (row) ids.push(row.id);
   }
 
   if (opts.notify) {
-    await maybeSendRecoveryDigest(userId, snapshot, fired);
+    // Whoop delivers recovery.updated and sleep.updated as separate webhooks, each writing
+    // only its own resource (see sync.ts) — buildRecoverySnapshot needs both. Wait for the
+    // snapshot to actually be complete before sending, so the once-daily gate isn't burned on
+    // half the data.
+    const snapshotComplete = Boolean(snapshot.hasRecoveryToday && snapshot.hasSleepToday);
+    if (snapshotComplete) {
+      await maybeSendRecoveryDigest(userId, snapshot, fired);
+    }
   }
 
   return ids;

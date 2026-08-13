@@ -250,5 +250,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     runDistanceMThisWeek: weekHasDistance ? weekMeters : null,
     runDistanceMPerWeekThisMonth,
     hrvSuppressedConsecutiveDays,
+    hasRecoveryToday: todayRow != null,
+    hasSleepToday: todaySleepRow != null,
   };
 }

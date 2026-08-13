@@ -282,7 +282,16 @@ export const recommendations = pgTable(
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("recommendations_user_date_idx").on(t.userId, t.date)],
+  (t) => [
+    index("recommendations_user_date_idx").on(t.userId, t.date),
+    // At most one *pending* row per (user, day, rule) — makes the regenerate-on-ingestion
+    // path (webhooks, dashboard reads, nightly safety net) idempotent under real concurrency
+    // instead of relying on a non-atomic delete-then-insert. Resolved rows (accepted/dismissed)
+    // are excluded so history can keep multiple rows per rule per day.
+    uniqueIndex("recommendations_pending_unique_idx")
+      .on(t.userId, t.date, t.ruleId)
+      .where(sql`${t.status} = 'pending'`),
+  ],
 );
 
 // --- Global AI assistant chat ---

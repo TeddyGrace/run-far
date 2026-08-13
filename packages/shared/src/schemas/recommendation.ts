@@ -40,6 +40,13 @@ export const recoverySnapshotSchema = z.object({
   // Consecutive days (including today) with HRV >= 1 SD below baseline. A single
   // suppressed day is common noise; the hrv-suppressed rule requires a run of them.
   hrvSuppressedConsecutiveDays: z.number().int().nonnegative(),
+  // Whether today's recovery/sleep rows have actually landed yet, vs the snapshot being built
+  // off whatever's in the DB so far. Whoop delivers recovery.updated and sleep.updated as
+  // separate webhooks, each writing only its own resource — the digest email waits for both
+  // before sending so it doesn't go out against a half-populated snapshot. Optional so
+  // historical rows persisted before this field existed still parse.
+  hasRecoveryToday: z.boolean().optional(),
+  hasSleepToday: z.boolean().optional(),
 });
 export type RecoverySnapshot = z.infer<typeof recoverySnapshotSchema>;
 

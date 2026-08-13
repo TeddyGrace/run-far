@@ -86,7 +86,13 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
   switch (payload.type) {
     case "recovery.updated":
       // Recovery score/HRV land here — regenerate so red/yellow/green rules see fresh data.
-      // notify: true — this is real ingestion, so it's eligible to trigger today's digest email.
+      // notify: true — this is real ingestion, so it's eligible to trigger today's digest
+      // email, but generateRecommendations only actually sends once today's recovery AND
+      // sleep rows are both present (see service.ts) — recovery.updated and sleep.updated
+      // arrive as separate webhooks, each writing only its own resource (sync.ts), so
+      // whichever one completes the pair is the one that triggers the send. Regeneration
+      // itself is upserted against a per-(user,date,rule) unique index, so even if both
+      // webhooks race each other here, they can't produce duplicate rows or duplicate emails.
       await syncSingleResource(userId, "recovery", id);
       await generateRecommendationsSafe(userId, { notify: true });
       return;
