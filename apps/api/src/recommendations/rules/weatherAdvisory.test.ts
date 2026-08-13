@@ -60,6 +60,9 @@ function makeForecast(overrides: Partial<DailyForecast> = {}): DailyForecast {
     windSpeed: "5 mph",
     windDirection: "NW",
     iconUrl: null,
+    iconCode: null,
+    hourly: [],
+    segments: [],
     alerts: [],
     ...overrides,
   };

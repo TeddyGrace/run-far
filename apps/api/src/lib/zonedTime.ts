@@ -28,6 +28,11 @@ export function dateYmdInZone(instant: Date, timeZone: string): string {
   return `${String(p.year).padStart(4, "0")}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
 }
 
+/** Hour of day (0-23) of an instant in the given IANA timezone. */
+export function hourInZone(instant: Date, timeZone: string): number {
+  return partsInZone(instant, timeZone).hour;
+}
+
 /** Current UTC offset string for a timezone, e.g. "-04:00". */
 export function offsetStringForZone(timeZone: string, at: Date = new Date()): string {
   const parts = partsInZone(at, timeZone);

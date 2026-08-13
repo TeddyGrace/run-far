@@ -89,6 +89,9 @@ export async function generateRecommendations(
           windSpeed: day.windSpeed,
           windDirection: day.windDirection,
           iconUrl: day.iconUrl,
+          iconCode: day.iconCode,
+          hourly: day.hourly,
+          segments: day.segments,
           alerts: day.alerts,
           fetchedAt: new Date(),
         };

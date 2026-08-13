@@ -112,6 +112,13 @@ export const weatherForecasts = pgTable(
     windSpeed: text("wind_speed"),
     windDirection: text("wind_direction"),
     iconUrl: text("icon_url"),
+    // Normalized condition glyph key (see WeatherIconCode) driving the frontend's custom SVG
+    // icon — decoupled from NWS's own icon URL taxonomy.
+    iconCode: text("icon_code"),
+    // Per-hour data and derived morning/midday/evening summaries for this date, kept so the
+    // frontend and assistant can show intra-day detail without a second live NWS call.
+    hourly: jsonb("hourly").notNull().default([]),
+    segments: jsonb("segments").notNull().default([]),
     // Active NWS alerts (severity/headline/effective/expires) overlapping this date, kept so
     // the frontend and assistant can show them without a second live NWS call.
     alerts: jsonb("alerts").notNull().default([]),

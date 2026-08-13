@@ -161,10 +161,13 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_weather",
     description:
-      "Return the NWS weather forecast (high/low temps in Fahrenheit, conditions, precip chance, wind, " +
-      "and any active NWS alerts) for the athlete's location over a date range. Defaults to today through " +
-      "7 days out if no range given. Calls NWS live for freshness — use for ad-hoc weather questions and " +
-      "when advising on run timing (heat, storms). If the athlete's location isn't configured, says so.",
+      "Return the NWS weather forecast for the athlete's location over a date range, one entry per day. " +
+      "Each day includes daily high/low temps, conditions, precip chance, wind, and any active NWS alerts, " +
+      "plus hour-by-hour data (`hourly`) and three derived intra-day summaries (`segments`: morning ~6-11am, " +
+      "midday ~11am-4pm, evening ~4-9pm local), each with its own temp, precip chance, and conditions — use " +
+      "these to advise on run timing within a day (e.g. 'run before the evening storm' or 'morning is cooler " +
+      "and drier than midday'). Defaults to today through 7 days out if no range given. Calls NWS live for " +
+      "freshness. If the athlete's location isn't configured, says so.",
     input_schema: {
       type: "object",
       properties: {

@@ -6,6 +6,7 @@ import type { RecoveryHistoryEntry } from "../types.js";
 import { RecoveryHero } from "../components/RecoveryHero.js";
 import { RecommendationCard } from "../components/RecommendationCard.js";
 import { RecentActivities } from "../components/RecentActivities.js";
+import { WeatherToday } from "../components/WeatherToday.js";
 import { HARD_RUN_TYPES } from "../lib/runTypes.js";
 import { formatMiles } from "../lib/units.js";
 
@@ -57,6 +58,8 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <RecoveryHero snapshot={snapshot.data ?? null} history={history.data ?? []} />
+
+      <WeatherToday />
 
       <div>
         <h2 className="mb-3 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
