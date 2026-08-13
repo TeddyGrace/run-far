@@ -8,6 +8,14 @@ function todayYmd(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function tomorrowYmd(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+const ROLLING_WINDOW_HOURS = 24;
+
 function hourLabel(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -19,9 +27,10 @@ function hourLabel(iso: string): string {
 
 export function WeatherToday() {
   const today = todayYmd();
+  const tomorrow = tomorrowYmd();
   const weatherQuery = useQuery<WeatherForecastResponse>({
-    queryKey: ["weather", today, today],
-    queryFn: () => api.get<WeatherForecastResponse>(`/weather/forecast?from=${today}&to=${today}`),
+    queryKey: ["weather", today, tomorrow],
+    queryFn: () => api.get<WeatherForecastResponse>(`/weather/forecast?from=${today}&to=${tomorrow}`),
   });
 
   if (weatherQuery.isLoading) return null;
@@ -42,7 +51,12 @@ export function WeatherToday() {
   if (!forecast) return null;
 
   const now = new Date();
-  const upcomingHours = forecast.hourly.filter((h) => new Date(h.time).getTime() >= now.getTime() - 30 * 60 * 1000);
+  const windowEnd = now.getTime() + ROLLING_WINDOW_HOURS * 60 * 60 * 1000;
+  const allHours = [...forecast.hourly, ...(weatherQuery.data?.forecasts[1]?.hourly ?? [])];
+  const upcomingHours = allHours.filter((h) => {
+    const t = new Date(h.time).getTime();
+    return t >= now.getTime() - 30 * 60 * 1000 && t <= windowEnd;
+  });
 
   return (
     <div className="rounded-xl border border-border bg-surface-1 p-4" title={forecast.shortForecast ?? undefined}>
