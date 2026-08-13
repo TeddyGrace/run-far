@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { evaluate } from "./evaluate.js";
 import type { RuleContext, PlannedRunRow } from "./types.js";
 import type { RecoverySnapshot } from "@run-far/shared";
+import { dateYmdInZone } from "../lib/zonedTime.js";
 
 const baseSnapshot: RecoverySnapshot = {
   date: "2026-08-11",
@@ -54,6 +55,7 @@ function makeContext(overrides: Partial<RuleContext> = {}): RuleContext {
     snapshot: baseSnapshot,
     upcoming: [],
     busyPeriods: [],
+    timeZone: "America/New_York",
     ...overrides,
   };
 }
@@ -251,6 +253,58 @@ describe("calendar-conflict", () => {
     expect(result.primary?.summary).toContain("2 runs");
     const touchedRunIds = result.primary?.proposedChanges.map((c) => c.plannedRunId);
     expect(touchedRunIds).toEqual([runA.id, runB.id]);
+  });
+
+  it("does not flag a rest run even if it overlaps a busy period", () => {
+    // Reproduces the reported bug: a rest run is never pushed to Google and occupies no
+    // time slot, so it should never be treated as a scheduling conflict.
+    const rest = makeRun({ runType: "rest", scheduledAt: new Date("2026-08-22T22:00:00Z"), durationMin: 30 });
+    const busy = { start: new Date("2026-08-22T00:00:00Z"), end: new Date("2026-08-23T00:00:00Z") };
+    const result = evaluate(makeContext({ upcoming: [rest], busyPeriods: [busy] }));
+    expect(result.primary?.ruleId).not.toBe("calendar-conflict");
+  });
+
+  it("does not fire an actionless card when a busy block spans the entire 5am-9pm window", () => {
+    // A busy span covering the whole local 5am-9pm search window (what an unfiltered
+    // all-day event used to look like once converted through the freebusy API) overlaps
+    // every candidate slot, so no run gets a proposed change. Emitting a recommendation
+    // with no proposedChanges is a dead-end card the athlete can only dismiss — the rule
+    // should return null instead.
+    const run = makeRun({ runType: "easy", scheduledAt: new Date("2026-08-22T14:00:00Z"), durationMin: 60 });
+    const fullWindowBusy = { start: new Date("2026-08-22T08:00:00Z"), end: new Date("2026-08-23T02:00:00Z") };
+    const result = evaluate(makeContext({ upcoming: [run], busyPeriods: [fullWindowBusy] }));
+    expect(result.primary?.ruleId).not.toBe("calendar-conflict");
+  });
+
+  it("proposes a slot within 5am-9pm athlete-local time, not UTC", () => {
+    // 2026-08-12 is within EDT (UTC-4). A run at 14:00Z (10:00 local) conflicts with a busy
+    // block right after it; the proposed slot must fall within 5am-9pm America/New_York —
+    // i.e. between 09:00Z and 01:00Z the next day — not 5am-9pm UTC.
+    const run = makeRun({ scheduledAt: new Date("2026-08-12T14:00:00Z"), durationMin: 60 });
+    const busy = { start: new Date("2026-08-12T14:00:00Z"), end: new Date("2026-08-12T23:00:00Z") };
+    const result = evaluate(
+      makeContext({ upcoming: [run], busyPeriods: [busy], timeZone: "America/New_York" }),
+    );
+    const to = result.primary?.proposedChanges[0]?.to as string;
+    expect(to).toBeDefined();
+    const slot = new Date(to);
+    expect(slot.getTime()).toBeGreaterThanOrEqual(new Date("2026-08-12T09:00:00Z").getTime());
+    expect(slot.getTime()).toBeLessThanOrEqual(new Date("2026-08-13T01:00:00Z").getTime());
+  });
+
+  it("anchors the search window to the run's local calendar day, not its UTC day", () => {
+    // 8:00 PM EDT on Aug 12 is 00:00Z on Aug 13 — a naive UTC-day window (the old bug) would
+    // search Aug 13's 5am-9pm local instead of Aug 12's. The busy period conflicts with the
+    // run itself but leaves the rest of Aug 12's window open, so the proposed slot must land
+    // on Aug 12 local time, not Aug 13.
+    const run = makeRun({ scheduledAt: new Date("2026-08-13T00:00:00Z"), durationMin: 30 });
+    const busy = { start: new Date("2026-08-13T00:00:00Z"), end: new Date("2026-08-13T00:30:00Z") };
+    const result = evaluate(
+      makeContext({ upcoming: [run], busyPeriods: [busy], timeZone: "America/New_York" }),
+    );
+    const to = result.primary?.proposedChanges[0]?.to as string;
+    expect(to).toBeDefined();
+    expect(dateYmdInZone(new Date(to), "America/New_York")).toBe("2026-08-12");
   });
 });
 

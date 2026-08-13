@@ -152,21 +152,20 @@ export async function stopWatch(userId: string, channelId: string, resourceId: s
   }
 }
 
-/** Busy periods on the user's primary calendar (not the Running calendar) — used by the
- * calendar-conflict recommendation rule to check whether a planned run overlaps something else. */
-export async function getPrimaryBusyPeriods(
-  userId: string,
-  timeMinIso: string,
-  timeMaxIso: string,
-): Promise<Array<{ start: Date; end: Date }>> {
-  const api = await getCalendarApi(userId);
-  const { data } = await api.freebusy.query({
-    requestBody: { timeMin: timeMinIso, timeMax: timeMaxIso, items: [{ id: "primary" }] },
-  });
-  const busy = data.calendars?.primary?.busy ?? [];
-  return busy
-    .filter((b) => b.start && b.end)
-    .map((b) => ({ start: new Date(b.start!), end: new Date(b.end!) }));
+/** An event only counts as a real scheduling commitment if it's timed, accepted, and busy.
+ * Excludes all-day/multi-day events (no `dateTime`, only a date-only `date` — Google's
+ * freebusy API can't distinguish these from a real meeting and reports them as an opaque
+ * 24h busy block, which is what made an all-day event flag every run that day as
+ * conflicting), events explicitly marked "Free", cancelled events, and events the user
+ * declined. */
+export function isBlockingEvent(e: calendar_v3.Schema$Event): boolean {
+  if (e.status === "cancelled") return false;
+  if (!e.start?.dateTime || !e.end?.dateTime) return false; // all-day / date-only — never a conflict
+  if (e.transparency === "transparent") return false; // marked "Free"
+  if (e.eventType === "birthday" || e.eventType === "workingLocation") return false;
+  const self = e.attendees?.find((a) => a.self);
+  if (self?.responseStatus === "declined") return false;
+  return true;
 }
 
 export interface CalendarEvent {
@@ -177,9 +176,11 @@ export interface CalendarEvent {
   allDay: boolean;
 }
 
-/** Titled events on the user's primary calendar in a date range — unlike
- * `getPrimaryBusyPeriods` (free/busy only), this keeps the summary/title so callers
- * (the AI assistant) can talk about *what* a conflict is, not just that one exists. */
+/** Titled events on the user's primary calendar in a date range, filtered to events that
+ * represent a real scheduling commitment (see `isBlockingEvent`). This is the single source
+ * of truth for "what's on the user's calendar" — both the calendar-conflict recommendation
+ * rule and the AI assistant read through this, so they can't disagree about what counts as
+ * a conflict. */
 export async function listPrimaryEvents(
   userId: string,
   timeMinIso: string,
@@ -192,19 +193,31 @@ export async function listPrimaryEvents(
     timeMax: timeMaxIso,
     singleEvents: true,
     orderBy: "startTime",
+    showDeleted: false,
   });
   return (data.items ?? [])
-    .filter((e) => e.start && e.end)
-    .map((e) => {
-      const allDay = Boolean(e.start!.date);
-      return {
-        id: e.id ?? "",
-        summary: e.summary ?? "(untitled event)",
-        start: (e.start!.dateTime ?? e.start!.date)!,
-        end: (e.end!.dateTime ?? e.end!.date)!,
-        allDay,
-      };
-    });
+    .filter((e) => e.start && e.end && isBlockingEvent(e))
+    .map((e) => ({
+      id: e.id ?? "",
+      summary: e.summary ?? "(untitled event)",
+      start: e.start!.dateTime!,
+      end: e.end!.dateTime!,
+      allDay: false, // isBlockingEvent already excludes all-day/date-only events
+    }));
+}
+
+/** Busy periods on the user's primary calendar (not the Running calendar) — used by the
+ * calendar-conflict recommendation rule to check whether a planned run overlaps something
+ * else. Built on `listPrimaryEvents` (rather than the freebusy API) specifically so all-day
+ * events, declined invites, and "Free"-marked events are excluded instead of arriving as
+ * opaque, unfilterable busy blocks. */
+export async function getPrimaryBusyPeriods(
+  userId: string,
+  timeMinIso: string,
+  timeMaxIso: string,
+): Promise<Array<{ start: Date; end: Date; summary?: string }>> {
+  const events = await listPrimaryEvents(userId, timeMinIso, timeMaxIso);
+  return events.map((e) => ({ start: new Date(e.start), end: new Date(e.end), summary: e.summary }));
 }
 
 /** One page of an incremental (or, with no syncToken, full) events.list call. */

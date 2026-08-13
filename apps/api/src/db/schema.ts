@@ -279,11 +279,17 @@ export const recommendations = pgTable(
     inputSnapshot: jsonb("input_snapshot").notNull(),
     proposedChanges: jsonb("proposed_changes").notNull().default([]),
     status: recommendationStatusEnum("status").notNull().default("pending"),
+    // Content hash of {ruleId, summary, reason, proposedChanges} — deliberately excludes
+    // `date` so a dismissal survives the day rolling over. Lets generateRecommendations tell
+    // "this is the same conflict the athlete already dismissed" apart from "this is a new
+    // one", instead of resurrecting an identical card on every regeneration.
+    fingerprint: text("fingerprint").notNull().default(""),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("recommendations_user_date_idx").on(t.userId, t.date),
+    index("recommendations_user_fingerprint_idx").on(t.userId, t.fingerprint, t.status),
     // At most one *pending* row per (user, day, rule) — makes the regenerate-on-ingestion
     // path (webhooks, dashboard reads, nightly safety net) idempotent under real concurrency
     // instead of relying on a non-atomic delete-then-insert. Resolved rows (accepted/dismissed)

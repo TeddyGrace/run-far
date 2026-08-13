@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Warns (never blocks) when source changed but README.md didn't come along for the ride.
+# Installed via `git config core.hooksPath .githooks` — see the root package.json "prepare"
+# script, which runs it automatically on `pnpm install`.
+#
+# Opt out for one commit: SKIP_README_CHECK=1 git commit ...
+
+if [ -n "$SKIP_README_CHECK" ]; then
+  exit 0
+fi
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+watched_paths="apps/api/src apps/web/src packages/shared/src apps/api/drizzle"
+changed_areas=""
+for path in $watched_paths; do
+  if echo "$staged" | grep -q "^${path}/"; then
+    changed_areas="$changed_areas $path"
+  fi
+done
+
+if [ -z "$changed_areas" ]; then
+  exit 0
+fi
+
+if echo "$staged" | grep -q "^README.md$"; then
+  exit 0
+fi
+
+cat <<EOF
+
+README check: this commit touches$changed_areas but not README.md.
+If this changes what the app does, how it's architected, or its setup
+steps, consider updating the README (see "Engineering highlights" and
+"Architecture"). This is a warning only — the commit will proceed.
+
+Skip this check for one commit: SKIP_README_CHECK=1 git commit ...
+EOF
+
+exit 0

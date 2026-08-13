@@ -1,0 +1,2 @@
+ALTER TABLE "recommendations" ADD COLUMN "fingerprint" text DEFAULT '' NOT NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "recommendations_user_fingerprint_idx" ON "recommendations" USING btree ("user_id","fingerprint","status");

@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { recommendations } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
-import { generateRecommendations, applyProposedChanges } from "../recommendations/service.js";
+import { generateRecommendationsSafe, applyProposedChanges } from "../recommendations/service.js";
 import { proposedChangeSchema } from "@run-far/shared";
 import { z } from "zod";
 
@@ -12,7 +12,8 @@ export async function recommendationRoutes(app: FastifyInstance) {
     const userId = requireUserId(request, reply);
     if (!userId) return;
 
-    await generateRecommendations(userId);
+    // Best-effort: a Google API hiccup should surface cached recommendations, not a 500.
+    await generateRecommendationsSafe(userId);
 
     return db
       .select()

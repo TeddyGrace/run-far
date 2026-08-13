@@ -19,7 +19,8 @@
     "db:seed": "pnpm --filter @run-far/api run db:seed",
     "db:studio": "pnpm --filter @run-far/api run db:studio",
     "db:start": "scripts/pg.sh start",
-    "db:stop": "scripts/pg.sh stop"
+    "db:stop": "scripts/pg.sh stop",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

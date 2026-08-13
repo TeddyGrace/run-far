@@ -1,10 +1,81 @@
 # run-far
 
-A running and calendar assistant: a dashboard of your Whoop recovery, a
-manipulable calendar of planned runs imported from TrainingPeaks, and a rules
-engine that proposes schedule changes when today's recovery doesn't match
-what the plan expects. Two-way sync with Google Calendar keeps a dedicated
-"Running" calendar in step with the app.
+**A running training-log and recovery assistant.** It pulls recovery/sleep
+data from Whoop, imports a training plan from TrainingPeaks (or has Claude
+build one from a conversation), keeps it two-way synced with Google Calendar,
+and runs a deterministic rules engine that proposes schedule changes when
+today's recovery doesn't match what the plan expects.
+
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Fastify](https://img.shields.io/badge/Fastify-000000?logo=fastify&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
+![Drizzle ORM](https://img.shields.io/badge/Drizzle_ORM-C5F74F?logoColor=black)
+![Anthropic](https://img.shields.io/badge/Claude_API-D97757?logoColor=white)
+
+<!--
+  A screenshot or short GIF of the Dashboard / drag-and-drop Calendar goes
+  well here — this is the highest-value slot on the page for a visual.
+  ![dashboard](docs/dashboard.png)
+-->
+
+## What it does
+
+- **Recovery-aware scheduling** — reads Whoop recovery, HRV, sleep, and
+  strain data and compares it against the active plan; a rules engine
+  proposes concrete edits (downgrade a hard session, push a session out a
+  day, pull one forward) rather than just flagging a problem.
+- **Two-way Google Calendar sync** — a dedicated "Running" calendar mirrors
+  the app's planned runs, with loop-prevention and app-wins conflict
+  resolution when both sides changed.
+- **Calendar-aware conflict detection** — checks planned runs against real,
+  timed commitments on the athlete's primary calendar (declined invites,
+  all-day events, and "Free"-marked events are filtered out) and proposes
+  the nearest open slot.
+- **AI-assisted planning** — describe a training block in a multi-turn chat
+  with Claude and get back a structured plan to preview and commit, or ask
+  the assistant questions about your schedule.
+
+## Engineering highlights
+
+- **Two-way calendar sync with conflict resolution** — inbound and outbound
+  Google Calendar sync avoid update loops via a sync-origin marker, and when
+  both the app and Google changed the same run since the last sync, the
+  app's version wins and the overwrite is logged to `sync_conflicts` for
+  auditability.
+  → [`apps/api/src/integrations/google/pull.ts`](apps/api/src/integrations/google/pull.ts),
+  [`push.ts`](apps/api/src/integrations/google/push.ts)
+- **Pure, unit-testable rules engine** — every recommendation rule is a
+  synchronous, side-effect-free function of one input snapshot; all I/O
+  (building the snapshot, fetching calendar events) happens once, upstream,
+  which is what makes each rule trivially fixture-testable.
+  → [`apps/api/src/recommendations/`](apps/api/src/recommendations/)
+- **Idempotent under real concurrency** — a partial unique index plus
+  `onConflictDoUpdate` makes regeneration safe when a Whoop webhook, the
+  nightly sync, and a dashboard read all race to write the same
+  recommendation; a content fingerprint (independent of array ordering and
+  the calendar day) makes dismissal permanent instead of racing the next
+  regeneration.
+  → [`apps/api/src/db/schema.ts`](apps/api/src/db/schema.ts),
+  [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **Timezone-correct scheduling** — wall-clock math (open-slot search,
+  day-boundary detection) goes through small DST-safe conversion helpers
+  built on `Intl.DateTimeFormat` rather than a heavyweight date library.
+  → [`apps/api/src/lib/zonedTime.ts`](apps/api/src/lib/zonedTime.ts)
+- **Encrypted OAuth tokens + single-flight refresh** — tokens are encrypted
+  at rest with AES-256-GCM, and concurrent requests against an
+  about-to-expire access token trigger exactly one refresh, not one per
+  request.
+  → [`apps/api/src/lib/crypto.ts`](apps/api/src/lib/crypto.ts),
+  [`integrations/whoop/client.ts`](apps/api/src/integrations/whoop/client.ts)
+- **Shared, validated contract** — `packages/shared` is a set of Zod schemas
+  imported by both the Fastify API and the Vite SPA, so request/response
+  shapes can't silently drift between client and server.
+  → [`packages/shared/`](packages/shared/)
+- **LLM tool-use integration** — the plan-builder and assistant chats use
+  Claude with structured tool calls (propose a plan, shift run times, read
+  calendar events) rather than free-text parsing.
+  → [`apps/api/src/integrations/anthropic/`](apps/api/src/integrations/anthropic/)
 
 ## Architecture
 
@@ -18,17 +89,12 @@ packages/
 
 `packages/shared` is the contract between the two apps — every API route
 validates with the same Zod schema the SPA imports, so request/response
-shapes can't drift silently.
+shapes can't drift silently. Data flows one way in: Whoop and TrainingPeaks
+data land in Postgres, the rules engine reads a snapshot of it, and
+proposed changes are applied back to `planned_runs` (then pushed out to
+Google) only when the athlete accepts them.
 
-## Prerequisites
-
-- Node.js 20+, pnpm (`corepack enable` or `npm i -g pnpm`)
-- Postgres 16. Either:
-  - **Docker**: `docker compose up -d` (uses `docker-compose.yml`)
-  - **Homebrew, no Docker**: `pnpm db:start` (wraps `scripts/pg.sh`, a local
-    `pg_ctl`-managed instance under `.pgdata/`). Stop it with `pnpm db:stop`.
-
-## Setup
+## Quickstart
 
 ```bash
 pnpm install
@@ -43,6 +109,12 @@ Fill in `.env`:
 - Whoop and Google credentials — see below. The app runs without them; you
   just won't be able to connect those integrations until they're set.
 
+Postgres 16, either:
+
+- **Docker**: `docker compose up -d` (uses `docker-compose.yml`)
+- **Homebrew, no Docker**: `pnpm db:start` (wraps `scripts/pg.sh`, a local
+  `pg_ctl`-managed instance under `.pgdata/`). Stop it with `pnpm db:stop`.
+
 Then:
 
 ```bash
@@ -55,7 +127,45 @@ pnpm dev          # runs apps/api on :8787 and apps/web on :5174 in parallel
 Open `http://localhost:5174` and sign in with the seeded account:
 `dev@run-far.local` / `devpassword123`.
 
-## Registering the OAuth apps
+## Testing
+
+```bash
+pnpm test        # all packages
+pnpm typecheck   # all packages
+```
+
+Coverage as of this writing:
+- Rules engine (`recommendations/evaluate.test.ts`) — one fixture per rule,
+  plus severity ordering, timezone-correct scheduling, all-day/rest-run
+  exclusion, and the "nothing fires" case.
+- Recommendation fingerprinting (`recommendations/fingerprint.test.ts`) —
+  stability across key/array ordering, sensitivity to real content changes.
+- Calendar event filtering (`integrations/google/calendarClient.test.ts`) —
+  all-day, cancelled, declined, and "Free"-marked events are excluded from
+  conflict detection.
+- TrainingPeaks CSV parser (`parser.test.ts`) — header aliasing, unit
+  normalization, malformed rows.
+- Token encryption (`crypto.test.ts`) — round-trip and tamper detection.
+- Whoop webhook signature verification (`webhooks.test.ts`) — valid,
+  tampered, wrong-secret, and malformed-signature cases.
+- Whoop access-token refresh concurrency (`client.test.ts`) — concurrent
+  requests against an expiring token trigger exactly one refresh.
+
+Google Calendar's two-way sync loop-prevention and app-wins conflict
+resolution (`pull.ts` / `push.ts`) were verified live against a real
+Google Calendar during development rather than with mocks — see the
+worked example in the original implementation plan. They're reasonable
+candidates for `nock`-style HTTP-mocked tests if this grows past a
+single-user tool.
+
+A pre-commit hook (`.githooks/pre-commit`) warns — but doesn't block — when
+`apps/api/src`, `apps/web/src`, `packages/shared/src`, or a migration
+changes without a matching `README.md` update, so this document doesn't
+drift too far from what's actually built. Skip it for one commit with
+`SKIP_README_CHECK=1 git commit ...`.
+
+<details>
+<summary><strong>Registering the OAuth apps (Whoop + Google)</strong></summary>
 
 Neither of these can be scripted — both require clicking through a
 provider's own developer console.
@@ -108,7 +218,10 @@ and pulls existing events in the background. The Settings → Google card is onl
 needed to repair a revoked connection. Email/password login remains available as
 a fallback for the seeded local account.
 
-## Training plans (Build)
+</details>
+
+<details>
+<summary><strong>Training plans (Build)</strong></summary>
 
 The **Build** tab manages training plans. Only one plan can be **active** at a
 time — its runs appear on the Dashboard, Calendar, and Google Calendar. Activating
@@ -128,7 +241,10 @@ maps a table of known header aliases rather than fixed column indices — if a
 real export doesn't parse cleanly, that alias table is almost certainly the
 only thing that needs updating.
 
-## Deploy on Railway (API + web + Postgres)
+</details>
+
+<details>
+<summary><strong>Deploy on Railway (API + web + Postgres)</strong></summary>
 
 One Docker service serves the Fastify API and the Vite SPA on the same origin
 (so `/api` cookie auth works without CORS tricks). Postgres is a Railway plugin.
@@ -169,41 +285,10 @@ docker build -t run-far .
 docker run --rm -p 8080:8080 --env-file .env -e NODE_ENV=production -e PORT=8080 run-far
 ```
 
-## Recommendation engine
+</details>
 
-`apps/api/src/recommendations/` is a pure rules engine: `snapshot.ts` is the
-only part that touches the database (building today's recovery snapshot plus
-rolling baselines); every rule in `rules/*.ts` is a synchronous, side-effect-free
-function of that snapshot. Thresholds live in `config.ts`. See
-`apps/api/src/recommendations/evaluate.test.ts` for the fixture-based tests
-covering each rule.
-
-## Testing
-
-```bash
-pnpm test        # all packages
-pnpm typecheck   # all packages
-```
-
-Coverage as of this writing:
-- Rules engine (`evaluate.test.ts`) — one fixture per rule, plus severity
-  ordering and the "nothing fires" case.
-- TrainingPeaks CSV parser (`parser.test.ts`) — header aliasing, unit
-  normalization, malformed rows.
-- Token encryption (`crypto.test.ts`) — round-trip and tamper detection.
-- Whoop webhook signature verification (`webhooks.test.ts`) — valid,
-  tampered, wrong-secret, and malformed-signature cases.
-- Whoop access-token refresh concurrency (`client.test.ts`) — concurrent
-  requests against an expiring token trigger exactly one refresh.
-
-Google Calendar's two-way sync loop-prevention and app-wins conflict
-resolution (`pull.ts` / `push.ts`) were verified live against a real
-Google Calendar during development rather than with mocks — see the
-worked example in the original implementation plan. They're reasonable
-candidates for `nock`-style HTTP-mocked tests if this grows past a
-single-user tool.
-
-## Notes on state
+<details>
+<summary><strong>Notes on state</strong></summary>
 
 - Single-user by design — session auth, no signup flow. The seed script is
   the only way a user gets created.
@@ -212,3 +297,5 @@ single-user tool.
   app's version always wins and the overwrite is logged to `sync_conflicts`.
 - OAuth tokens are encrypted at rest (`apps/api/src/lib/crypto.ts`); nothing
   else in the codebase should ever see plaintext tokens.
+
+</details>

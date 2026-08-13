@@ -1,11 +1,13 @@
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, gte, lte, sql, inArray, notInArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { plannedRuns, recommendations, oauthConnections } from "../db/schema.js";
 import { buildRecoverySnapshot } from "./snapshot.js";
 import { evaluate } from "./evaluate.js";
+import { fingerprintOf } from "./fingerprint.js";
 import { getPrimaryBusyPeriods } from "../integrations/google/calendarClient.js";
 import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
+import { env } from "../env.js";
 import type { ProposedChange } from "@run-far/shared";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 import { maybeSendRecoveryDigest } from "../integrations/google/recoveryDigest.js";
@@ -62,11 +64,39 @@ export async function generateRecommendations(
     }
   }
 
-  const { primary, secondary } = evaluate({ snapshot, upcoming, busyPeriods });
-  const fired = [primary, ...secondary].filter((r): r is NonNullable<typeof primary> => r != null);
+  const { primary, secondary } = evaluate({ snapshot, upcoming, busyPeriods, timeZone: env.ATHLETE_TIMEZONE });
+  const allFired = [primary, ...secondary].filter((r): r is NonNullable<typeof primary> => r != null);
+
+  // Suppress rules whose content the athlete has already resolved (dismissed or accepted) —
+  // otherwise every regeneration (dashboard read, webhook, nightly sync) reinserts an
+  // identical card the instant the resolved row leaves the pending-only unique index.
+  // Fingerprint excludes `date`, so this holds even after the day rolls over.
+  const fingerprinted = allFired.map((rule) => ({ rule, fingerprint: fingerprintOf(rule) }));
+  const resolvedFingerprints = fingerprinted.length
+    ? new Set(
+        (
+          await db
+            .select({ fingerprint: recommendations.fingerprint })
+            .from(recommendations)
+            .where(
+              and(
+                eq(recommendations.userId, userId),
+                inArray(recommendations.status, ["dismissed", "accepted"]),
+                inArray(
+                  recommendations.fingerprint,
+                  fingerprinted.map((f) => f.fingerprint),
+                ),
+              ),
+            )
+        ).map((r) => r.fingerprint),
+      )
+    : new Set<string>();
+
+  const fired = fingerprinted.filter((f) => !resolvedFingerprints.has(f.fingerprint)).map((f) => f.rule);
 
   const ids: string[] = [];
-  for (const rule of fired) {
+  for (const { rule, fingerprint } of fingerprinted) {
+    if (resolvedFingerprints.has(fingerprint)) continue;
     // Upsert against the partial unique index (user, date, ruleId) WHERE status='pending' —
     // atomic under concurrency, unlike the delete-then-insert this replaced, which let two
     // regenerations racing for the same user (a webhook and a dashboard read, or two paired
@@ -83,6 +113,7 @@ export async function generateRecommendations(
         inputSnapshot: snapshot,
         proposedChanges: rule.proposedChanges,
         status: "pending",
+        fingerprint,
       })
       .onConflictDoUpdate({
         target: [recommendations.userId, recommendations.date, recommendations.ruleId],
@@ -93,12 +124,28 @@ export async function generateRecommendations(
           reason: rule.reason,
           inputSnapshot: snapshot,
           proposedChanges: rule.proposedChanges,
+          fingerprint,
           createdAt: new Date(),
         },
       })
       .returning({ id: recommendations.id });
     if (row) ids.push(row.id);
   }
+
+  // Retract any pending row for a rule that no longer fires today — otherwise a resolved
+  // situation (conflict rescheduled away, recovery back in range) leaves a stale card on
+  // screen forever, since nothing else ever deletes a pending row.
+  const firedRuleIds = fired.map((r) => r.ruleId);
+  await db
+    .delete(recommendations)
+    .where(
+      and(
+        eq(recommendations.userId, userId),
+        eq(recommendations.date, snapshot.date),
+        eq(recommendations.status, "pending"),
+        firedRuleIds.length > 0 ? notInArray(recommendations.ruleId, firedRuleIds) : sql`true`,
+      ),
+    );
 
   if (opts.notify) {
     // Whoop delivers recovery.updated and sleep.updated as separate webhooks, each writing
