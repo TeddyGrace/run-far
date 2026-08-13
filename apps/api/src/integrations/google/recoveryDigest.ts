@@ -1,7 +1,8 @@
 import { and, eq, isNull, ne, or } from "drizzle-orm";
-import type { RecoverySnapshot } from "@run-far/shared";
+import type { RecoverySnapshot, WeatherHour } from "@run-far/shared";
 import { db } from "../../db/client.js";
-import { recommendations, users } from "../../db/schema.js";
+import { recommendations, users, weatherForecasts } from "../../db/schema.js";
+import { env } from "../../env.js";
 import { logger } from "../../lib/logger.js";
 import { buildRecoverySnapshot } from "../../recommendations/snapshot.js";
 import type { RuleOutput } from "../../recommendations/types.js";
@@ -31,9 +32,56 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+interface WeatherDigestHour {
+  label: string;
+  tempF: number | null;
+  precipPct: number | null;
+}
+
+interface WeatherDigestData {
+  highTempF: number | null;
+  lowTempF: number | null;
+  precipProbabilityPct: number | null;
+  shortForecast: string | null;
+  hours: WeatherDigestHour[];
+}
+
+/** Reads today's persisted forecast (kept fresh by generateRecommendations — see
+ * routes/weather.ts for the same read pattern) and formats its hourly breakdown in the
+ * athlete's local timezone, 12-hour clock, for the email. Returns null if no location is
+ * configured or no forecast has landed yet for today. */
+async function getTodayWeatherForDigest(userId: string, dateYmd: string): Promise<WeatherDigestData | null> {
+  const [row] = await db
+    .select()
+    .from(weatherForecasts)
+    .where(and(eq(weatherForecasts.userId, userId), eq(weatherForecasts.date, dateYmd)));
+  if (!row) return null;
+
+  const hourFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: env.ATHLETE_TIMEZONE,
+    hour: "numeric",
+    hour12: true,
+  });
+  const hourly = (row.hourly as WeatherHour[]) ?? [];
+  const hours = hourly.map((h) => ({
+    label: hourFmt.format(new Date(h.time)),
+    tempF: h.tempF,
+    precipPct: h.precipPct,
+  }));
+
+  return {
+    highTempF: row.highTempF,
+    lowTempF: row.lowTempF,
+    precipProbabilityPct: row.precipProbabilityPct,
+    shortForecast: row.shortForecast,
+    hours,
+  };
+}
+
 function buildDigest(
   snapshot: RecoverySnapshot,
   fired: DigestItem[],
+  weather: WeatherDigestData | null,
 ): { subject: string; html: string; text: string } {
   const score = snapshot.recoveryScore != null ? Math.round(snapshot.recoveryScore) : null;
   const flagWord = fired.length === 1 ? "flag" : "flags";
@@ -58,9 +106,21 @@ function buildDigest(
     ? fired.map((r) => `- [${r.severity.toUpperCase()}] ${r.summary}\n  ${r.reason}`).join("\n\n")
     : "No recommendations today — nothing needs attention.";
 
+  const weatherHeadline = weather
+    ? `${fmt(weather.highTempF, 0, "°")}/${fmt(weather.lowTempF, 0, "°")}${
+        weather.shortForecast ? ` — ${weather.shortForecast}` : ""
+      }${weather.precipProbabilityPct ? ` (${Math.round(weather.precipProbabilityPct)}% chance of rain)` : ""}`
+    : null;
+
+  const weatherText = weather
+    ? `\n\nToday's weather: ${weatherHeadline}\n${weather.hours
+        .map((h) => `${h.label}: ${fmt(h.tempF, 0, "°")}${h.precipPct ? ` (${Math.round(h.precipPct)}% rain)` : ""}`)
+        .join("\n")}`
+    : "";
+
   const text = `Today's recovery (${snapshot.date})\n\n${statLines
     .map(([label, value]) => `${label}: ${value}`)
-    .join("\n")}\n\nRecommendations\n${recText}`;
+    .join("\n")}\n\nRecommendations\n${recText}${weatherText}`;
 
   const recHtml = fired.length
     ? `<ul style="padding-left:18px;margin:0;">${fired
@@ -70,6 +130,30 @@ function buildDigest(
         )
         .join("")}</ul>`
     : `<p style="color:#6C7A73;">No recommendations today — nothing needs attention.</p>`;
+
+  const weatherHtml = weather
+    ? `
+      <h3 style="margin-bottom:8px;">Today's weather</h3>
+      <p style="margin:0 0 10px;">${escapeHtml(weatherHeadline!)}</p>
+      ${
+        weather.hours.length
+          ? `<div style="overflow-x:auto;">
+              <table style="border-collapse:collapse;"><tr>
+                ${weather.hours
+                  .map(
+                    (h) =>
+                      `<td style="text-align:center;padding:4px 8px;border-top:1px solid #E4E1D8;font-size:12px;white-space:nowrap;">
+                        <div style="color:#6C7A73;">${escapeHtml(h.label)}</div>
+                        <div><strong>${fmt(h.tempF, 0, "°")}</strong></div>
+                        <div style="color:${h.precipPct != null && h.precipPct >= 30 ? "#4FB0A6" : "#6C7A73"};">${h.precipPct ? `${Math.round(h.precipPct)}%` : ""}</div>
+                      </td>`,
+                  )
+                  .join("")}
+              </tr></table>
+            </div>`
+          : ""
+      }`
+    : "";
 
   const html = `
     <div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:560px;color:#1B2320;">
@@ -85,6 +169,7 @@ function buildDigest(
       </table>
       <h3 style="margin-bottom:8px;">Recommendations</h3>
       ${recHtml}
+      ${weatherHtml}
     </div>`;
 
   return { subject, html, text };
@@ -131,7 +216,8 @@ export async function maybeSendRecoveryDigest(
   if (!claimedUser) return; // another caller already claimed today
 
   try {
-    const { subject, html, text } = buildDigest(snapshot, fired);
+    const weather = await getTodayWeatherForDigest(userId, snapshot.date);
+    const { subject, html, text } = buildDigest(snapshot, fired, weather);
     await sendGmail(userId, { to: claimedUser.email, subject, html, text });
     logger.info({ userId, date: snapshot.date }, "recovery digest email sent");
   } catch (err) {
@@ -171,7 +257,8 @@ export async function sendRecoveryDigestNow(
   }));
 
   try {
-    const { subject, html, text } = buildDigest(snapshot, fired);
+    const weather = await getTodayWeatherForDigest(userId, snapshot.date);
+    const { subject, html, text } = buildDigest(snapshot, fired, weather);
     await sendGmail(userId, { to: user.email, subject, html, text });
     await db.update(users).set({ lastRecoveryEmailDate: snapshot.date }).where(eq(users.id, userId));
     logger.info({ userId, date: snapshot.date }, "recovery digest email sent (chat-requested)");
