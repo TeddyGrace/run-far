@@ -71,6 +71,10 @@ const envSchema = z.object({
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-5"),
   /** IANA timezone for scheduling planned runs (wall-clock times the athlete sees). */
   ATHLETE_TIMEZONE: z.string().default("America/New_York"),
+  /** Athlete's location for NWS weather lookups. Left unset (not defaulted) so `!= null`
+   * checks at call sites can tell "not configured" apart from a real coordinate. */
+  ATHLETE_LAT: z.coerce.number().min(-90).max(90).optional(),
+  ATHLETE_LON: z.coerce.number().min(-180).max(180).optional(),
 });
 
 const parsed = envSchema.safeParse(rawEnv);

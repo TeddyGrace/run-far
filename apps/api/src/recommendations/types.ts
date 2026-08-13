@@ -1,5 +1,6 @@
 import type { RecoverySnapshot, RecommendationSeverity, ProposedChange } from "@run-far/shared";
 import type { plannedRuns } from "../db/schema.js";
+import type { DailyForecast } from "../integrations/weather/weatherClient.js";
 
 export type PlannedRunRow = typeof plannedRuns.$inferSelect;
 
@@ -20,6 +21,10 @@ export interface RuleContext {
    * only (all-day, declined, and "Free"-marked events are filtered out before this is built).
    * Empty if Google isn't connected — calendar-conflict simply never fires in that case. */
   busyPeriods: BusyPeriod[];
+  /** NWS daily forecasts for the lookahead window, one row per calendar date. Empty if
+   * ATHLETE_LAT/LON aren't configured or the NWS call failed — weatherAdvisory simply never
+   * fires in that case. */
+  weatherForecast: DailyForecast[];
   /** IANA timezone the athlete sees wall-clock times in (env.ATHLETE_TIMEZONE). Passed in
    * rather than read from env inside a rule, so rules stay pure functions of their input. */
   timeZone: string;

@@ -1,15 +1,16 @@
 import { useDroppable } from "@dnd-kit/core";
 import clsx from "clsx";
-import type { PlannedRun } from "@run-far/shared";
+import type { PlannedRun, WeatherForecast } from "@run-far/shared";
 import { RunCard } from "./RunCard.js";
 
 interface DayColumnProps {
   date: Date;
   runs: PlannedRun[];
+  forecast?: WeatherForecast;
   onSelectRun: (run: PlannedRun) => void;
 }
 
-export function DayColumn({ date, runs, onSelectRun }: DayColumnProps) {
+export function DayColumn({ date, runs, forecast, onSelectRun }: DayColumnProps) {
   const dayKey = date.toISOString().slice(0, 10);
   const { setNodeRef, isOver } = useDroppable({ id: dayKey });
   const isToday = dayKey === new Date().toISOString().slice(0, 10);
@@ -49,6 +50,21 @@ export function DayColumn({ date, runs, onSelectRun }: DayColumnProps) {
           {date.getUTCDate()}
         </span>
       </div>
+      {forecast && (
+        <div
+          className="mb-2 flex items-center gap-1 text-xs text-ink-secondary"
+          title={forecast.shortForecast ?? undefined}
+        >
+          {forecast.iconUrl && <img src={forecast.iconUrl} alt="" className="h-6 w-6" />}
+          {forecast.highTempF != null && <span>{Math.round(forecast.highTempF)}°</span>}
+          {forecast.lowTempF != null && <span className="text-ink-muted">/{Math.round(forecast.lowTempF)}°</span>}
+          {forecast.alerts.length > 0 && (
+            <span className="text-red-500" title={forecast.alerts.map((a) => a.event).join(", ")}>
+              ⚠
+            </span>
+          )}
+        </div>
+      )}
       <div className="flex-1 space-y-2">
         {runs.length === 0 ? (
           <p className="text-sm text-ink-muted/60">Rest</p>

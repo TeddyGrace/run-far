@@ -1,10 +1,12 @@
 import { and, eq, gte, lte, sql, inArray, notInArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { plannedRuns, recommendations, oauthConnections } from "../db/schema.js";
+import { plannedRuns, recommendations, oauthConnections, weatherForecasts } from "../db/schema.js";
 import { buildRecoverySnapshot } from "./snapshot.js";
 import { evaluate } from "./evaluate.js";
 import { fingerprintOf } from "./fingerprint.js";
 import { getPrimaryBusyPeriods } from "../integrations/google/calendarClient.js";
+import { getDailyForecasts } from "../integrations/weather/weatherClient.js";
+import { getAthleteLocation } from "../lib/athleteLocation.js";
 import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
 import { env } from "../env.js";
@@ -64,7 +66,52 @@ export async function generateRecommendations(
     }
   }
 
-  const { primary, secondary } = evaluate({ snapshot, upcoming, busyPeriods, timeZone: env.ATHLETE_TIMEZONE });
+  // Refreshed on every call (dashboard read, webhook, nightly sync) — this upsert is what
+  // keeps the persisted table, and therefore the calendar tab's forecast display, current.
+  let weatherForecast: Awaited<ReturnType<typeof getDailyForecasts>> = [];
+  const athleteLocation = await getAthleteLocation(userId);
+  if (athleteLocation) {
+    try {
+      weatherForecast = await getDailyForecasts(
+        athleteLocation.lat,
+        athleteLocation.lon,
+        env.ATHLETE_TIMEZONE,
+        LOOKAHEAD_DAYS,
+      );
+      for (const day of weatherForecast) {
+        const values = {
+          userId,
+          date: day.date,
+          highTempF: day.highTempF,
+          lowTempF: day.lowTempF,
+          shortForecast: day.shortForecast,
+          precipProbabilityPct: day.precipProbabilityPct,
+          windSpeed: day.windSpeed,
+          windDirection: day.windDirection,
+          iconUrl: day.iconUrl,
+          alerts: day.alerts,
+          fetchedAt: new Date(),
+        };
+        await db
+          .insert(weatherForecasts)
+          .values(values)
+          .onConflictDoUpdate({
+            target: [weatherForecasts.userId, weatherForecasts.date],
+            set: { ...values, updatedAt: new Date() },
+          });
+      }
+    } catch (err) {
+      logger.warn({ err, userId }, "failed to fetch NWS weather for recommendations");
+    }
+  }
+
+  const { primary, secondary } = evaluate({
+    snapshot,
+    upcoming,
+    busyPeriods,
+    weatherForecast,
+    timeZone: env.ATHLETE_TIMEZONE,
+  });
   const allFired = [primary, ...secondary].filter((r): r is NonNullable<typeof primary> => r != null);
 
   // Suppress rules whose content the athlete has already resolved (dismissed or accepted) —

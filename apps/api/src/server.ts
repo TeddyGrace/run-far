@@ -17,6 +17,7 @@ import { runRoutes } from "./routes/runs.js";
 import { googleRoutes } from "./routes/google.js";
 import { recommendationRoutes } from "./routes/recommendations.js";
 import { recoveryRoutes } from "./routes/recovery.js";
+import { weatherRoutes } from "./routes/weather.js";
 import { assistantRoutes } from "./routes/assistant.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { whoopWebhookRoutes } from "./integrations/whoop/webhooks.js";
@@ -90,6 +91,7 @@ export async function buildServer() {
   await app.register(googleWebhookRoutes);
   await app.register(recommendationRoutes);
   await app.register(recoveryRoutes);
+  await app.register(weatherRoutes);
   await app.register(assistantRoutes);
   await app.register(settingsRoutes);
 

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PlannedRun } from "@run-far/shared";
+import { Link } from "react-router-dom";
+import type { PlannedRun, WeatherForecast, WeatherForecastResponse } from "@run-far/shared";
 import { api } from "../lib/api.js";
 import { DayColumn } from "../components/DayColumn.js";
 import { RunEditModal } from "../components/RunEditModal.js";
@@ -33,6 +34,14 @@ export function Calendar() {
     queryFn: () => api.get<PlannedRun[]>(`/runs?from=${weekStart.toISOString()}&to=${weekEnd.toISOString()}`),
   });
 
+  const weatherQuery = useQuery<WeatherForecastResponse>({
+    queryKey: ["weather", weekStart.toISOString(), weekEnd.toISOString()],
+    queryFn: () =>
+      api.get<WeatherForecastResponse>(
+        `/weather/forecast?from=${weekStart.toISOString().slice(0, 10)}&to=${weekEnd.toISOString().slice(0, 10)}`,
+      ),
+  });
+
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: ["runs"] });
 
   const updateRun = useMutation({
@@ -55,6 +64,11 @@ export function Calendar() {
   function runsForDay(day: Date): PlannedRun[] {
     const key = day.toISOString().slice(0, 10);
     return (runsQuery.data ?? []).filter((r) => r.scheduledAt.slice(0, 10) === key);
+  }
+
+  function forecastForDay(day: Date): WeatherForecast | undefined {
+    const key = day.toISOString().slice(0, 10);
+    return (weatherQuery.data?.forecasts ?? []).find((f) => f.date === key);
   }
 
   function onDragEnd(event: DragEndEvent) {
@@ -102,10 +116,26 @@ export function Calendar() {
         </div>
       </div>
 
+      {weatherQuery.data?.configured === false && (
+        <p className="mb-4 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-ink-secondary">
+          Set your location in{" "}
+          <Link to="/settings" className="text-accent hover:underline">
+            Settings
+          </Link>{" "}
+          to see weather on your calendar.
+        </p>
+      )}
+
       <DndContext onDragEnd={onDragEnd}>
         <div className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 xl:min-h-[calc(100vh-14rem)]">
           {days.map((day) => (
-            <DayColumn key={day.toISOString()} date={day} runs={runsForDay(day)} onSelectRun={setSelectedRun} />
+            <DayColumn
+              key={day.toISOString()}
+              date={day}
+              runs={runsForDay(day)}
+              forecast={forecastForDay(day)}
+              onSelectRun={setSelectedRun}
+            />
           ))}
         </div>
       </DndContext>

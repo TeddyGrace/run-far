@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import clsx from "clsx";
 import { useAuth } from "../lib/auth.js";
+import { useAutoUpdateLocation } from "../lib/locationSync.js";
 import { AssistantChat } from "./AssistantChat.js";
 
 const NAV_ITEMS = [
@@ -17,6 +18,7 @@ const WIDE_ROUTES = ["/calendar"];
 export function Layout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { pathname } = useLocation();
+  useAutoUpdateLocation();
   const containerWidth = WIDE_ROUTES.some((route) => pathname.startsWith(route))
     ? "max-w-[1600px]"
     : "max-w-5xl";

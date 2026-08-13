@@ -16,6 +16,8 @@ import { formatFeet, formatMiles, withImperialRunFields } from "../../lib/units.
 import { sendRecoveryDigestNow } from "../google/recoveryDigest.js";
 import { hasGoogleConnection } from "../google/push.js";
 import { listPrimaryEvents } from "../google/calendarClient.js";
+import { getForecastForRange } from "../weather/weatherClient.js";
+import { getAthleteLocation } from "../../lib/athleteLocation.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 
 const MAX_TOOL_ITERATIONS = 8;
@@ -65,6 +67,10 @@ specific runs that overlap one by name (e.g. "your Thursday tempo run overlaps D
 propose a scheduledAt in propose_schedule_changes that overlaps one of those events. If Google isn't
 connected, get_calendar_events tells you so — mention that you can't check for calendar conflicts rather
 than silently skipping the check.
+
+Weather (get_weather) works the same way: if the athlete's location isn't set, the tool tells you so and
+gives you the exact instruction to relay — pass it along in plain language (Settings → Weather → "Use my
+location") rather than just saying weather is unavailable.
 
 If the athlete asks you to email/send them today's recovery summary or recommendations (e.g. "email me my
 recovery", "send me today's digest"), call send_recovery_email. This immediately sends a real email via
@@ -149,6 +155,21 @@ const TOOLS: Anthropic.Tool[] = [
       properties: {
         from: { type: "string", description: "YYYY-MM-DD, inclusive. Defaults to today." },
         to: { type: "string", description: "YYYY-MM-DD, inclusive. Defaults to 14 days from `from`." },
+      },
+    },
+  },
+  {
+    name: "get_weather",
+    description:
+      "Return the NWS weather forecast (high/low temps in Fahrenheit, conditions, precip chance, wind, " +
+      "and any active NWS alerts) for the athlete's location over a date range. Defaults to today through " +
+      "7 days out if no range given. Calls NWS live for freshness — use for ad-hoc weather questions and " +
+      "when advising on run timing (heat, storms). If the athlete's location isn't configured, says so.",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "YYYY-MM-DD, inclusive. Defaults to today." },
+        to: { type: "string", description: "YYYY-MM-DD, inclusive. Defaults to 7 days from `from`." },
       },
     },
   },
@@ -296,6 +317,22 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       const toDate = new Date(`${to}T23:59:59Z`);
       const events = await listPrimaryEvents(userId, fromDate.toISOString(), toDate.toISOString());
       return { connected: true, events };
+    }
+    case "get_weather": {
+      const location = await getAthleteLocation(userId);
+      if (!location) {
+        return {
+          configured: false,
+          message:
+            "The athlete's location isn't set, so weather can't be fetched. Tell them to go to " +
+            "Settings and click \"Use my location\" under Weather to enable it.",
+        };
+      }
+      const from = typeof input.from === "string" ? input.from : isoDate(new Date());
+      const to =
+        typeof input.to === "string" ? input.to : isoDate(new Date(new Date(`${from}T00:00:00Z`).getTime() + 7 * 86_400_000));
+      const forecasts = await getForecastForRange(location.lat, location.lon, env.ATHLETE_TIMEZONE, from, to);
+      return { configured: true, forecasts };
     }
     case "get_active_plan": {
       const plan = await getActivePlanSnapshot(userId);

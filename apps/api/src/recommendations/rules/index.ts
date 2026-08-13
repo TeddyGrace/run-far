@@ -6,6 +6,7 @@ import { sleepDebt } from "./sleepDebt.js";
 import { acwrSpike } from "./acwrSpike.js";
 import { greenRecoveryEasyDay } from "./greenRecoveryEasyDay.js";
 import { calendarConflict } from "./calendarConflict.js";
+import { weatherAdvisory } from "./weatherAdvisory.js";
 
 // Order matters: evaluate() takes the first applicable rule as primary. Red-zone overrides
 // take priority over everything else; purely informational nudges (green day, ACWR) sit
@@ -17,6 +18,7 @@ export const ALL_RULES: Rule[] = [
   sleepDebt,
   hrvSuppressed,
   calendarConflict,
+  weatherAdvisory,
   acwrSpike,
   greenRecoveryEasyDay,
 ];

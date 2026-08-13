@@ -55,6 +55,7 @@ function makeContext(overrides: Partial<RuleContext> = {}): RuleContext {
     snapshot: baseSnapshot,
     upcoming: [],
     busyPeriods: [],
+    weatherForecast: [],
     timeZone: "America/New_York",
     ...overrides,
   };

@@ -160,6 +160,105 @@ function AiModelsCard() {
   );
 }
 
+function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function geolocationErrorMessage(err: GeolocationPositionError): string {
+  switch (err.code) {
+    case err.PERMISSION_DENIED:
+      return "Location permission was denied. Enable location access for this site in your browser's settings, then try again.";
+    case err.POSITION_UNAVAILABLE:
+      return "Your location couldn't be determined right now. Try again in a moment.";
+    case err.TIMEOUT:
+      return "Location request timed out. Try again.";
+    default:
+      return "Couldn't get your location. Try again.";
+  }
+}
+
+function LocationCard() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [locating, setLocating] = useState(false);
+
+  const settingsQuery = useQuery<UserSettings>({
+    queryKey: ["settings"],
+    queryFn: () => api.get<UserSettings>("/settings"),
+  });
+
+  const updateLocation = useMutation({
+    mutationFn: (body: { locationLat: number; locationLon: number }) =>
+      api.patch<UserSettings>("/settings", body),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings"], data);
+      setError(null);
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "Failed to save location"),
+  });
+
+  function useMyLocation() {
+    setError(null);
+    if (!("geolocation" in navigator)) {
+      setError("Your browser doesn't support location services.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocating(false);
+        updateLocation.mutate({ locationLat: position.coords.latitude, locationLon: position.coords.longitude });
+      },
+      (err) => {
+        setLocating(false);
+        setError(geolocationErrorMessage(err));
+      },
+      { timeout: 10_000 },
+    );
+  }
+
+  const settings = settingsQuery.data;
+  const isSet = settings?.locationLat != null && settings?.locationLon != null;
+  const busy = locating || updateLocation.isPending;
+
+  return (
+    <div className="rounded-xl border border-border bg-surface-1 p-5">
+      <h3 className="font-display font-semibold text-ink-primary">Weather</h3>
+      <p className="mt-1 text-sm text-ink-secondary">
+        Your location powers weather on the calendar and in coaching recommendations (heat, storms,
+        rain). It's set once from your browser — the app quietly keeps it current after that if you
+        move, so you shouldn't need to touch this again.
+      </p>
+      {settingsQuery.isLoading ? (
+        <p className="mt-4 text-sm text-ink-muted">Loading…</p>
+      ) : (
+        <div className="mt-4 flex items-center justify-between gap-4">
+          <p className="text-sm text-ink-secondary">
+            {isSet
+              ? `Location set${settings?.locationUpdatedAt ? ` — last updated ${relativeTime(settings.locationUpdatedAt)}` : ""}`
+              : "Not set — weather won't show until you set a location."}
+          </p>
+          <button
+            onClick={useMyLocation}
+            disabled={busy}
+            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+          >
+            {busy ? "Locating…" : isSet ? "Update location" : "Use my location"}
+          </button>
+        </div>
+      )}
+      {error && <p className="mt-3 text-sm text-zone-red">{error}</p>}
+    </div>
+  );
+}
+
 function AccountCard() {
   const { user } = useAuth();
   const logout = useLogout();
@@ -350,6 +449,7 @@ export function Settings() {
         }
       />
       <EmailSignInCard />
+      <LocationCard />
       <AiModelsCard />
     </div>
   );

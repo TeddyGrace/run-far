@@ -5,3 +5,4 @@ export * from "./schemas/sync.js";
 export * from "./schemas/chat.js";
 export * from "./schemas/settings.js";
 export * from "./schemas/auth.js";
+export * from "./schemas/weather.js";

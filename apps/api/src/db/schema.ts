@@ -58,6 +58,13 @@ export const users = pgTable(
     // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.
     assistantModel: text("assistant_model"),
     planModel: text("plan_model"),
+    // Athlete's location for NWS weather lookups, set via Settings (browser geolocation).
+    // Null falls back to env.ATHLETE_LAT/LON — see lib/athleteLocation.ts. locationUpdatedAt
+    // is surfaced in Settings ("last set N ago") so a moved athlete notices it's stale and
+    // re-clicks "Update location" — there's no background refresh, this is the nudge for it.
+    locationLat: doublePrecision("location_lat"),
+    locationLon: doublePrecision("location_lon"),
+    locationUpdatedAt: timestamp("location_updated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],
@@ -83,6 +90,36 @@ export const oauthConnections = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("oauth_connections_user_provider_idx").on(t.userId, t.provider)],
+);
+
+// --- Weather ---
+
+// NWS daily forecast, one row per (user, calendar date). Upserted on every
+// generateRecommendations run, so it's always as fresh as the last dashboard read /
+// webhook / nightly sync — see recommendations/service.ts.
+export const weatherForecasts = pgTable(
+  "weather_forecasts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    highTempF: doublePrecision("high_temp_f"),
+    lowTempF: doublePrecision("low_temp_f"),
+    shortForecast: text("short_forecast"),
+    precipProbabilityPct: doublePrecision("precip_probability_pct"),
+    windSpeed: text("wind_speed"),
+    windDirection: text("wind_direction"),
+    iconUrl: text("icon_url"),
+    // Active NWS alerts (severity/headline/effective/expires) overlapping this date, kept so
+    // the frontend and assistant can show them without a second live NWS call.
+    alerts: jsonb("alerts").notNull().default([]),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("weather_forecasts_user_date_idx").on(t.userId, t.date)],
 );
 
 // --- Whoop data ---

@@ -20,11 +20,16 @@ export const userSettingsSchema = z.object({
   planModel: z.string().nullable(),
   defaultAssistantModel: z.string(),
   defaultPlanModel: z.string(),
+  locationLat: z.number().nullable(),
+  locationLon: z.number().nullable(),
+  locationUpdatedAt: z.string().nullable(),
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const updateUserSettingsSchema = z.object({
   assistantModel: aiModelSchema.nullable().optional(),
   planModel: aiModelSchema.nullable().optional(),
+  locationLat: z.number().min(-90).max(90).nullable().optional(),
+  locationLon: z.number().min(-180).max(180).nullable().optional(),
 });
 export type UpdateUserSettingsInput = z.infer<typeof updateUserSettingsSchema>;

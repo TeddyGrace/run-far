@@ -20,7 +20,7 @@
     "db:studio": "pnpm --filter @run-far/api run db:studio",
     "db:start": "scripts/pg.sh start",
     "db:stop": "scripts/pg.sh stop",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath .githooks || exit 0"
   },
   "devDependencies": {
     "typescript": "^5.6.3"
