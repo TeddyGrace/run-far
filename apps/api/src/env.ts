@@ -8,22 +8,6 @@ import { z } from "zod";
 const here = path.dirname(fileURLToPath(import.meta.url));
 loadDotenv({ path: path.resolve(here, "../../../.env") });
 
-/** Public site origin (SPA + API when hosted together on Railway). */
-function defaultWebOrigin(): string {
-  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
-  if (railway) return `https://${railway}`;
-  return "http://localhost:5174";
-}
-
-/** API origin for OAuth callback URLs (same host as the SPA on Railway). */
-function defaultApiOrigin(): string {
-  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
-  if (railway) return `https://${railway}`;
-  return "http://localhost:8787";
-}
-
-const apiOrigin = defaultApiOrigin();
-
 /**
  * Platform dashboards make it easy to set a variable to an empty string or to a bare
  * hostname (e.g. a `RAILWAY_PUBLIC_DOMAIN` reference). Drop blanks so schema defaults
@@ -35,6 +19,26 @@ function normalizeOrigin(value: string | undefined): string | undefined {
   if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, "");
   return `https://${trimmed.replace(/\/+$/, "")}`;
 }
+
+function isLoopback(origin: string): boolean {
+  const { hostname } = new URL(origin);
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+/** Public site origin (SPA + API when hosted together on Railway). */
+const webOrigin =
+  normalizeOrigin(process.env.WEB_ORIGIN) ??
+  normalizeOrigin(process.env.RAILWAY_PUBLIC_DOMAIN) ??
+  "http://localhost:5174";
+
+/**
+ * API origin for OAuth callback URLs. A hosted deploy serves the SPA and `/api` from one
+ * host, so a custom domain in WEB_ORIGIN has to drive the callbacks too — otherwise the
+ * provider returns the browser to the platform domain, where the `state` cookie set on the
+ * custom domain isn't sent and every sign-in fails the CSRF check. Local dev is the one
+ * split-host case: Vite serves the SPA on 5174 and proxies `/api` to the API on 8787.
+ */
+const apiOrigin = isLoopback(webOrigin) ? "http://localhost:8787" : webOrigin;
 
 const rawEnv = {
   ...process.env,
@@ -52,7 +56,7 @@ const envSchema = z.object({
   // Railway sets PORT; API_PORT remains the local-dev default.
   API_PORT: z.coerce.number().int().positive().default(8787),
   PORT: z.coerce.number().int().positive().optional(),
-  WEB_ORIGIN: z.string().url().default(defaultWebOrigin()),
+  WEB_ORIGIN: z.string().url().default(webOrigin),
   SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 characters"),
   ENCRYPTION_KEY: z.string().min(1, "ENCRYPTION_KEY is required (base64, 32 bytes)"),
 
@@ -100,9 +104,7 @@ export const env = {
   ...data,
   GOOGLE_WEBHOOK_URL:
     data.GOOGLE_WEBHOOK_URL ||
-    (process.env.RAILWAY_PUBLIC_DOMAIN
-      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/webhooks/google`
-      : ""),
+    (isLoopback(data.WEB_ORIGIN) ? "" : `${data.WEB_ORIGIN}/webhooks/google`),
   /** Prefer Railway's PORT when present. */
   listenPort: data.PORT ?? data.API_PORT,
 };

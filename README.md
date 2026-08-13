@@ -265,6 +265,7 @@ One Docker service serves the Fastify API and the Vite SPA on the same origin
 
    Leave `WEB_ORIGIN` and OAuth redirect URIs unset unless you use a custom domain —
    they default from `RAILWAY_PUBLIC_DOMAIN` (`https://<your-app>.up.railway.app`).
+   On a custom domain, set `WEB_ORIGIN` and the redirect URIs follow it automatically.
 
 5. Deploy. Health check is `GET /health`. Migrations run on boot (`start:prod`).
 6. In Whoop + Google consoles, add the prod redirect/webhook URLs, e.g.:
@@ -275,8 +276,12 @@ One Docker service serves the Fastify API and the Vite SPA on the same origin
 7. Create your first user: either Sign in with Google, or run a one-off
    `pnpm db:seed` against prod (only if you want the local seed account).
 
-Custom domain: add it in Railway, then set `WEB_ORIGIN=https://your.domain` and
-update OAuth redirect URIs to match.
+Custom domain: add it in Railway, set `WEB_ORIGIN=https://your.domain`, and register the
+callback + webhook URLs above under that domain in the Whoop/Google consoles. The redirect
+URI variables derive from `WEB_ORIGIN`, so only override them to point somewhere else.
+Serve the domain over end-to-end HTTPS (Cloudflare SSL mode Full/Full-strict, not Flexible)
+— the session cookie is `Secure`. Pick one canonical host: if both the apex and `www`
+resolve, redirect one to the other, since a session started on one isn't sent to the other.
 
 Local Docker smoke-test (optional):
 
