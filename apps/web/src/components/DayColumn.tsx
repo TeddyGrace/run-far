@@ -14,7 +14,7 @@ interface DayColumnProps {
 }
 
 export function DayColumn({ date, runs, forecast, onSelectRun }: DayColumnProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const dayKey = date.toISOString().slice(0, 10);
   const { setNodeRef, isOver } = useDroppable({ id: dayKey });
   const isToday = dayKey === new Date().toISOString().slice(0, 10);
