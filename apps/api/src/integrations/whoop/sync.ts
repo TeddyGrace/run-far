@@ -4,17 +4,17 @@ import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles, syncState } from 
 import { whoopGet, whoopPaginate } from "./client.js";
 import type { WhoopCycle, WhoopRecovery, WhoopSleep, WhoopWorkout } from "./types.js";
 import { logger } from "../../lib/logger.js";
-import { env } from "../../env.js";
 import { dateYmdInZone } from "../../lib/zonedTime.js";
+import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
 import { cycleLocalDate } from "../../metrics/cycleMetrics.js";
 
 /** Athlete-local calendar date for a raw Whoop ISO timestamp. Whoop's sleep/workout payloads
- * don't carry a per-event timezone offset, so the configured athlete timezone is the best
+ * don't carry a per-event timezone offset, so the athlete's configured timezone is the best
  * available signal — unlike cycles, which do carry their own offset (see cycleLocalDate).
  * Exported for testing: this is what fixes the bug where an evening workout landed on the
  * following UTC calendar day. */
-export function toLocalDateOnly(iso: string): string {
-  return dateYmdInZone(new Date(iso), env.ATHLETE_TIMEZONE);
+export function toLocalDateOnly(iso: string, tz: string): string {
+  return dateYmdInZone(new Date(iso), tz);
 }
 
 async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
@@ -46,17 +46,17 @@ async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
  * Whoop finished scoring it (r.created_at, which can land after local midnight). Cycles sync
  * before recovery in a full range sync, but a webhook-triggered single upsert can race ahead
  * of its cycle — fall back to created_at (best-effort) only when the cycle isn't there yet. */
-async function recoveryLocalDate(userId: string, r: WhoopRecovery): Promise<string> {
+async function recoveryLocalDate(userId: string, r: WhoopRecovery, tz: string): Promise<string> {
   const [cycle] = await db
     .select({ start: cycles.start, timezoneOffset: cycles.timezoneOffset })
     .from(cycles)
     .where(and(eq(cycles.userId, userId), eq(cycles.whoopCycleId, String(r.cycle_id))));
-  if (cycle) return cycleLocalDate(cycle);
-  return toLocalDateOnly(r.created_at);
+  if (cycle) return cycleLocalDate(cycle, tz);
+  return toLocalDateOnly(r.created_at, tz);
 }
 
-async function upsertRecovery(userId: string, r: WhoopRecovery): Promise<void> {
-  const date = await recoveryLocalDate(userId, r);
+async function upsertRecovery(userId: string, r: WhoopRecovery, tz: string): Promise<void> {
+  const date = await recoveryLocalDate(userId, r, tz);
   await db
     .insert(recoveryMetrics)
     .values({
@@ -87,7 +87,7 @@ async function upsertRecovery(userId: string, r: WhoopRecovery): Promise<void> {
     });
 }
 
-async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
+async function upsertSleep(userId: string, s: WhoopSleep, tz: string): Promise<void> {
   const inBedMs = s.score?.stage_summary.total_in_bed_time_milli ?? null;
   const awakeMs = s.score?.stage_summary.total_awake_time_milli ?? null;
   const durationMin = inBedMs != null && awakeMs != null ? (inBedMs - awakeMs) / 60_000 : null;
@@ -103,7 +103,7 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
       whoopSleepId: s.id,
       cycleId: String(s.cycle_id),
       nap: s.nap ?? false,
-      date: toLocalDateOnly(s.start),
+      date: toLocalDateOnly(s.start, tz),
       durationMin,
       efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
       performancePct,
@@ -125,7 +125,7 @@ async function upsertSleep(userId: string, s: WhoopSleep): Promise<void> {
     });
 }
 
-async function upsertWorkout(userId: string, w: WhoopWorkout): Promise<void> {
+async function upsertWorkout(userId: string, w: WhoopWorkout, tz: string): Promise<void> {
   const startedAt = new Date(w.start);
   const endedAt = new Date(w.end);
   const durationMin =
@@ -153,7 +153,7 @@ async function upsertWorkout(userId: string, w: WhoopWorkout): Promise<void> {
     .values({
       userId,
       whoopWorkoutId: w.id,
-      date: toLocalDateOnly(w.start),
+      date: toLocalDateOnly(w.start, tz),
       ...row,
     })
     .onConflictDoUpdate({
@@ -164,6 +164,8 @@ async function upsertWorkout(userId: string, w: WhoopWorkout): Promise<void> {
 
 /** Full sync of cycle/recovery/sleep/workout for a date range. Used for backfill and as a nightly safety net. */
 export async function syncWhoopRange(userId: string, start: string, end?: string): Promise<void> {
+  const tz = await getAthleteTimezone(userId);
+
   // Cycles first: recovery/sleep rows reference cycleId, and there are no cycle.* webhooks,
   // so a full range sync is the only way cycles ever get backfilled/refreshed in bulk.
   let cycleCount = 0;
@@ -174,13 +176,13 @@ export async function syncWhoopRange(userId: string, start: string, end?: string
 
   let recoveryCount = 0;
   for await (const r of whoopPaginate<WhoopRecovery>(userId, "/v2/recovery", { start, end })) {
-    await upsertRecovery(userId, r);
+    await upsertRecovery(userId, r, tz);
     recoveryCount++;
   }
 
   let sleepCount = 0;
   for await (const s of whoopPaginate<WhoopSleep>(userId, "/v2/activity/sleep", { start, end })) {
-    await upsertSleep(userId, s);
+    await upsertSleep(userId, s, tz);
     sleepCount++;
   }
 
@@ -189,7 +191,7 @@ export async function syncWhoopRange(userId: string, start: string, end?: string
     start,
     end,
   })) {
-    await upsertWorkout(userId, w);
+    await upsertWorkout(userId, w, tz);
     workoutCount++;
   }
 
@@ -247,6 +249,7 @@ export async function syncSingleResource(
   type: "recovery" | "sleep" | "workout",
   id: string,
 ): Promise<void> {
+  const tz = await getAthleteTimezone(userId);
   switch (type) {
     case "recovery": {
       // v2 recovery webhooks carry the sleep UUID, not a cycleId, and there's no
@@ -261,7 +264,7 @@ export async function syncSingleResource(
           // Sync the cycle first: recoveryLocalDate() needs it in the DB to derive the
           // correct wake-to-wake date instead of falling back to created_at.
           await syncCycleById(userId, r.cycle_id);
-          await upsertRecovery(userId, r);
+          await upsertRecovery(userId, r, tz);
           return;
         }
       }
@@ -270,7 +273,7 @@ export async function syncSingleResource(
     }
     case "sleep": {
       const s = await whoopGet<WhoopSleep>(userId, `/v2/activity/sleep/${id}`);
-      await upsertSleep(userId, s);
+      await upsertSleep(userId, s, tz);
       // The primary sleep starts a new cycle; a nap attaches to the current one — either way,
       // refresh that cycle now rather than waiting for the next full sync.
       await syncCycleById(userId, s.cycle_id);
@@ -278,7 +281,7 @@ export async function syncSingleResource(
     }
     case "workout": {
       const w = await whoopGet<WhoopWorkout>(userId, `/v2/activity/workout/${id}`);
-      await upsertWorkout(userId, w);
+      await upsertWorkout(userId, w, tz);
       return;
     }
   }

@@ -73,12 +73,18 @@ const envSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-5"),
+  // Comma-separated allowlist gating account CREATION (not existing users). Empty allows
+  // anyone to sign up in development, but fails closed (denies everyone) in production, so a
+  // deploy that forgets to set it doesn't accidentally open public signup.
+  ALLOWED_EMAILS: z.string().default(""),
   /** IANA timezone for scheduling planned runs (wall-clock times the athlete sees). */
   ATHLETE_TIMEZONE: z.string().default("America/New_York"),
   /** Athlete's location for NWS weather lookups. Left unset (not defaulted) so `!= null`
    * checks at call sites can tell "not configured" apart from a real coordinate. */
   ATHLETE_LAT: z.coerce.number().min(-90).max(90).optional(),
   ATHLETE_LON: z.coerce.number().min(-180).max(180).optional(),
+  /** Contact NWS shows to the app operator (not the athlete) in the API's User-Agent header. */
+  NWS_CONTACT_EMAIL: z.string().default("teddygrace77@gmail.com"),
 });
 
 const parsed = envSchema.safeParse(rawEnv);
@@ -100,6 +106,12 @@ if (!parsed.success) {
 
 const data = parsed.data;
 
+const allowedEmails = new Set(
+  data.ALLOWED_EMAILS.split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);
+
 export const env = {
   ...data,
   GOOGLE_WEBHOOK_URL:
@@ -107,4 +119,7 @@ export const env = {
     (isLoopback(data.WEB_ORIGIN) ? "" : `${data.WEB_ORIGIN}/webhooks/google`),
   /** Prefer Railway's PORT when present. */
   listenPort: data.PORT ?? data.API_PORT,
+  /** Empty set means "allow all" outside production, "deny all" in production — see
+   * findOrCreateGoogleUser (routes/auth.ts), the only place this gates account creation. */
+  allowedEmails,
 };

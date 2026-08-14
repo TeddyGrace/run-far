@@ -1,7 +1,6 @@
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { cycles } from "../db/schema.js";
-import { env } from "../env.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { RECOMMENDATION_CONFIG } from "../recommendations/config.js";
 
@@ -57,12 +56,13 @@ export function cycleLoad(cycle: Pick<Cycle, "kilojoule" | "strain">): number | 
 }
 
 /** The cycle's start date in the athlete's local time — the cycle's own recorded
- * timezoneOffset when present (correct across travel/DST), else the configured default. */
-export function cycleLocalDate(cycle: Pick<Cycle, "start" | "timezoneOffset">): string {
+ * timezoneOffset when present (correct across travel/DST), else the caller-supplied fallback
+ * (the athlete's configured timezone, resolved once per request via getAthleteTimezone). */
+export function cycleLocalDate(cycle: Pick<Cycle, "start" | "timezoneOffset">, fallbackTz: string): string {
   if (cycle.timezoneOffset) {
     return dateYmdInZoneOffset(cycle.start, cycle.timezoneOffset);
   }
-  return dateYmdInZone(cycle.start, env.ATHLETE_TIMEZONE);
+  return dateYmdInZone(cycle.start, fallbackTz);
 }
 
 /** Calendar date (YYYY-MM-DD) of an instant given a fixed UTC offset string like "-04:00". */

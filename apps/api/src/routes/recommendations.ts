@@ -46,9 +46,12 @@ export async function recommendationRoutes(app: FastifyInstance) {
     await db
       .update(recommendations)
       .set({ status: "accepted", appliedAt: new Date() })
-      .where(eq(recommendations.id, id));
+      .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
 
-    const [updated] = await db.select().from(recommendations).where(eq(recommendations.id, id));
+    const [updated] = await db
+      .select()
+      .from(recommendations)
+      .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
     return updated;
   });
 
@@ -73,9 +76,12 @@ export async function recommendationRoutes(app: FastifyInstance) {
     await db
       .update(recommendations)
       .set({ status: "dismissed", appliedAt: new Date() })
-      .where(eq(recommendations.id, id));
+      .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
 
-    const [updated] = await db.select().from(recommendations).where(eq(recommendations.id, id));
+    const [updated] = await db
+      .select()
+      .from(recommendations)
+      .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
     return updated;
   });
 }

@@ -90,7 +90,7 @@ export async function activatePlan(userId: string, planId: string): Promise<void
   await db
     .update(trainingPlans)
     .set({ status: "active", archivedAt: null })
-    .where(eq(trainingPlans.id, planId));
+    .where(and(eq(trainingPlans.id, planId), eq(trainingPlans.userId, userId)));
 
   const runs = await db
     .select({ id: plannedRuns.id })

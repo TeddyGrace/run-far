@@ -65,6 +65,9 @@ export const users = pgTable(
     locationLat: doublePrecision("location_lat"),
     locationLon: doublePrecision("location_lon"),
     locationUpdatedAt: timestamp("location_updated_at", { withTimezone: true }),
+    // IANA zone captured from the browser at login (see lib/athleteTimezone.ts). Null falls
+    // back to env.ATHLETE_TIMEZONE, same pattern as location above.
+    timezone: text("timezone"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],
@@ -89,7 +92,15 @@ export const oauthConnections = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("oauth_connections_user_provider_idx").on(t.userId, t.provider)],
+  (t) => [
+    uniqueIndex("oauth_connections_user_provider_idx").on(t.userId, t.provider),
+    // Routes incoming Whoop webhooks (which only carry the Whoop-side user id, stored in
+    // metadata.whoopUserId) back to a connection without a seq scan — see
+    // integrations/whoop/webhooks.ts findUserIdForWhoopUser.
+    index("oauth_connections_whoop_user_idx")
+      .on(sql`(${t.metadata}->>'whoopUserId')`)
+      .where(sql`${t.provider} = 'whoop'`),
+  ],
 );
 
 // --- Weather ---

@@ -3,8 +3,8 @@ import { db } from "../db/client.js";
 import { trainingPlans, whoopWorkouts } from "../db/schema.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
 import { logger } from "../lib/logger.js";
-import { env } from "../env.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
+import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 
 const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
 const DAY_MS = 86_400_000;
@@ -33,8 +33,8 @@ export interface AthleteContext {
 // whoopWorkouts.date stores the athlete-local date (see integrations/whoop/sync.ts), so
 // real instants (now, a window start) must resolve to a date the same way, not by slicing a
 // UTC ISO string.
-function isoDate(d: Date): string {
-  return dateYmdInZone(d, env.ATHLETE_TIMEZONE);
+function isoDate(d: Date, tz: string): string {
+  return dateYmdInZone(d, tz);
 }
 
 // Monday of the calendar week containing an already-local YYYY-MM-DD date string. Pure
@@ -55,10 +55,11 @@ function mondayKey(dateStr: string): string {
  * Pulls trailing Whoop run mileage, a recovery summary, and any active plan.
  */
 export async function getAthleteContext(userId: string, trailingWeeks = 8): Promise<AthleteContext> {
+  const tz = await getAthleteTimezone(userId);
   const today = new Date();
-  const todayIso = isoDate(today);
+  const todayIso = isoDate(today, tz);
   const windowStart = new Date(today.getTime() - trailingWeeks * 7 * DAY_MS);
-  const windowStartIso = isoDate(windowStart);
+  const windowStartIso = isoDate(windowStart, tz);
 
   const runs = await db
     .select({

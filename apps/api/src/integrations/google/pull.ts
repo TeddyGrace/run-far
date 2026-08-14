@@ -74,8 +74,14 @@ async function applyInboundEvent(
   const plannedRunId = event.extendedProperties?.private?.[PLANNED_RUN_ID_KEY];
 
   const [existing] = plannedRunId
-    ? await db.select().from(plannedRuns).where(eq(plannedRuns.id, plannedRunId))
-    : await db.select().from(plannedRuns).where(eq(plannedRuns.gcalEventId, event.id));
+    ? await db
+        .select()
+        .from(plannedRuns)
+        .where(and(eq(plannedRuns.id, plannedRunId), eq(plannedRuns.userId, userId)))
+    : await db
+        .select()
+        .from(plannedRuns)
+        .where(and(eq(plannedRuns.gcalEventId, event.id), eq(plannedRuns.userId, userId)));
 
   // Loop prevention: if this event's etag matches what we last wrote, it's an echo of our
   // own push, not an external change — nothing to do.

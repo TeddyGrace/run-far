@@ -18,6 +18,7 @@ import { hasGoogleConnection } from "../google/push.js";
 import { listPrimaryEvents } from "../google/calendarClient.js";
 import { getForecastForRange } from "../weather/weatherClient.js";
 import { getAthleteLocation } from "../../lib/athleteLocation.js";
+import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 
 const MAX_TOOL_ITERATIONS = 8;
@@ -25,8 +26,8 @@ const MAX_TOOL_ITERATIONS = 8;
 // recoveryMetrics/sleepRecords/whoopWorkouts store the athlete-local date (see
 // integrations/whoop/sync.ts), so window bounds must be computed the same way — a UTC slice
 // here would drift the window off by a day for evening activity, same as the bug fixed there.
-function isoDate(d: Date): string {
-  return dateYmdInZone(d, env.ATHLETE_TIMEZONE);
+function isoDate(d: Date, tz: string): string {
+  return dateYmdInZone(d, tz);
 }
 
 function systemPrompt(todayIso: string, timeZone: string): string {
@@ -231,15 +232,20 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-async function executeTool(name: string, input: Record<string, unknown>, userId: string): Promise<unknown> {
+async function executeTool(
+  name: string,
+  input: Record<string, unknown>,
+  userId: string,
+  tz: string,
+): Promise<unknown> {
   switch (name) {
     case "get_current_date": {
       const now = new Date();
       return {
-        todayIso: isoDate(now),
+        todayIso: isoDate(now, tz),
         weekday: now.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
-        timeZone: env.ATHLETE_TIMEZONE,
-        utcOffset: offsetStringForZone(env.ATHLETE_TIMEZONE, now),
+        timeZone: tz,
+        utcOffset: offsetStringForZone(tz, now),
       };
     }
     case "get_athlete_context": {
@@ -249,8 +255,8 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
     }
     case "get_recovery_history": {
       const windowDays = Math.min(Math.max(Number(input.days) || 14, 1), 90);
-      const startIso = isoDate(new Date(Date.now() - (windowDays - 1) * 86_400_000));
-      const endIso = isoDate(new Date());
+      const startIso = isoDate(new Date(Date.now() - (windowDays - 1) * 86_400_000), tz);
+      const endIso = isoDate(new Date(), tz);
       const [recoveryRows, sleepRows, workoutRows] = await Promise.all([
         db
           .select()
@@ -289,10 +295,10 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       }));
     }
     case "get_runs": {
-      const from = typeof input.from === "string" ? input.from : isoDate(new Date());
+      const from = typeof input.from === "string" ? input.from : isoDate(new Date(), tz);
       const fromDate = new Date(`${from}T00:00:00Z`);
       const to =
-        typeof input.to === "string" ? input.to : isoDate(new Date(fromDate.getTime() + 14 * 86_400_000));
+        typeof input.to === "string" ? input.to : isoDate(new Date(fromDate.getTime() + 14 * 86_400_000), tz);
       const toDate = new Date(`${to}T23:59:59Z`);
 
       const activePlanId = await getActivePlanId(userId);
@@ -313,10 +319,10 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       if (!(await hasGoogleConnection(userId))) {
         return { connected: false, events: [] };
       }
-      const from = typeof input.from === "string" ? input.from : isoDate(new Date());
+      const from = typeof input.from === "string" ? input.from : isoDate(new Date(), tz);
       const fromDate = new Date(`${from}T00:00:00Z`);
       const to =
-        typeof input.to === "string" ? input.to : isoDate(new Date(fromDate.getTime() + 14 * 86_400_000));
+        typeof input.to === "string" ? input.to : isoDate(new Date(fromDate.getTime() + 14 * 86_400_000), tz);
       const toDate = new Date(`${to}T23:59:59Z`);
       const events = await listPrimaryEvents(userId, fromDate.toISOString(), toDate.toISOString());
       return { connected: true, events };
@@ -331,10 +337,12 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
             "Settings and click \"Use my location\" under Weather to enable it.",
         };
       }
-      const from = typeof input.from === "string" ? input.from : isoDate(new Date());
+      const from = typeof input.from === "string" ? input.from : isoDate(new Date(), tz);
       const to =
-        typeof input.to === "string" ? input.to : isoDate(new Date(new Date(`${from}T00:00:00Z`).getTime() + 7 * 86_400_000));
-      const forecasts = await getForecastForRange(location.lat, location.lon, env.ATHLETE_TIMEZONE, from, to);
+        typeof input.to === "string"
+          ? input.to
+          : isoDate(new Date(new Date(`${from}T00:00:00Z`).getTime() + 7 * 86_400_000), tz);
+      const forecasts = await getForecastForRange(location.lat, location.lon, tz, from, to);
       return { configured: true, forecasts };
     }
     case "get_active_plan": {
@@ -342,7 +350,7 @@ async function executeTool(name: string, input: Record<string, unknown>, userId:
       if (!plan) return { activePlan: null };
       return {
         activePlan: { ...plan, runs: plan.runs.map(withImperialRunFields) },
-        timeZone: env.ATHLETE_TIMEZONE,
+        timeZone: tz,
       };
     }
     case "get_recommendations": {
@@ -377,7 +385,8 @@ export async function runAssistantChatTurn(params: {
   }
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  const todayIso = isoDate(new Date());
+  const tz = await getAthleteTimezone(params.userId);
+  const todayIso = isoDate(new Date(), tz);
 
   const [user] = await db
     .select({ assistantModel: users.assistantModel })
@@ -398,7 +407,7 @@ export async function runAssistantChatTurn(params: {
     const response = await client.messages.create({
       model,
       max_tokens: 4096,
-      system: systemPrompt(todayIso, env.ATHLETE_TIMEZONE),
+      system: systemPrompt(todayIso, tz),
       tools: TOOLS,
       messages: conversation,
     });
@@ -444,7 +453,7 @@ export async function runAssistantChatTurn(params: {
             content: `Staged ${parsed.data.items.length} change(s) for the athlete to confirm.`,
           });
         } else {
-          const output = await executeTool(block.name, (block.input as Record<string, unknown>) ?? {}, params.userId);
+          const output = await executeTool(block.name, (block.input as Record<string, unknown>) ?? {}, params.userId, tz);
           toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(output) });
         }
       }

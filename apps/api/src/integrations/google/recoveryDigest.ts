@@ -50,7 +50,11 @@ interface WeatherDigestData {
  * routes/weather.ts for the same read pattern) and formats its hourly breakdown in the
  * athlete's local timezone, 12-hour clock, for the email. Returns null if no location is
  * configured or no forecast has landed yet for today. */
-async function getTodayWeatherForDigest(userId: string, dateYmd: string): Promise<WeatherDigestData | null> {
+async function getTodayWeatherForDigest(
+  userId: string,
+  dateYmd: string,
+  timeZone: string,
+): Promise<WeatherDigestData | null> {
   const [row] = await db
     .select()
     .from(weatherForecasts)
@@ -58,7 +62,7 @@ async function getTodayWeatherForDigest(userId: string, dateYmd: string): Promis
   if (!row) return null;
 
   const hourFmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: env.ATHLETE_TIMEZONE,
+    timeZone,
     hour: "numeric",
     hour12: true,
   });
@@ -216,7 +220,7 @@ export async function maybeSendRecoveryDigest(
   if (!claimedUser) return; // another caller already claimed today
 
   try {
-    const weather = await getTodayWeatherForDigest(userId, snapshot.date);
+    const weather = await getTodayWeatherForDigest(userId, snapshot.date, snapshot.timeZone ?? env.ATHLETE_TIMEZONE);
     const { subject, html, text } = buildDigest(snapshot, fired, weather);
     await sendGmail(userId, { to: claimedUser.email, subject, html, text });
     logger.info({ userId, date: snapshot.date }, "recovery digest email sent");
@@ -257,7 +261,7 @@ export async function sendRecoveryDigestNow(
   }));
 
   try {
-    const weather = await getTodayWeatherForDigest(userId, snapshot.date);
+    const weather = await getTodayWeatherForDigest(userId, snapshot.date, snapshot.timeZone ?? env.ATHLETE_TIMEZONE);
     const { subject, html, text } = buildDigest(snapshot, fired, weather);
     await sendGmail(userId, { to: user.email, subject, html, text });
     await db.update(users).set({ lastRecoveryEmailDate: snapshot.date }).where(eq(users.id, userId));

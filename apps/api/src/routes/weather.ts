@@ -5,7 +5,7 @@ import { weatherForecasts } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { getAthleteLocation } from "../lib/athleteLocation.js";
-import { env } from "../env.js";
+import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 
 export async function weatherRoutes(app: FastifyInstance) {
   // Pure read of the persisted forecast — kept fresh by generateRecommendations (dashboard
@@ -15,9 +15,10 @@ export async function weatherRoutes(app: FastifyInstance) {
     const userId = requireUserId(request, reply);
     if (!userId) return;
     const { from, to } = request.query as { from?: string; to?: string };
-    const today = dateYmdInZone(new Date(), env.ATHLETE_TIMEZONE);
+    const tz = await getAthleteTimezone(userId);
+    const today = dateYmdInZone(new Date(), tz);
     const fromYmd = from ?? today;
-    const toYmd = to ?? dateYmdInZone(new Date(Date.now() + 7 * 86_400_000), env.ATHLETE_TIMEZONE);
+    const toYmd = to ?? dateYmdInZone(new Date(Date.now() + 7 * 86_400_000), tz);
 
     const [configured, forecasts] = await Promise.all([
       getAthleteLocation(userId).then((loc) => loc != null),

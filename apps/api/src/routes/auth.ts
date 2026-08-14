@@ -24,6 +24,17 @@ const loginSchema = z.object({ email: z.string().email(), password: z.string().m
 const OAUTH_STATE_COOKIE = "google_login_oauth_state";
 const CONSENT_RETRY_COOKIE = "google_login_consent_retry";
 
+/** Thrown when a brand-new email tries to create an account but isn't on ALLOWED_EMAILS.
+ * Never thrown for an existing user (sub or email match) — the allowlist only gates creation. */
+class NotInvitedError extends Error {}
+
+function isEmailAllowedToSignUp(email: string): boolean {
+  if (env.allowedEmails.size > 0) return env.allowedEmails.has(email.toLowerCase());
+  // No allowlist configured: fail closed in production, open in dev so a fresh checkout
+  // still works without env setup.
+  return env.NODE_ENV !== "production";
+}
+
 async function findOrCreateGoogleUser(identity: {
   sub: string;
   email: string;
@@ -40,6 +51,10 @@ async function findOrCreateGoogleUser(identity: {
       .returning();
     if (!linked) throw new Error("failed to link google sub to existing user");
     return linked;
+  }
+
+  if (!isEmailAllowedToSignUp(identity.email)) {
+    throw new NotInvitedError();
   }
 
   const [created] = await db
@@ -77,7 +92,7 @@ export async function authRoutes(app: FastifyInstance) {
       return;
     }
     setSessionCookie(reply, user.id);
-    return { id: user.id, email: user.email };
+    return { id: user.id, email: user.email, timezone: user.timezone };
   });
 
   app.get("/api/auth/google/start", async (request, reply) => {
@@ -148,6 +163,10 @@ export async function authRoutes(app: FastifyInstance) {
 
       reply.redirect(`${env.WEB_ORIGIN}/`);
     } catch (err) {
+      if (err instanceof NotInvitedError) {
+        reply.redirect(`${env.WEB_ORIGIN}/login?error=not_invited`);
+        return;
+      }
       logger.error({ err }, "google login failed");
       reply.redirect(`${env.WEB_ORIGIN}/login?error=google_failed`);
     }
@@ -197,6 +216,6 @@ export async function authRoutes(app: FastifyInstance) {
       reply.status(401).send({ error: { message: "User no longer exists", code: "UNAUTHENTICATED" } });
       return;
     }
-    return { id: user.id, email: user.email };
+    return { id: user.id, email: user.email, timezone: user.timezone };
   });
 }

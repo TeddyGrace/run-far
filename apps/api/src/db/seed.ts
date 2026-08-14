@@ -27,7 +27,11 @@ async function main() {
   if (!user) {
     [user] = await db
       .insert(users)
-      .values({ email: SEED_EMAIL, passwordHash: hashPassword(SEED_PASSWORD) })
+      .values({
+        email: SEED_EMAIL,
+        passwordHash: hashPassword(SEED_PASSWORD),
+        timezone: env.ATHLETE_TIMEZONE,
+      })
       .returning();
   }
   if (!user) throw new Error("failed to create seed user");

@@ -39,17 +39,17 @@ describe("cycleLocalDate", () => {
   it("crosses midnight correctly when the cycle's own offset differs from UTC", () => {
     // 23:30 in UTC-04:00 is 2026-08-12 03:30 UTC — a naive UTC slice would read "2026-08-12".
     const start = new Date("2026-08-12T03:30:00Z");
-    expect(cycleLocalDate({ start, timezoneOffset: "-04:00" })).toBe("2026-08-11");
+    expect(cycleLocalDate({ start, timezoneOffset: "-04:00" }, "America/New_York")).toBe("2026-08-11");
   });
 
   it("uses a cycle spanning >24h correctly — only the start instant matters for the label", () => {
     const start = new Date("2026-08-10T10:00:00Z"); // 06:00 -04:00
-    expect(cycleLocalDate({ start, timezoneOffset: "-04:00" })).toBe("2026-08-10");
+    expect(cycleLocalDate({ start, timezoneOffset: "-04:00" }, "America/New_York")).toBe("2026-08-10");
   });
 
-  it("falls back to the configured athlete timezone when the cycle has no recorded offset", () => {
+  it("falls back to the caller-supplied fallback timezone when the cycle has no recorded offset", () => {
     // 23:30 America/New_York (EDT, -04:00) is 2026-08-12 03:30 UTC.
     const start = new Date("2026-08-12T03:30:00Z");
-    expect(cycleLocalDate({ start, timezoneOffset: null })).toBe("2026-08-11");
+    expect(cycleLocalDate({ start, timezoneOffset: null }, "America/New_York")).toBe("2026-08-11");
   });
 });

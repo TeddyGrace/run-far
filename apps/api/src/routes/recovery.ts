@@ -5,6 +5,7 @@ import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles } from "../db/sche
 import { requireUserId } from "../lib/session.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
 import { cycleLocalDate, cycleLoad } from "../metrics/cycleMetrics.js";
+import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 
 export async function recoveryRoutes(app: FastifyInstance) {
   // Today's snapshot independent of whether any recommendation rule fired — the dashboard's
@@ -28,6 +29,7 @@ export async function recoveryRoutes(app: FastifyInstance) {
     const windowDays = Math.min(Math.max(Number(days) || 14, 1), 90);
     const cutoff = new Date();
     cutoff.setUTCDate(cutoff.getUTCDate() - windowDays);
+    const tz = await getAthleteTimezone(userId);
 
     const cycleRows = await db
       .select()
@@ -64,7 +66,7 @@ export async function recoveryRoutes(app: FastifyInstance) {
 
     return cycleRows.map((c) => ({
       cycleId: c.whoopCycleId,
-      date: cycleLocalDate(c),
+      date: cycleLocalDate(c, tz),
       cycleStart: c.start.toISOString(),
       cycleEnd: c.end ? c.end.toISOString() : null,
       strain: c.strain ?? null,

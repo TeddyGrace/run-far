@@ -72,12 +72,15 @@ export async function runRoutes(app: FastifyInstance) {
         ...(scheduledAt ? { scheduledAt: new Date(scheduledAt) } : {}),
         updatedAt: new Date(),
       })
-      .where(eq(plannedRuns.id, id));
+      .where(and(eq(plannedRuns.id, id), eq(plannedRuns.userId, userId)));
 
     pushPlannedRunToGoogle(id, userId).catch((err) =>
       logger.error({ err, runId: id }, "failed to push updated run to google"),
     );
-    const [updated] = await db.select().from(plannedRuns).where(eq(plannedRuns.id, id));
+    const [updated] = await db
+      .select()
+      .from(plannedRuns)
+      .where(and(eq(plannedRuns.id, id), eq(plannedRuns.userId, userId)));
     return updated;
   });
 
@@ -95,7 +98,7 @@ export async function runRoutes(app: FastifyInstance) {
       return;
     }
 
-    await db.delete(plannedRuns).where(eq(plannedRuns.id, id));
+    await db.delete(plannedRuns).where(and(eq(plannedRuns.id, id), eq(plannedRuns.userId, userId)));
     deletePlannedRunFromGoogle(existing.gcalEventId, userId).catch((err) =>
       logger.error({ err, runId: id }, "failed to delete run from google"),
     );

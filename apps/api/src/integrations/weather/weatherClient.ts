@@ -1,6 +1,9 @@
 import { dateYmdInZone, hourInZone, zonedLocalToIso } from "../../lib/zonedTime.js";
+import { env } from "../../env.js";
 
-const USER_AGENT = "run-far (contact: teddygrace77@gmail.com)";
+// NWS wants a contact for the app operator, not the athlete making the request — this is
+// deliberately not per-user.
+const USER_AGENT = `run-far (contact: ${env.NWS_CONTACT_EMAIL})`;
 const NWS_BASE = "https://api.weather.gov";
 
 // NWS documents the lat/lon -> gridpoint mapping as stable and asks callers not to

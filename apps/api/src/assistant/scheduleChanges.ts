@@ -68,7 +68,10 @@ export async function applyScheduleChanges(
       if (item.plannedTss !== undefined) values.plannedTss = item.plannedTss;
       if (item.description !== undefined) values.description = item.description;
 
-      await db.update(plannedRuns).set(values).where(eq(plannedRuns.id, item.runId));
+      await db
+        .update(plannedRuns)
+        .set(values)
+        .where(and(eq(plannedRuns.id, item.runId), eq(plannedRuns.userId, userId)));
       result.updated++;
       pushPlannedRunToGoogle(item.runId, userId).catch((err) =>
         logger.error({ err, runId: item.runId }, "assistant: failed to push updated run to google"),
@@ -84,7 +87,9 @@ export async function applyScheduleChanges(
         .where(and(eq(plannedRuns.id, item.runId), eq(plannedRuns.userId, userId)));
       if (!existing) continue;
 
-      await db.delete(plannedRuns).where(eq(plannedRuns.id, item.runId));
+      await db
+        .delete(plannedRuns)
+        .where(and(eq(plannedRuns.id, item.runId), eq(plannedRuns.userId, userId)));
       result.deleted++;
       deletePlannedRunFromGoogle(existing.gcalEventId, userId).catch((err) =>
         logger.error({ err, runId: item.runId }, "assistant: failed to delete run from google"),

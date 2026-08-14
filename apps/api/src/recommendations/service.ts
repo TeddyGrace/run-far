@@ -41,6 +41,7 @@ export async function generateRecommendations(
   opts: { notify?: boolean } = {},
 ): Promise<string[]> {
   const snapshot = await buildRecoverySnapshot(userId);
+  const timeZone = snapshot.timeZone ?? env.ATHLETE_TIMEZONE;
   const now = new Date();
   const windowEnd = new Date(now);
   windowEnd.setUTCDate(windowEnd.getUTCDate() + LOOKAHEAD_DAYS);
@@ -75,7 +76,7 @@ export async function generateRecommendations(
       weatherForecast = await getDailyForecasts(
         athleteLocation.lat,
         athleteLocation.lon,
-        env.ATHLETE_TIMEZONE,
+        timeZone,
         LOOKAHEAD_DAYS,
       );
       for (const day of weatherForecast) {
@@ -113,7 +114,7 @@ export async function generateRecommendations(
     upcoming,
     busyPeriods,
     weatherForecast,
-    timeZone: env.ATHLETE_TIMEZONE,
+    timeZone,
   });
   const allFired = [primary, ...secondary].filter((r): r is NonNullable<typeof primary> => r != null);
 

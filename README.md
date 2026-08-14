@@ -155,8 +155,7 @@ Google Calendar's two-way sync loop-prevention and app-wins conflict
 resolution (`pull.ts` / `push.ts`) were verified live against a real
 Google Calendar during development rather than with mocks — see the
 worked example in the original implementation plan. They're reasonable
-candidates for `nock`-style HTTP-mocked tests if this grows past a
-single-user tool.
+candidates for `nock`-style HTTP-mocked tests if this grows further.
 
 A pre-commit hook (`.githooks/pre-commit`) warns — but doesn't block — when
 `apps/api/src`, `apps/web/src`, `packages/shared/src`, or a migration
@@ -195,8 +194,10 @@ recovery, sleep, and workout data automatically.
 
 1. Create a project in the [Google Cloud Console](https://console.cloud.google.com),
    enable the **Google Calendar API**, and configure an OAuth consent screen
-   (internal is fine for a single-user app). Add the scopes `openid`, `email`,
-   `profile`, and `https://www.googleapis.com/auth/calendar`.
+   (internal is fine if you're the only user; use External + a test-user
+   allowlist, or verify the app, once you're inviting others). Add the
+   scopes `openid`, `email`, `profile`, and
+   `https://www.googleapis.com/auth/calendar`.
 2. Create an OAuth 2.0 Client ID (type: Web application). Add **both** redirect
    URIs:
    - `GOOGLE_AUTH_REDIRECT_URI` — `http://localhost:8787/api/auth/google/callback`
@@ -295,8 +296,17 @@ docker run --rm -p 8080:8080 --env-file .env -e NODE_ENV=production -e PORT=8080
 <details>
 <summary><strong>Notes on state</strong></summary>
 
-- Single-user by design — session auth, no signup flow. The seed script is
-  the only way a user gets created.
+- Multi-user via Google sign-in (`/api/auth/google/*`) — account creation is
+  gated by `ALLOWED_EMAILS` (comma-separated allowlist; empty allows anyone in
+  development but denies everyone in production, so a deploy that forgets to
+  set it fails closed). Existing accounts can also add an email+password via
+  Settings → Email sign-in. The seed script (`db:seed`) remains the fastest
+  way to get a local dev user without going through OAuth.
+- Each user has their own IANA timezone (`users.timezone`, captured from the
+  browser at login — see `apps/api/src/lib/athleteTimezone.ts`), own Whoop
+  and Google connections, and fully isolated data; `ATHLETE_TIMEZONE` /
+  `ATHLETE_LAT` / `ATHLETE_LON` in `.env` are only fallbacks for users who
+  haven't set their own.
 - The app DB is the source of truth for planned runs; Google Calendar
   mirrors it. On a conflict (both sides changed since the last sync), the
   app's version always wins and the overwrite is logged to `sync_conflicts`.

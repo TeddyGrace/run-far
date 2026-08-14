@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation } from "react-router-dom";
 import { api } from "./api.js";
@@ -6,6 +6,7 @@ import { api } from "./api.js";
 interface CurrentUser {
   id: string;
   email: string;
+  timezone: string | null;
 }
 
 interface AuthContextValue {
@@ -21,6 +22,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryFn: () => api.get<CurrentUser>("/auth/me"),
     retry: false,
   });
+
+  // Captures the browser's IANA zone on first login and whenever it drifts (e.g. travel) —
+  // the only source for this, since the server has no other way to know it. Fires at most
+  // once per user id per page load, not on every render.
+  const syncedForUserId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    if (syncedForUserId.current === data.id) return;
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (data.timezone === browserTz) {
+      syncedForUserId.current = data.id;
+      return;
+    }
+    syncedForUserId.current = data.id;
+    api.patch("/settings", { timezone: browserTz }).catch(() => {
+      // Best-effort — a failed capture just means the athlete's date bucketing falls back to
+      // the server default until the next successful login.
+    });
+  }, [data]);
 
   return <AuthContext.Provider value={{ user: data ?? null, isLoading }}>{children}</AuthContext.Provider>;
 }

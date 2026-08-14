@@ -7,8 +7,15 @@ import { RecoveryHero } from "../components/RecoveryHero.js";
 import { RecommendationCard } from "../components/RecommendationCard.js";
 import { RecentActivities } from "../components/RecentActivities.js";
 import { WeatherToday } from "../components/WeatherToday.js";
+import { OnboardingChecklist } from "../components/OnboardingChecklist.js";
 import { HARD_RUN_TYPES } from "../lib/runTypes.js";
 import { formatMiles } from "../lib/units.js";
+
+interface OnboardingStatus {
+  hasWhoop: boolean;
+  hasLocation: boolean;
+  hasPlan: boolean;
+}
 
 // Snapped to UTC midnight so the value is identical across renders — a timestamp that
 // moves every render would change the query key and refetch in a loop.
@@ -44,6 +51,11 @@ export function Dashboard() {
     queryFn: () => api.get<PlannedRun[]>(`/runs?from=${from}&to=${to}`),
   });
 
+  const onboarding = useQuery<OnboardingStatus>({
+    queryKey: ["settings", "onboarding"],
+    queryFn: () => api.get<OnboardingStatus>("/settings/onboarding"),
+  });
+
   const respond = useMutation({
     mutationFn: ({ id, action }: { id: string; action: "accept" | "dismiss" }) =>
       api.post(`/recommendations/${id}/${action}`),
@@ -57,6 +69,8 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
+      <OnboardingChecklist />
+
       <RecoveryHero snapshot={snapshot.data ?? null} history={history.data ?? []} />
 
       <WeatherToday />
@@ -68,7 +82,9 @@ export function Dashboard() {
         {recommendations.isLoading && <p className="text-sm text-ink-muted">Checking recovery against your plan…</p>}
         {!recommendations.isLoading && !primary && (
           <p className="rounded-xl border border-border bg-surface-1 p-5 text-sm text-ink-secondary">
-            Nothing to flag right now — the plan looks fine as scheduled.
+            {onboarding.data?.hasPlan === false
+              ? "No active training plan yet — build or import one to get scheduling recommendations."
+              : "Nothing to flag right now — the plan looks fine as scheduled."}
           </p>
         )}
         {primary && (

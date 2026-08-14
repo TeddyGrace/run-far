@@ -41,7 +41,10 @@ function capitalize(s: string): string {
 export async function pushPlannedRunToGoogle(plannedRunId: string, userId: string): Promise<void> {
   if (!(await hasGoogleConnection(userId))) return;
 
-  const [run] = await db.select().from(plannedRuns).where(eq(plannedRuns.id, plannedRunId));
+  const [run] = await db
+    .select()
+    .from(plannedRuns)
+    .where(and(eq(plannedRuns.id, plannedRunId), eq(plannedRuns.userId, userId)));
   if (!run) return;
 
   if (run.runType === "rest") {

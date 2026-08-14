@@ -18,23 +18,23 @@ describe("toLocalDateOnly", () => {
     // 21:00 EDT (-04:00) on Aug 11 is 01:00 UTC on Aug 12 — the old UTC-slice bug would read
     // this as "2026-08-12".
     const workoutStart = "2026-08-11T21:00:00-04:00";
-    expect(toLocalDateOnly(workoutStart)).toBe("2026-08-11");
+    expect(toLocalDateOnly(workoutStart, "America/New_York")).toBe("2026-08-11");
   });
 
   it("agrees with a raw UTC timestamp expressing the same instant", () => {
-    expect(toLocalDateOnly("2026-08-12T01:00:00Z")).toBe("2026-08-11");
+    expect(toLocalDateOnly("2026-08-12T01:00:00Z", "America/New_York")).toBe("2026-08-11");
   });
 
   it("still lands on the same day for a daytime workout, where UTC-slicing happened to be right", () => {
     // 10:00 EDT (-04:00) on Aug 11 is 14:00 UTC on Aug 11 — both approaches agree here,
     // which is exactly why the bug went unnoticed for morning/daytime activity.
-    expect(toLocalDateOnly("2026-08-11T10:00:00-04:00")).toBe("2026-08-11");
+    expect(toLocalDateOnly("2026-08-11T10:00:00-04:00", "America/New_York")).toBe("2026-08-11");
   });
 
   it("also agrees with UTC-slicing for a just-after-midnight Eastern workout", () => {
     // 00:30 EDT (-04:00) on Aug 12 is 04:30 UTC on Aug 12 — both approaches land on Aug 12
     // here; the divergence only shows up once the local hour is late enough to push the
     // UTC-equivalent instant past midnight into the next day.
-    expect(toLocalDateOnly("2026-08-12T00:30:00-04:00")).toBe("2026-08-12");
+    expect(toLocalDateOnly("2026-08-12T00:30:00-04:00", "America/New_York")).toBe("2026-08-12");
   });
 });

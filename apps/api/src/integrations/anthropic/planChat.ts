@@ -10,6 +10,7 @@ import { validatePlanDraft } from "../../plans/validate.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { offsetStringForZone, shiftRunsToLocalTime } from "../../lib/zonedTime.js";
+import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
 import { withImperialRunFields } from "../../lib/units.js";
 
 const MAX_TOOL_ITERATIONS = 8;
@@ -207,7 +208,7 @@ interface ToolBounds {
 async function executeTool(
   name: string,
   input: Record<string, unknown>,
-  ctx: { userId: string; bounds: ToolBounds },
+  ctx: { userId: string; bounds: ToolBounds; timeZone: string },
 ): Promise<unknown> {
   switch (name) {
     case "get_current_date": {
@@ -215,8 +216,8 @@ async function executeTool(
       return {
         todayIso: now.toISOString().slice(0, 10),
         weekday: now.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
-        timeZone: env.ATHLETE_TIMEZONE,
-        utcOffset: offsetStringForZone(env.ATHLETE_TIMEZONE, now),
+        timeZone: ctx.timeZone,
+        utcOffset: offsetStringForZone(ctx.timeZone, now),
       };
     }
     case "get_athlete_context": {
@@ -229,7 +230,7 @@ async function executeTool(
       if (!plan) return { activePlan: null, message: "No active plan — build a new one instead." };
       return {
         activePlan: { ...plan, runs: plan.runs.map(withImperialRunFields) },
-        timeZone: env.ATHLETE_TIMEZONE,
+        timeZone: ctx.timeZone,
         hint: 'To change time of day, pass activePlan.runs to shift_run_times with localTime like "16:30". Use distanceMiles/paceMinPerMile (not distanceM/targetPaceSPerKm) when describing runs to the athlete.',
       };
     }
@@ -239,10 +240,12 @@ async function executeTool(
       if (!Array.isArray(runs) || typeof localTime !== "string") {
         return { error: "runs (array) and localTime (HH:MM string) are required" };
       }
+      // Explicit input.timeZone is an outer override (the athlete can ask to plan for a
+      // different zone than their account default) — the account timezone is only the fallback.
       const timeZone =
         typeof input.timeZone === "string" && input.timeZone.trim()
           ? input.timeZone.trim()
-          : env.ATHLETE_TIMEZONE;
+          : ctx.timeZone;
       try {
         const shifted = shiftRunsToLocalTime(
           runs as Array<{ scheduledAt: string; runType: string } & Record<string, unknown>>,
@@ -318,6 +321,7 @@ export async function runPlanChatTurn(params: {
   }
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const tz = await getAthleteTimezone(params.userId);
   const todayIso = new Date().toISOString().slice(0, 10);
   const bounds: ToolBounds = {};
 
@@ -340,7 +344,7 @@ export async function runPlanChatTurn(params: {
     const response = await client.messages.create({
       model,
       max_tokens: 8192,
-      system: systemPrompt(todayIso, env.ATHLETE_TIMEZONE),
+      system: systemPrompt(todayIso, tz),
       tools: TOOLS,
       messages: conversation,
     });
@@ -391,7 +395,7 @@ export async function runPlanChatTurn(params: {
           const output = await executeTool(
             block.name,
             (block.input as Record<string, unknown>) ?? {},
-            { userId: params.userId, bounds },
+            { userId: params.userId, bounds, timeZone: tz },
           );
           toolResults.push({
             type: "tool_result",

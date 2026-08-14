@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { env } from "../../env.js";
 import { db } from "../../db/client.js";
 import { oauthConnections, recoveryMetrics, sleepRecords, whoopWorkouts } from "../../db/schema.js";
@@ -22,16 +22,18 @@ export function verifySignature(rawBody: string, timestamp: string, signature: s
 }
 
 async function findUserIdForWhoopUser(whoopUserId: number): Promise<string | null> {
-  // We only track one Whoop connection per app user; metadata stores the whoop user id
-  // captured at connect time so webhooks (which only carry the Whoop-side id) can be routed.
+  // Metadata stores the whoop user id captured at connect time so webhooks (which only carry
+  // the Whoop-side id) can be routed to the right app user — see the jsonb index in db/schema.ts.
   const [conn] = await db
     .select()
     .from(oauthConnections)
-    .where(eq(oauthConnections.provider, "whoop"));
-  if (!conn) return null;
-  const meta = conn.metadata as { whoopUserId?: number } | null;
-  if (meta?.whoopUserId !== whoopUserId) return null;
-  return conn.userId;
+    .where(
+      and(
+        eq(oauthConnections.provider, "whoop"),
+        sql`${oauthConnections.metadata}->>'whoopUserId' = ${String(whoopUserId)}`,
+      ),
+    );
+  return conn?.userId ?? null;
 }
 
 export async function whoopWebhookRoutes(app: FastifyInstance) {
@@ -97,7 +99,9 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
       await generateRecommendationsSafe(userId, { notify: true });
       return;
     case "recovery.deleted":
-      await db.delete(recoveryMetrics).where(eq(recoveryMetrics.whoopSleepId, id));
+      await db
+        .delete(recoveryMetrics)
+        .where(and(eq(recoveryMetrics.whoopSleepId, id), eq(recoveryMetrics.userId, userId)));
       return;
     case "sleep.updated":
       // Morning sleep sync is the primary cue to refresh today's recommendation.
@@ -105,13 +109,17 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
       await generateRecommendationsSafe(userId, { notify: true });
       return;
     case "sleep.deleted":
-      await db.delete(sleepRecords).where(eq(sleepRecords.whoopSleepId, id));
+      await db
+        .delete(sleepRecords)
+        .where(and(eq(sleepRecords.whoopSleepId, id), eq(sleepRecords.userId, userId)));
       return;
     case "workout.updated":
       await syncSingleResource(userId, "workout", id);
       return;
     case "workout.deleted":
-      await db.delete(whoopWorkouts).where(eq(whoopWorkouts.whoopWorkoutId, id));
+      await db
+        .delete(whoopWorkouts)
+        .where(and(eq(whoopWorkouts.whoopWorkoutId, id), eq(whoopWorkouts.userId, userId)));
       return;
   }
 }

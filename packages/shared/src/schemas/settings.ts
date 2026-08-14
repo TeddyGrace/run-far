@@ -23,6 +23,7 @@ export const userSettingsSchema = z.object({
   locationLat: z.number().nullable(),
   locationLon: z.number().nullable(),
   locationUpdatedAt: z.string().nullable(),
+  timezone: z.string().nullable(),
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
@@ -31,5 +32,8 @@ export const updateUserSettingsSchema = z.object({
   planModel: aiModelSchema.nullable().optional(),
   locationLat: z.number().min(-90).max(90).nullable().optional(),
   locationLon: z.number().min(-180).max(180).nullable().optional(),
+  // IANA zone name, e.g. "America/New_York" — validated server-side (routes/settings.ts)
+  // rather than with a regex here, since the only real check is "does Intl accept it".
+  timezone: z.string().min(1).nullable().optional(),
 });
 export type UpdateUserSettingsInput = z.infer<typeof updateUserSettingsSchema>;

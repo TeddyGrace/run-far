@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD COLUMN "timezone" text;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "oauth_connections_whoop_user_idx" ON "oauth_connections" USING btree (("metadata"->>'whoopUserId')) WHERE "oauth_connections"."provider" = 'whoop';

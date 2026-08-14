@@ -125,7 +125,7 @@ export async function assistantRoutes(app: FastifyInstance) {
     await db
       .update(chatSessions)
       .set({ title: body.title, updatedAt: new Date() })
-      .where(eq(chatSessions.id, id));
+      .where(and(eq(chatSessions.id, id), eq(chatSessions.userId, userId)));
     return { ok: true };
   });
 
@@ -143,7 +143,7 @@ export async function assistantRoutes(app: FastifyInstance) {
       return;
     }
 
-    await db.delete(chatSessions).where(eq(chatSessions.id, id));
+    await db.delete(chatSessions).where(and(eq(chatSessions.id, id), eq(chatSessions.userId, userId)));
     return { ok: true };
   });
 
@@ -207,7 +207,7 @@ export async function assistantRoutes(app: FastifyInstance) {
     await db
       .update(chatSessions)
       .set({ title: newTitle, updatedAt: new Date() })
-      .where(eq(chatSessions.id, id));
+      .where(and(eq(chatSessions.id, id), eq(chatSessions.userId, userId)));
 
     return {
       session: {

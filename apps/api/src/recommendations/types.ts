@@ -25,8 +25,9 @@ export interface RuleContext {
    * ATHLETE_LAT/LON aren't configured or the NWS call failed — weatherAdvisory simply never
    * fires in that case. */
   weatherForecast: DailyForecast[];
-  /** IANA timezone the athlete sees wall-clock times in (env.ATHLETE_TIMEZONE). Passed in
-   * rather than read from env inside a rule, so rules stay pure functions of their input. */
+  /** IANA timezone the athlete sees wall-clock times in — the athlete's configured timezone,
+   * resolved via getAthleteTimezone (falling back to env.ATHLETE_TIMEZONE). Passed in rather
+   * than resolved inside a rule, so rules stay pure functions of their input. */
   timeZone: string;
 }
 

@@ -7,6 +7,7 @@ const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
   google_denied: "Google sign-in was cancelled.",
   google_invalid: "Google sign-in failed — try again.",
   google_failed: "Could not complete Google sign-in.",
+  not_invited: "This app is invite-only — ask for access.",
 };
 
 function GoogleMark({ className }: { className?: string }) {

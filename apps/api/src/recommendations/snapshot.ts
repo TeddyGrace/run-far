@@ -4,8 +4,8 @@ import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns } from "../db
 import { RECOMMENDATION_CONFIG } from "./config.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
-import { env } from "../env.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
+import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 import { getCurrentCycle, getRecentCycles, getRecentCompletedCycles, cycleLoad } from "../metrics/cycleMetrics.js";
 
 /** Whoop sport_name values that count as "runs" for mileage stats. */
@@ -28,8 +28,8 @@ function stddev(values: number[], avg: number): number | null {
 }
 
 /** Athlete-local calendar date of an instant. */
-function localIsoDate(d: Date): string {
-  return dateYmdInZone(d, env.ATHLETE_TIMEZONE);
+function localIsoDate(d: Date, tz: string): string {
+  return dateYmdInZone(d, tz);
 }
 
 function daysAgo(n: number): Date {
@@ -65,16 +65,17 @@ function startOfLocalMonth(localIso: string): string {
  * day can have both a nap and a main sleep, so date-string matching alone can pick the wrong
  * row. We look up the athlete's current (most recent) cycle and prefer rows tied to it,
  * falling back to the old date match only if no cycle data exists yet (new/unsynced user).
- * All calendar-date fields on the returned snapshot are the athlete's local date
- * (env.ATHLETE_TIMEZONE, or a cycle's own recorded offset), not UTC.
+ * All calendar-date fields on the returned snapshot are the athlete's local date (their
+ * configured timezone, or a cycle's own recorded offset), not UTC.
  */
 export async function buildRecoverySnapshot(userId: string): Promise<RecoverySnapshot> {
+  const tz = await getAthleteTimezone(userId);
   const today = new Date();
-  const todayIso = localIsoDate(today);
+  const todayIso = localIsoDate(today, tz);
 
   const currentCycle = await getCurrentCycle(userId);
 
-  const baselineWindowStart = localIsoDate(daysAgo(30));
+  const baselineWindowStart = localIsoDate(daysAgo(30), tz);
   const baselineRows = await db
     .select()
     .from(recoveryMetrics)
@@ -233,6 +234,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
 
   return {
     date: todayIso,
+    timeZone: tz,
     recoveryScore: todayRow?.recoveryScore ?? null,
     hrvRmssdMs: todayRow?.hrvRmssdMs ?? null,
     hrvBaselineMs,

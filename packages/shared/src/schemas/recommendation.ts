@@ -8,6 +8,9 @@ export type RecommendationStatus = z.infer<typeof recommendationStatusSchema>;
 
 export const recoverySnapshotSchema = z.object({
   date: z.string(),
+  // IANA zone the date/aggregation fields above were bucketed in. Optional so historical rows
+  // persisted before this field existed still parse.
+  timeZone: z.string().optional(),
   recoveryScore: z.number().nullable(),
   hrvRmssdMs: z.number().nullable(),
   hrvBaselineMs: z.number().nullable(),
