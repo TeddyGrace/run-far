@@ -7,7 +7,9 @@ process.env.WHOOP_CLIENT_ID ??= "test-client-id";
 process.env.WHOOP_CLIENT_SECRET ??= "test-client-secret";
 process.env.ATHLETE_TIMEZONE ??= "America/New_York";
 
-const { strainToLoad, cycleLoad, cycleLocalDate } = await import("./cycleMetrics.js");
+const { strainToLoad, cycleLoad, cycleLocalDate, cycleStrainAndLoad } = await import(
+  "./cycleMetrics.js"
+);
 
 describe("strainToLoad", () => {
   it("is monotonically increasing", () => {
@@ -32,6 +34,32 @@ describe("cycleLoad", () => {
 
   it("returns null when neither source field is available", () => {
     expect(cycleLoad({ kilojoule: null, strain: null })).toBeNull();
+  });
+});
+
+describe("cycleStrainAndLoad", () => {
+  it("hides both strain and load while the cycle is still open", () => {
+    // A real open cycle: partial, necessarily-low strain from a still-accumulating day.
+    expect(cycleStrainAndLoad({ end: null, kilojoule: 300, strain: 0.1 })).toEqual({
+      strain: null,
+      load: null,
+    });
+  });
+
+  it("reports the real strain and load once the cycle has closed", () => {
+    const end = new Date("2026-08-12T08:00:00Z");
+    expect(cycleStrainAndLoad({ end, kilojoule: 5000, strain: 14 })).toEqual({
+      strain: 14,
+      load: 5000,
+    });
+  });
+
+  it("falls back to the strain-derived load for a closed cycle with no kilojoule reading", () => {
+    const end = new Date("2026-08-12T08:00:00Z");
+    expect(cycleStrainAndLoad({ end, kilojoule: null, strain: 12 })).toEqual({
+      strain: 12,
+      load: strainToLoad(12),
+    });
   });
 });
 

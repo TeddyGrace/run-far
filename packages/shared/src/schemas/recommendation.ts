@@ -28,9 +28,6 @@ export const recoverySnapshotSchema = z.object({
   // Linear load (kilojoule, or an approximated fallback) summed over the same cycles —
   // the figure to use for ratio math like ACWR, where summing must be physically valid.
   cycleLoadSum7d: z.number().nullable(),
-  // The current (possibly still-open) cycle's strain, reported separately since an
-  // in-progress cycle is excluded from the 7-cycle rolling window above.
-  cycleStrainToday: z.number().nullable(),
   // How many of the last 7 cycles actually had a strain value — the denominator behind
   // cycleStrainAvg7d, so a thin history (e.g. 3 cycles synced) doesn't read as a full week.
   cyclesCounted7d: z.number().int().nonnegative(),

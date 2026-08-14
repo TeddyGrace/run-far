@@ -146,8 +146,8 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
   // Strain/load are read from Whoop's own per-cycle score (cycles.strain / cycles.kilojoule),
   // not summed from individual workouts: strain is a logarithmic 0-21 score, so adding
   // workout strains together isn't a meaningful quantity, and it ignores non-workout strain
-  // entirely. The open (still-accumulating) cycle is excluded from the rolling window and
-  // reported separately as cycleStrainToday.
+  // entirely. The open (still-accumulating) cycle is excluded entirely — its strain is a
+  // partial, necessarily-low reading with no honest interpretation until the cycle closes.
   const recentCompletedCycles = await getRecentCompletedCycles(userId, STRAIN_WINDOW_CYCLES);
   const cycleStrainValues = recentCompletedCycles
     .map((c) => c.strain)
@@ -160,7 +160,6 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     ? cycleLoadValues.reduce((a, b) => a + b, 0)
     : null;
   const cyclesCounted7d = cycleStrainValues.length;
-  const cycleStrainToday = currentCycle?.strain ?? null;
 
   const acuteWindowStart = daysAgo(6);
   const chronicWindowStart = daysAgo(27);
@@ -244,7 +243,6 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     sleepDebtMinToday,
     cycleStrainAvg7d,
     cycleLoadSum7d,
-    cycleStrainToday,
     cyclesCounted7d,
     acuteTss7d,
     chronicTss28d,

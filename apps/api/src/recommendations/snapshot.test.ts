@@ -141,7 +141,6 @@ describe("buildRecoverySnapshot cycle strain/load aggregation", () => {
     const snapshot = await buildRecoverySnapshot(userId);
     expect(snapshot.cyclesCounted7d).toBe(7);
     expect(snapshot.cycleStrainAvg7d).toBe(10);
-    expect(snapshot.cycleStrainToday).toBe(2);
   });
 
   it("reports an honest denominator when fewer than 7 completed cycles have synced", async () => {

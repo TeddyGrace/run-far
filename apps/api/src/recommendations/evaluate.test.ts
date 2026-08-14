@@ -15,7 +15,6 @@ const baseSnapshot: RecoverySnapshot = {
   sleepDebtMinToday: 0,
   cycleStrainAvg7d: 10,
   cycleLoadSum7d: 1500,
-  cycleStrainToday: 10,
   cyclesCounted7d: 7,
   acuteTss7d: 100,
   chronicTss28d: 400,

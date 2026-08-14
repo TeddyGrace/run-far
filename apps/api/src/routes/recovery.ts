@@ -4,7 +4,7 @@ import { db } from "../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
-import { cycleLocalDate, cycleLoad } from "../metrics/cycleMetrics.js";
+import { cycleLocalDate, cycleStrainAndLoad } from "../metrics/cycleMetrics.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 
 export async function recoveryRoutes(app: FastifyInstance) {
@@ -17,11 +17,11 @@ export async function recoveryRoutes(app: FastifyInstance) {
   });
 
   // One row per Whoop physiological cycle for the last N days, oldest first — exactly what
-  // the dashboard's sparklines and strain-vs-load chart need in one call. Cycles (not
-  // calendar days) are the unit here: a cycle is wake-to-wake and can cross midnight, so a
-  // day-string rollup would double-count or drop data at cycle boundaries. `date` is each
-  // cycle's local start date (its own recorded timezone offset, see cycleLocalDate) purely
-  // for chart labeling — it is not the aggregation key.
+  // the dashboard's sparklines need in one call. Cycles (not calendar days) are the unit
+  // here: a cycle is wake-to-wake and can cross midnight, so a day-string rollup would
+  // double-count or drop data at cycle boundaries. `date` is each cycle's local start date
+  // (its own recorded timezone offset, see cycleLocalDate) purely for chart labeling — it
+  // is not the aggregation key.
   app.get("/api/recovery/history", async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
@@ -64,16 +64,22 @@ export async function recoveryRoutes(app: FastifyInstance) {
       sleepRows.filter((s) => s.cycleId != null).map((s) => [s.cycleId as string, s]),
     );
 
-    return cycleRows.map((c) => ({
-      cycleId: c.whoopCycleId,
-      date: cycleLocalDate(c, tz),
-      cycleStart: c.start.toISOString(),
-      cycleEnd: c.end ? c.end.toISOString() : null,
-      strain: c.strain ?? null,
-      load: cycleLoad(c),
-      recovery: recoveryByCycle.get(c.whoopCycleId) ?? null,
-      sleep: sleepByCycle.get(c.whoopCycleId) ?? null,
-    }));
+    return cycleRows.map((c) => {
+      // Recovery and sleep are already final for the open (still-in-progress) cycle
+      // (recovery is scored at wake) and are still returned; strain/load are gated on
+      // completion by cycleStrainAndLoad — see its doc comment.
+      const { strain, load } = cycleStrainAndLoad(c);
+      return {
+        cycleId: c.whoopCycleId,
+        date: cycleLocalDate(c, tz),
+        cycleStart: c.start.toISOString(),
+        cycleEnd: c.end ? c.end.toISOString() : null,
+        strain,
+        load,
+        recovery: recoveryByCycle.get(c.whoopCycleId) ?? null,
+        sleep: sleepByCycle.get(c.whoopCycleId) ?? null,
+      };
+    });
   });
 
   // Individual workouts, newest first — the dashboard's recent-activity cards. Distinct

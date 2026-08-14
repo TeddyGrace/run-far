@@ -55,6 +55,17 @@ export function cycleLoad(cycle: Pick<Cycle, "kilojoule" | "strain">): number | 
   return null;
 }
 
+/** Strain and load, gated on cycle completion: both accumulate through an open cycle, so
+ * they'd otherwise read as a misleading near-zero outlier for the current, still-running
+ * cycle. Null until `end` is set — mirrors the `isNotNull(cycles.end)` rule
+ * getRecentCompletedCycles uses for the rolling-window aggregates. */
+export function cycleStrainAndLoad(
+  cycle: Pick<Cycle, "end" | "kilojoule" | "strain">,
+): { strain: number | null; load: number | null } {
+  if (cycle.end == null) return { strain: null, load: null };
+  return { strain: cycle.strain ?? null, load: cycleLoad(cycle) };
+}
+
 /** The cycle's start date in the athlete's local time — the cycle's own recorded
  * timezoneOffset when present (correct across travel/DST), else the caller-supplied fallback
  * (the athlete's configured timezone, resolved once per request via getAthleteTimezone). */
