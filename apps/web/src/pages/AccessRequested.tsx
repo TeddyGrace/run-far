@@ -59,7 +59,7 @@ export function AccessRequested() {
 
         <p className="mt-3 text-center text-xs text-ink-muted" aria-live="polite">
           {copied
-            ? "Copied — paste into an email to theodore.g.grace@gmail.com"
+            ? "Access request sent — please contact theodore.g.grace@gmail.com for more information"
             : "No email app? We copy the request to your clipboard too."}
         </p>
 
