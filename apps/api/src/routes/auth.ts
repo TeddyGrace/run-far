@@ -220,6 +220,11 @@ export async function authRoutes(app: FastifyInstance) {
       reply.status(401).send({ error: { message: "User no longer exists", code: "UNAUTHENTICATED" } });
       return;
     }
-    return { id: user.id, email: user.email, timezone: user.timezone };
+    return {
+      id: user.id,
+      email: user.email,
+      timezone: user.timezone,
+      needsTutorial: user.tutorialCompletedAt == null,
+    };
   });
 }

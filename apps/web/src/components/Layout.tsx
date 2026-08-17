@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { useAuth } from "../lib/auth.js";
 import { useAutoUpdateLocation } from "../lib/locationSync.js";
 import { AssistantChat } from "./AssistantChat.js";
+import { OnboardingTutorial } from "./OnboardingTutorial.js";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard" },
@@ -58,6 +59,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </header>
       <main className={clsx("mx-auto px-6 py-8", containerWidth)}>{children}</main>
       <AssistantChat />
+      {user?.needsTutorial && <OnboardingTutorial />}
     </div>
   );
 }

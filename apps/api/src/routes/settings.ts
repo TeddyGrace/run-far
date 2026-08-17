@@ -121,4 +121,14 @@ export async function settingsRoutes(app: FastifyInstance) {
       hasPlan: Boolean(activePlan),
     };
   });
+
+  // Marks the new-account tutorial overlay as done, whether finished or skipped — either way
+  // it shouldn't reappear on later logins. Idempotent, safe to call more than once.
+  app.post("/api/settings/tutorial-complete", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+
+    await db.update(users).set({ tutorialCompletedAt: new Date() }).where(eq(users.id, userId));
+    return { ok: true };
+  });
 }

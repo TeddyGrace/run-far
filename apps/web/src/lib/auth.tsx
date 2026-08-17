@@ -3,10 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation } from "react-router-dom";
 import { api } from "./api.js";
 
-interface CurrentUser {
+export interface CurrentUser {
   id: string;
   email: string;
   timezone: string | null;
+  needsTutorial: boolean;
 }
 
 interface AuthContextValue {

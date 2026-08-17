@@ -68,6 +68,9 @@ export const users = pgTable(
     // IANA zone captured from the browser at login (see lib/athleteTimezone.ts). Null falls
     // back to env.ATHLETE_TIMEZONE, same pattern as location above.
     timezone: text("timezone"),
+    // Null means the new-account tutorial overlay hasn't been completed/skipped yet. Existing
+    // accounts are backfilled to non-null at migration time so only new signups see it.
+    tutorialCompletedAt: timestamp("tutorial_completed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],
