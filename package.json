@@ -7,9 +7,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @run-far/api --filter @run-far/web run dev",
+    "dev": "pnpm --parallel --filter @run-far/api --filter @run-far/web --filter @run-far/backoffice run dev",
     "dev:api": "pnpm --filter @run-far/api run dev",
     "dev:web": "pnpm --filter @run-far/web run dev",
+    "dev:backoffice": "pnpm --filter @run-far/backoffice run dev",
     "build": "pnpm --recursive run build",
     "test": "pnpm --recursive run test",
     "lint": "pnpm --recursive run lint",

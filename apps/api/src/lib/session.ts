@@ -14,7 +14,7 @@ export function setSessionCookie(reply: FastifyReply, userId: string): void {
 }
 
 export function clearSessionCookie(reply: FastifyReply): void {
-  reply.clearCookie(SESSION_COOKIE, { path: "/" });
+  reply.clearCookie(SESSION_COOKIE, cookieOpts());
 }
 
 /**

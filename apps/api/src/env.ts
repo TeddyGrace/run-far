@@ -85,6 +85,12 @@ const envSchema = z.object({
   ATHLETE_LON: z.coerce.number().min(-180).max(180).optional(),
   /** Contact NWS shows to the app operator (not the athlete) in the API's User-Agent header. */
   NWS_CONTACT_EMAIL: z.string().default("teddygrace77@gmail.com"),
+  /** Widens the session cookie to this domain (e.g. ".run-far.cc") so a login on the main
+   * site is also valid on the backoffice subdomain. Left unset in dev — a host-only cookie
+   * on "localhost" is already sent to every port, so no sharing trick is needed there. */
+  COOKIE_DOMAIN: z.string().default(""),
+  /** Host the backoffice SPA is served on — see server.ts host-constrained static serving. */
+  BACKOFFICE_HOSTNAME: z.string().default("backoffice.run-far.cc"),
 });
 
 const parsed = envSchema.safeParse(rawEnv);

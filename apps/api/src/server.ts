@@ -20,6 +20,7 @@ import { recoveryRoutes } from "./routes/recovery.js";
 import { weatherRoutes } from "./routes/weather.js";
 import { assistantRoutes } from "./routes/assistant.js";
 import { settingsRoutes } from "./routes/settings.js";
+import { adminRoutes } from "./routes/admin.js";
 import { whoopWebhookRoutes } from "./integrations/whoop/webhooks.js";
 import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
@@ -28,11 +29,12 @@ import { runMigrations } from "./db/migrate.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** Vite build output — present in the Railway image; absent in local `pnpm dev:api`. */
-function webDistPath(): string | null {
+/** Vite build output for `app` (e.g. "web", "backoffice") — present in the Railway image;
+ * absent in local `pnpm dev:api`. */
+function distPath(app: string): string | null {
   const candidates = [
-    path.resolve(here, "../../web/dist"), // apps/api/src → apps/web/dist (tsx)
-    path.resolve(here, "../../../web/dist"), // apps/api/dist → apps/web/dist (compiled)
+    path.resolve(here, `../../${app}/dist`), // apps/api/src → apps/{app}/dist (tsx)
+    path.resolve(here, `../../../${app}/dist`), // apps/api/dist → apps/{app}/dist (compiled)
   ];
   for (const candidate of candidates) {
     if (existsSync(path.join(candidate, "index.html"))) return candidate;
@@ -94,29 +96,54 @@ export async function buildServer() {
   await app.register(weatherRoutes);
   await app.register(assistantRoutes);
   await app.register(settingsRoutes);
+  await app.register(adminRoutes);
 
-  // Production: serve the Vite SPA from the same origin so `/api` cookie auth just works.
-  const webDist = env.NODE_ENV === "production" ? webDistPath() : null;
+  // Production: serve the Vite SPA(s) from the same origin so `/api` cookie auth just works.
+  // The backoffice SPA is scoped to its own host via a Fastify/find-my-way host constraint
+  // (passed straight through to @fastify/static's internal route registrations), so requests
+  // to backoffice.run-far.cc get apps/backoffice/dist and every other host (the custom
+  // domain, Railway's internal domain, localhost) falls through to apps/web/dist. Only the
+  // web plugin decorates `reply.sendFile` (decorateReply:false on the other one avoids a
+  // duplicate-decorator error); the shared notFoundHandler below picks the right root by
+  // passing it explicitly as sendFile's second argument.
+  const isApiOrHealthPath = (url: string) =>
+    url.startsWith("/api") || url.startsWith("/webhooks") || url.startsWith("/health");
+
+  const backofficeDist = env.NODE_ENV === "production" ? distPath("backoffice") : null;
+  if (backofficeDist) {
+    await app.register(fastifyStatic, {
+      root: backofficeDist,
+      wildcard: false,
+      decorateReply: false,
+      constraints: { host: env.BACKOFFICE_HOSTNAME },
+    });
+    logger.info({ backofficeDist, host: env.BACKOFFICE_HOSTNAME }, "serving backoffice SPA");
+  }
+
+  const webDist = env.NODE_ENV === "production" ? distPath("web") : null;
   if (webDist) {
     await app.register(fastifyStatic, {
       root: webDist,
       wildcard: false,
     });
+    logger.info({ webDist }, "serving web SPA");
+  }
+
+  if (webDist || backofficeDist) {
     app.setNotFoundHandler((request, reply) => {
       const url = request.url.split("?")[0] ?? "";
-      if (
-        url.startsWith("/api") ||
-        url.startsWith("/webhooks") ||
-        url.startsWith("/health")
-      ) {
+      if (isApiOrHealthPath(url)) {
         reply.status(404).send({
           error: { message: "Not found", code: "NOT_FOUND" },
         });
         return;
       }
-      return reply.sendFile("index.html");
+      if (backofficeDist && request.headers.host === env.BACKOFFICE_HOSTNAME) {
+        return reply.sendFile("index.html", backofficeDist);
+      }
+      if (webDist) return reply.sendFile("index.html");
+      reply.status(404).send({ error: { message: "Not found", code: "NOT_FOUND" } });
     });
-    logger.info({ webDist }, "serving web SPA");
   }
 
   return app;

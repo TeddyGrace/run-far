@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 const CONTACT_EMAIL = "theodore.g.grace@gmail.com";
@@ -6,14 +6,28 @@ const CONTACT_EMAIL = "theodore.g.grace@gmail.com";
 export function AccessRequested() {
   const [searchParams] = useSearchParams();
   const email = searchParams.get("email");
+  const [copied, setCopied] = useState(false);
+
+  const requestBody = useMemo(() => {
+    return email
+      ? `Hi Teddy,\n\nCould you add my Google account to run-far's allowlist?\n\n${email}\n`
+      : "Hi Teddy,\n\nCould you add my Google account to run-far's allowlist?\n";
+  }, [email]);
 
   const mailtoHref = useMemo(() => {
     const subject = "run-far access request";
-    const body = email
-      ? `Hi Teddy,\n\nCould you add my Google account to run-far's allowlist?\n\n${email}\n`
-      : "Hi Teddy,\n\nCould you add my Google account to run-far's allowlist?\n";
-    return `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  }, [email]);
+    return `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(requestBody)}`;
+  }, [requestBody]);
+
+  const handleRequestClick = async () => {
+    try {
+      await navigator.clipboard.writeText(`${CONTACT_EMAIL}\n\n${requestBody}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 4000);
+    } catch {
+      // Clipboard API unavailable (e.g. insecure context) — mailto link still fires.
+    }
+  };
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-surface-0 px-6">
@@ -37,10 +51,17 @@ export function AccessRequested() {
 
         <a
           href={mailtoHref}
+          onClick={handleRequestClick}
           className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-3 py-2.5 text-sm font-medium text-surface-0 transition-opacity hover:opacity-90 active:scale-[0.99]"
         >
           Request access
         </a>
+
+        <p className="mt-3 text-center text-xs text-ink-muted" aria-live="polite">
+          {copied
+            ? "Copied — paste into an email to theodore.g.grace@gmail.com"
+            : "No email app? We copy the request to your clipboard too."}
+        </p>
 
         <p className="mt-6 text-sm text-ink-muted">
           Already invited?{" "}

@@ -41,6 +41,12 @@ export const recommendationStatusEnum = pgEnum("recommendation_status", [
   "dismissed",
 ]);
 export const chatRoleEnum = pgEnum("chat_role", ["user", "assistant"]);
+export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
+export const accessRequestStatusEnum = pgEnum("access_request_status", [
+  "pending",
+  "invited",
+  "dismissed",
+]);
 
 // --- Core ---
 
@@ -53,6 +59,9 @@ export const users = pgTable(
     passwordHash: text("password_hash"),
     // Stable Google subject from the ID token — preferred lookup over email.
     googleSub: text("google_sub"),
+    // Gates the backoffice admin API/UI — see lib/adminAuth.ts. Set by data migration, not
+    // editable through any app route.
+    role: userRoleEnum("role").notNull().default("user"),
     // Gates the daily recovery/recommendations digest email to at most one per calendar day.
     lastRecoveryEmailDate: date("last_recovery_email_date"),
     // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.
@@ -424,3 +433,28 @@ export const syncConflicts = pgTable(
   },
   (t) => [index("sync_conflicts_planned_run_idx").on(t.plannedRunId)],
 );
+
+// --- Backoffice (invite allowlist + denied-signup log) ---
+
+// DB-backed replacement for the ALLOWED_EMAILS env var — lets an admin invite new signups
+// from the backoffice without an env change + redeploy. isEmailAllowedToSignUp (routes/auth.ts)
+// checks this table first and falls back to env.allowedEmails for back-compat.
+export const invitedEmails = pgTable("invited_emails", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull().unique(),
+  note: text("note"),
+  invitedBy: uuid("invited_by").references(() => users.id, { onDelete: "set null" }),
+  invitedAt: timestamp("invited_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// One row per email that has attempted (and been denied) Google sign-up — upserted by
+// findOrCreateGoogleUser (routes/auth.ts) so the backoffice can surface real access requests
+// instead of relying on the client-side mailto link in AccessRequested.tsx.
+export const accessRequests = pgTable("access_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull().unique(),
+  firstRequestedAt: timestamp("first_requested_at", { withTimezone: true }).notNull().defaultNow(),
+  lastRequestedAt: timestamp("last_requested_at", { withTimezone: true }).notNull().defaultNow(),
+  requestCount: integer("request_count").notNull().default(1),
+  status: accessRequestStatusEnum("status").notNull().default("pending"),
+});

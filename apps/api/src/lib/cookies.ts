@@ -10,6 +10,7 @@ export function cookieOpts(
     sameSite: "lax",
     secure: env.NODE_ENV === "production",
     httpOnly: true,
+    ...(env.COOKIE_DOMAIN ? { domain: env.COOKIE_DOMAIN } : {}),
     ...overrides,
   };
 }

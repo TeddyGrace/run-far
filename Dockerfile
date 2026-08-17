@@ -9,6 +9,7 @@ FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
+COPY apps/backoffice/package.json apps/backoffice/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
 
@@ -17,6 +18,7 @@ FROM deps AS build
 COPY . .
 ENV NODE_ENV=production
 RUN pnpm --filter @run-far/web build
+RUN pnpm --filter @run-far/backoffice build
 
 # --- runtime ---
 FROM base AS runtime
@@ -26,6 +28,7 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
+COPY apps/backoffice/package.json apps/backoffice/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
 
@@ -33,6 +36,7 @@ COPY apps/api apps/api
 COPY packages/shared packages/shared
 COPY tsconfig.base.json ./
 COPY --from=build /app/apps/web/dist apps/web/dist
+COPY --from=build /app/apps/backoffice/dist apps/backoffice/dist
 
 RUN mkdir -p apps/api/uploads/ai-drafts
 

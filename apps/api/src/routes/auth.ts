@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { setPasswordSchema } from "@run-far/shared";
 import { db } from "../db/client.js";
-import { users } from "../db/schema.js";
+import { users, invitedEmails, accessRequests } from "../db/schema.js";
 import { hashPassword, verifyPassword } from "../lib/auth.js";
 import { setSessionCookie, clearSessionCookie, requireUserId } from "../lib/session.js";
 import { cookieOpts } from "../lib/cookies.js";
@@ -32,11 +32,34 @@ class NotInvitedError extends Error {
   }
 }
 
-function isEmailAllowedToSignUp(email: string): boolean {
-  if (env.allowedEmails.size > 0) return env.allowedEmails.has(email.toLowerCase());
+async function isEmailAllowedToSignUp(email: string): Promise<boolean> {
+  const normalized = email.toLowerCase();
+  const [invited] = await db
+    .select({ id: invitedEmails.id })
+    .from(invitedEmails)
+    .where(eq(invitedEmails.email, normalized));
+  if (invited) return true;
+
+  // Back-compat: the ALLOWED_EMAILS env var still works alongside the DB-backed allowlist.
+  if (env.allowedEmails.size > 0) return env.allowedEmails.has(normalized);
   // No allowlist configured: fail closed in production, open in dev so a fresh checkout
   // still works without env setup.
   return env.NODE_ENV !== "production";
+}
+
+/** Logs a denied signup attempt so the backoffice can surface it as an access request. */
+async function recordAccessRequest(email: string): Promise<void> {
+  const normalized = email.toLowerCase();
+  await db
+    .insert(accessRequests)
+    .values({ email: normalized })
+    .onConflictDoUpdate({
+      target: accessRequests.email,
+      set: {
+        lastRequestedAt: new Date(),
+        requestCount: sql`${accessRequests.requestCount} + 1`,
+      },
+    });
 }
 
 async function findOrCreateGoogleUser(identity: {
@@ -57,7 +80,8 @@ async function findOrCreateGoogleUser(identity: {
     return linked;
   }
 
-  if (!isEmailAllowedToSignUp(identity.email)) {
+  if (!(await isEmailAllowedToSignUp(identity.email))) {
+    await recordAccessRequest(identity.email);
     throw new NotInvitedError(identity.email);
   }
 
