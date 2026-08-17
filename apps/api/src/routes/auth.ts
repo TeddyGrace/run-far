@@ -26,7 +26,11 @@ const CONSENT_RETRY_COOKIE = "google_login_consent_retry";
 
 /** Thrown when a brand-new email tries to create an account but isn't on ALLOWED_EMAILS.
  * Never thrown for an existing user (sub or email match) — the allowlist only gates creation. */
-class NotInvitedError extends Error {}
+class NotInvitedError extends Error {
+  constructor(readonly email: string) {
+    super(`email not on allowlist: ${email}`);
+  }
+}
 
 function isEmailAllowedToSignUp(email: string): boolean {
   if (env.allowedEmails.size > 0) return env.allowedEmails.has(email.toLowerCase());
@@ -54,7 +58,7 @@ async function findOrCreateGoogleUser(identity: {
   }
 
   if (!isEmailAllowedToSignUp(identity.email)) {
-    throw new NotInvitedError();
+    throw new NotInvitedError(identity.email);
   }
 
   const [created] = await db
@@ -164,7 +168,7 @@ export async function authRoutes(app: FastifyInstance) {
       reply.redirect(`${env.WEB_ORIGIN}/`);
     } catch (err) {
       if (err instanceof NotInvitedError) {
-        reply.redirect(`${env.WEB_ORIGIN}/login?error=not_invited`);
+        reply.redirect(`${env.WEB_ORIGIN}/access-requested?email=${encodeURIComponent(err.email)}`);
         return;
       }
       logger.error({ err }, "google login failed");

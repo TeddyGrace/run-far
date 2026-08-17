@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { useNavigate, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../lib/api.js";
 
@@ -7,7 +7,6 @@ const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
   google_denied: "Google sign-in was cancelled.",
   google_invalid: "Google sign-in failed — try again.",
   google_failed: "Could not complete Google sign-in.",
-  not_invited: "This app is invite-only — ask for access.",
 };
 
 function GoogleMark({ className }: { className?: string }) {
@@ -142,6 +141,15 @@ export function Login() {
             </form>
           )}
         </div>
+
+        <p className="mt-10 text-sm text-ink-muted">
+          <Link
+            to="/privacy"
+            className="underline-offset-4 transition-colors hover:text-ink-secondary hover:underline"
+          >
+            Privacy policy
+          </Link>
+        </p>
       </div>
 
       <style>{`
