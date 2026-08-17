@@ -36,7 +36,7 @@ export async function whoopRoutes(app: FastifyInstance) {
 
     const { code, state } = request.query as { code?: string; state?: string };
     const expectedState = request.cookies[OAUTH_STATE_COOKIE];
-    reply.clearCookie(OAUTH_STATE_COOKIE, { path: "/" });
+    reply.clearCookie(OAUTH_STATE_COOKIE, cookieOpts());
 
     if (!code || !state || state !== expectedState) {
       reply.status(400).send({ error: "invalid oauth state or missing code" });

@@ -32,6 +32,14 @@ class NotInvitedError extends Error {
   }
 }
 
+/** Thrown when an existing account has been disabled from the backoffice. Unlike the
+ * allowlist, this DOES gate existing users — it's the revoke path. */
+class AccountDisabledError extends Error {
+  constructor(readonly email: string) {
+    super(`account disabled: ${email}`);
+  }
+}
+
 async function isEmailAllowedToSignUp(email: string): Promise<boolean> {
   const normalized = email.toLowerCase();
   const [invited] = await db
@@ -67,10 +75,14 @@ async function findOrCreateGoogleUser(identity: {
   email: string;
 }): Promise<typeof users.$inferSelect> {
   const [bySub] = await db.select().from(users).where(eq(users.googleSub, identity.sub));
-  if (bySub) return bySub;
+  if (bySub) {
+    if (bySub.disabledAt) throw new AccountDisabledError(bySub.email);
+    return bySub;
+  }
 
   const [byEmail] = await db.select().from(users).where(eq(users.email, identity.email));
   if (byEmail) {
+    if (byEmail.disabledAt) throw new AccountDisabledError(byEmail.email);
     const [linked] = await db
       .update(users)
       .set({ googleSub: identity.sub })
@@ -119,6 +131,10 @@ export async function authRoutes(app: FastifyInstance) {
       reply.status(401).send({ error: { message: "Invalid credentials", code: "INVALID_LOGIN" } });
       return;
     }
+    if (user.disabledAt) {
+      reply.status(403).send({ error: { message: "Account disabled", code: "ACCOUNT_DISABLED" } });
+      return;
+    }
     setSessionCookie(reply, user.id);
     return { id: user.id, email: user.email, timezone: user.timezone };
   });
@@ -153,8 +169,8 @@ export async function authRoutes(app: FastifyInstance) {
     };
     const expectedState = request.cookies[OAUTH_STATE_COOKIE];
     const isConsentRetry = request.cookies[CONSENT_RETRY_COOKIE] === "1";
-    reply.clearCookie(OAUTH_STATE_COOKIE, { path: "/" });
-    reply.clearCookie(CONSENT_RETRY_COOKIE, { path: "/" });
+    reply.clearCookie(OAUTH_STATE_COOKIE, cookieOpts());
+    reply.clearCookie(CONSENT_RETRY_COOKIE, cookieOpts());
 
     if (error) {
       logger.warn({ error }, "google login denied");
@@ -193,6 +209,10 @@ export async function authRoutes(app: FastifyInstance) {
     } catch (err) {
       if (err instanceof NotInvitedError) {
         reply.redirect(`${env.WEB_ORIGIN}/access-requested?email=${encodeURIComponent(err.email)}`);
+        return;
+      }
+      if (err instanceof AccountDisabledError) {
+        reply.redirect(`${env.WEB_ORIGIN}/login?error=account_disabled`);
         return;
       }
       logger.error({ err }, "google login failed");

@@ -62,6 +62,10 @@ export const users = pgTable(
     // Gates the backoffice admin API/UI — see lib/adminAuth.ts. Set by data migration, not
     // editable through any app route.
     role: userRoleEnum("role").notNull().default("user"),
+    // Non-null revokes access without destroying data: blocks both sign-in paths and kills
+    // any live session on the next request (see lib/activeUser.ts). Reversible from the
+    // backoffice — the irreversible option is deleting the row outright.
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
     // Gates the daily recovery/recommendations digest email to at most one per calendar day.
     lastRecoveryEmailDate: date("last_recovery_email_date"),
     // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.

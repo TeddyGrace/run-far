@@ -6,6 +6,14 @@ export type InvitedEmail = {
   invitedAt: string;
 };
 
+export type AdminUser = {
+  id: string;
+  email: string;
+  role: "user" | "admin";
+  disabledAt: string | null;
+  createdAt: string;
+};
+
 export type AccessRequest = {
   id: string;
   email: string;
@@ -44,6 +52,12 @@ export const api = {
       body: JSON.stringify({ email, note: note || undefined }),
     }),
   deleteInvite: (id: string) => request<void>(`/api/admin/invites/${id}`, { method: "DELETE" }),
+  listUsers: () => request<AdminUser[]>("/api/admin/users"),
+  disableUser: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/disable`, { method: "POST" }),
+  enableUser: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/enable`, { method: "POST" }),
+  deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
   listAccessRequests: () => request<AccessRequest[]>("/api/admin/access-requests"),
   approveAccessRequest: (id: string) =>
     request<AccessRequest>(`/api/admin/access-requests/${id}/approve`, { method: "POST" }),

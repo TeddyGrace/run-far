@@ -26,6 +26,7 @@ import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
 import { startGoogleChannelRenewalJob } from "./integrations/google/channelRenewal.js";
 import { runMigrations } from "./db/migrate.js";
+import { activeUserGuard } from "./lib/activeUser.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +51,7 @@ export async function buildServer() {
     credentials: true,
   });
   await app.register(cookie, { secret: env.SESSION_SECRET });
+  app.addHook("onRequest", activeUserGuard);
   await app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024 }, // 10MB — plenty for a TP CSV export

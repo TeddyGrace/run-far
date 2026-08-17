@@ -134,6 +134,13 @@
       "when": 1786991951694,
       "tag": "0018_handy_maddog",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786994401037,
+      "tag": "0019_slim_red_hulk",
+      "breakpoints": true
     }
   ]
 }
