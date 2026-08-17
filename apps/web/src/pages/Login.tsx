@@ -71,7 +71,7 @@ export function Login() {
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_20%_0%,rgba(79,176,166,0.18),transparent_55%),radial-gradient(ellipse_at_90%_100%,rgba(217,165,72,0.08),transparent_45%)]"
       />
       <div className="relative w-full max-w-sm animate-[fade-up_0.5s_ease-out]">
-        <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.22em] text-accent">run-far</p>
+        <p className="mb-2 font-mono text-[11px] tracking-[0.22em] text-accent">run-far</p>
         <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight text-ink-primary">
           Sign in
         </h1>
