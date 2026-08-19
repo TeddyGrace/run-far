@@ -1,4 +1,5 @@
 import Fastify, { type FastifyError } from "fastify";
+import { ZodError } from "zod";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
@@ -75,6 +76,25 @@ export async function buildServer() {
   );
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
+    // A ZodError from a route's schema.parse() carries no statusCode, so without this it
+    // falls through to a 500 "Internal server error" and the caller never learns which
+    // field was wrong — bad for any route, worse for the public signup/reset forms.
+    // Built from issue path + message only, never the received value, so a rejected
+    // password is never echoed back.
+    if (error instanceof ZodError) {
+      const detail = error.issues
+        .map((issue) => {
+          const field = issue.path.join(".");
+          return field ? `${field}: ${issue.message}` : issue.message;
+        })
+        .join("; ");
+      request.log.info({ issues: error.issues.map((i) => i.path.join(".")) }, "request rejected: invalid input");
+      reply.status(400).send({
+        error: { message: detail || "Invalid request", code: "INVALID_INPUT" },
+      });
+      return;
+    }
+
     request.log.error({ err: error }, "request failed");
     const statusCode = error.statusCode ?? 500;
     reply.status(statusCode).send({
