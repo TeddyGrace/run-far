@@ -79,10 +79,6 @@ const envSchema = z.object({
   ALLOWED_EMAILS: z.string().default(""),
   /** IANA timezone for scheduling planned runs (wall-clock times the athlete sees). */
   ATHLETE_TIMEZONE: z.string().default("America/New_York"),
-  /** Athlete's location for NWS weather lookups. Left unset (not defaulted) so `!= null`
-   * checks at call sites can tell "not configured" apart from a real coordinate. */
-  ATHLETE_LAT: z.coerce.number().min(-90).max(90).optional(),
-  ATHLETE_LON: z.coerce.number().min(-180).max(180).optional(),
   /** Contact NWS shows to the app operator (not the athlete) in the API's User-Agent header. */
   NWS_CONTACT_EMAIL: z.string().default("teddygrace77@gmail.com"),
   /** Widens the session cookie to this domain (e.g. ".run-far.cc") so a login on the main

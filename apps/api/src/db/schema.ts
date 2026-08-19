@@ -72,8 +72,8 @@ export const users = pgTable(
     assistantModel: text("assistant_model"),
     planModel: text("plan_model"),
     // Athlete's location for NWS weather lookups, set via Settings (browser geolocation).
-    // Null falls back to env.ATHLETE_LAT/LON — see lib/athleteLocation.ts. locationUpdatedAt
-    // is surfaced in Settings ("last set N ago") so a moved athlete notices it's stale and
+    // Null means weather is unavailable — see lib/athleteLocation.ts. locationUpdatedAt is
+    // surfaced in Settings ("last set N ago") so a moved athlete notices it's stale and
     // re-clicks "Update location" — there's no background refresh, this is the nudge for it.
     locationLat: doublePrecision("location_lat"),
     locationLon: doublePrecision("location_lon"),
@@ -178,7 +178,7 @@ export const recoveryMetrics = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("recovery_metrics_whoop_sleep_id_idx").on(t.whoopSleepId),
+    uniqueIndex("recovery_metrics_whoop_sleep_id_idx").on(t.userId, t.whoopSleepId),
     index("recovery_metrics_user_date_idx").on(t.userId, t.date),
   ],
 );
@@ -207,7 +207,7 @@ export const cycles = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("cycles_whoop_cycle_id_idx").on(t.whoopCycleId),
+    uniqueIndex("cycles_whoop_cycle_id_idx").on(t.userId, t.whoopCycleId),
     index("cycles_user_start_idx").on(t.userId, t.start),
   ],
 );
@@ -235,7 +235,7 @@ export const sleepRecords = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("sleep_records_whoop_sleep_id_idx").on(t.whoopSleepId),
+    uniqueIndex("sleep_records_whoop_sleep_id_idx").on(t.userId, t.whoopSleepId),
     index("sleep_records_user_date_idx").on(t.userId, t.date),
   ],
 );
@@ -273,7 +273,7 @@ export const whoopWorkouts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("whoop_workouts_whoop_workout_id_idx").on(t.whoopWorkoutId),
+    uniqueIndex("whoop_workouts_whoop_workout_id_idx").on(t.userId, t.whoopWorkoutId),
     index("whoop_workouts_user_date_idx").on(t.userId, t.date),
   ],
 );
@@ -329,7 +329,7 @@ export const plannedRuns = pgTable(
   },
   (t) => [
     index("planned_runs_user_scheduled_idx").on(t.userId, t.scheduledAt),
-    uniqueIndex("planned_runs_gcal_event_id_idx").on(t.gcalEventId),
+    uniqueIndex("planned_runs_gcal_event_id_idx").on(t.userId, t.gcalEventId),
   ],
 );
 

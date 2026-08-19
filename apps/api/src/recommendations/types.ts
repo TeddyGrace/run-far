@@ -22,7 +22,7 @@ export interface RuleContext {
    * Empty if Google isn't connected — calendar-conflict simply never fires in that case. */
   busyPeriods: BusyPeriod[];
   /** NWS daily forecasts for the lookahead window, one row per calendar date. Empty if
-   * ATHLETE_LAT/LON aren't configured or the NWS call failed — weatherAdvisory simply never
+   * the athlete's location isn't configured or the NWS call failed — weatherAdvisory simply never
    * fires in that case. */
   weatherForecast: DailyForecast[];
   /** IANA timezone the athlete sees wall-clock times in — the athlete's configured timezone,

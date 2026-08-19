@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "start:prod": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "echo 'no lint configured for api'",
+    "lint": "eslint src",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",

@@ -37,7 +37,7 @@ async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
       ...row,
     })
     .onConflictDoUpdate({
-      target: cycles.whoopCycleId,
+      target: [cycles.userId, cycles.whoopCycleId],
       set: { ...row, updatedAt: new Date() },
     });
 }
@@ -72,7 +72,7 @@ async function upsertRecovery(userId: string, r: WhoopRecovery, tz: string): Pro
       scoreState: r.score_state,
     })
     .onConflictDoUpdate({
-      target: recoveryMetrics.whoopSleepId,
+      target: [recoveryMetrics.userId, recoveryMetrics.whoopSleepId],
       set: {
         cycleId: String(r.cycle_id),
         date,
@@ -111,7 +111,7 @@ async function upsertSleep(userId: string, s: WhoopSleep, tz: string): Promise<v
       respiratoryRate: s.score?.respiratory_rate ?? null,
     })
     .onConflictDoUpdate({
-      target: sleepRecords.whoopSleepId,
+      target: [sleepRecords.userId, sleepRecords.whoopSleepId],
       set: {
         cycleId: String(s.cycle_id),
         nap: s.nap ?? false,
@@ -157,7 +157,7 @@ async function upsertWorkout(userId: string, w: WhoopWorkout, tz: string): Promi
       ...row,
     })
     .onConflictDoUpdate({
-      target: whoopWorkouts.whoopWorkoutId,
+      target: [whoopWorkouts.userId, whoopWorkouts.whoopWorkoutId],
       set: { ...row, updatedAt: new Date() },
     });
 }

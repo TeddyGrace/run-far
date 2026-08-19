@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 
 // crypto.ts reads env.ENCRYPTION_KEY at call time via ../env.js, which validates on import.
 // Point it at a throwaway key before importing.

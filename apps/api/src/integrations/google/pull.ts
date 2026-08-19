@@ -25,7 +25,7 @@ export async function pullGoogleCalendarChanges(userId: string): Promise<void> {
   const state = await getGoogleSyncState(userId);
   const syncStartedAt = new Date();
 
-  let syncToken = state?.syncToken ?? undefined;
+  const syncToken = state?.syncToken ?? undefined;
   let pageToken: string | undefined;
   let nextSyncToken: string | undefined;
   const events: calendar_v3.Schema$Event[] = [];
