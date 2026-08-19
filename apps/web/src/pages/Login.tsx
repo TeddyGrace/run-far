@@ -7,6 +7,7 @@ const GOOGLE_ERROR_MESSAGES: Record<string, string> = {
   google_denied: "Google sign-in was cancelled.",
   google_invalid: "Google sign-in failed — try again.",
   google_failed: "Could not complete Google sign-in.",
+  account_disabled: "This account has been disabled.",
 };
 
 function GoogleMark({ className }: { className?: string }) {
@@ -35,8 +36,10 @@ function GoogleMark({ className }: { className?: string }) {
 export function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showEmail, setShowEmail] = useState(false);
+  const [showEmail, setShowEmail] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unverified, setUnverified] = useState(false);
+  const [resent, setResent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -51,16 +54,35 @@ export function Login() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setUnverified(false);
+    setResent(false);
     setSubmitting(true);
     try {
-      const user = await api.post("/auth/login", { email, password });
-      queryClient.setQueryData(["auth", "me"], user);
+      await api.post("/auth/login", { email, password });
+      // The login response is a partial user object — refetch /auth/me for the full shape
+      // (approved, emailVerified) that RequireAuth's gate depends on.
+      await queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
       const from = (location.state as { from?: Location })?.from?.pathname ?? "/";
       navigate(from, { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong signing you in");
+      if (err instanceof ApiError && err.code === "EMAIL_UNVERIFIED") {
+        setUnverified(true);
+        setError(err.message);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Something went wrong signing you in");
+      }
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function resendVerification() {
+    setResent(false);
+    try {
+      await api.post("/auth/resend-verification", { email });
+      setResent(true);
+    } catch {
+      // Best-effort — the endpoint always returns ok, so this only fails on a network error.
     }
   }
 
@@ -91,9 +113,9 @@ export function Login() {
           Continue with Google
         </a>
 
-        {(oauthError || error) && (
+        {oauthError && (
           <p className="mt-4 text-sm text-zone-red" role="alert">
-            {error ?? oauthError}
+            {oauthError}
           </p>
         )}
 
@@ -123,9 +145,17 @@ export function Login() {
                 />
               </div>
               <div>
-                <label htmlFor="password" className="mb-1.5 block text-sm text-ink-secondary">
-                  Password
-                </label>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label htmlFor="password" className="text-sm text-ink-secondary">
+                    Password
+                  </label>
+                  <Link
+                    to="/forgot-password"
+                    className="text-xs text-ink-muted underline-offset-4 hover:text-ink-secondary hover:underline"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
                 <input
                   id="password"
                   type="password"
@@ -135,6 +165,26 @@ export function Login() {
                   className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-ink-primary placeholder:text-ink-muted"
                 />
               </div>
+
+              {error && (
+                <p className="text-sm text-zone-red" role="alert">
+                  {error}
+                  {unverified && (
+                    <>
+                      {" "}
+                      <button
+                        type="button"
+                        onClick={resendVerification}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        Resend verification email
+                      </button>
+                    </>
+                  )}
+                </p>
+              )}
+              {resent && <p className="text-sm text-ink-secondary">Verification email sent.</p>}
+
               <button
                 type="submit"
                 disabled={submitting}
@@ -147,6 +197,15 @@ export function Login() {
         </div>
 
         <p className="mt-10 text-sm text-ink-muted">
+          Need an account?{" "}
+          <Link
+            to="/signup"
+            className="text-ink-secondary underline-offset-4 transition-colors hover:text-ink-primary hover:underline"
+          >
+            Create one
+          </Link>
+        </p>
+        <p className="mt-2 text-sm text-ink-muted">
           <Link
             to="/privacy"
             className="underline-offset-4 transition-colors hover:text-ink-secondary hover:underline"

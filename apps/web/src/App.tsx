@@ -2,7 +2,10 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, RequireAuth, useAuth } from "./lib/auth.js";
 import { Layout } from "./components/Layout.js";
 import { Login } from "./pages/Login.js";
-import { AccessRequested } from "./pages/AccessRequested.js";
+import { Signup } from "./pages/Signup.js";
+import { VerifyEmail } from "./pages/VerifyEmail.js";
+import { ForgotPassword } from "./pages/ForgotPassword.js";
+import { ResetPassword } from "./pages/ResetPassword.js";
 import { Privacy } from "./pages/Privacy.js";
 import { Home } from "./pages/Home.js";
 import { Dashboard } from "./pages/Dashboard.js";
@@ -35,7 +38,10 @@ export function App() {
       <Routes>
         <Route path="/" element={<HomeRoute />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/access-requested" element={<AccessRequested />} />
+        <Route path="/signup" element={<Signup />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route
           path="/*"

@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   index,
   pgEnum,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -47,6 +48,11 @@ export const accessRequestStatusEnum = pgEnum("access_request_status", [
   "invited",
   "dismissed",
 ]);
+export const signupSourceEnum = pgEnum("signup_source", ["google", "password"]);
+export const authTokenPurposeEnum = pgEnum("auth_token_purpose", [
+  "email_verification",
+  "password_reset",
+]);
 
 // --- Core ---
 
@@ -66,6 +72,18 @@ export const users = pgTable(
     // any live session on the next request (see lib/activeUser.ts). Reversible from the
     // backoffice — the irreversible option is deleting the row outright.
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    // Null until the emailed verification link is used (or, for Google sign-ins, Google's
+    // own email_verified assertion). Gates nothing by itself — approvedAt is the real gate —
+    // but login rejects an unverified password account so an unowned email can't sit in the
+    // approval queue.
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+    // Null means pending admin approval — see lib/activeUser.ts, which blocks all /api
+    // access until this is set. Existing rows are backfilled to createdAt by migration
+    // 0021 so no pre-existing user is locked out by this column's introduction.
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: uuid("approved_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    // How the account was created — surfaced in the backoffice, not used for authorization.
+    signupSource: signupSourceEnum("signup_source").notNull().default("google"),
     // Gates the daily recovery/recommendations digest email to at most one per calendar day.
     lastRecoveryEmailDate: date("last_recovery_email_date"),
     // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.
@@ -86,7 +104,13 @@ export const users = pgTable(
     tutorialCompletedAt: timestamp("tutorial_completed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("users_google_sub_idx").on(t.googleSub)],
+  (t) => [
+    uniqueIndex("users_google_sub_idx").on(t.googleSub),
+    // Belt-and-suspenders on top of every write path normalizing through lib/email.ts —
+    // catches a case-variant collision (e.g. "Foo@x.com" vs "foo@x.com") that would
+    // otherwise slip past the plain unique(email) constraint above.
+    uniqueIndex("users_email_lower_idx").on(sql`lower(${t.email})`),
+  ],
 );
 
 // Tokens are encrypted at rest by apps/api/src/lib/crypto.ts before insert; this table
@@ -462,3 +486,22 @@ export const accessRequests = pgTable("access_requests", {
   requestCount: integer("request_count").notNull().default(1),
   status: accessRequestStatusEnum("status").notNull().default("pending"),
 });
+
+// Single-use tokens backing both email verification and password reset (lib/authTokens.ts).
+// Only a sha256 hash of the token is stored — the raw token exists only in the emailed link,
+// same principle as never storing a plaintext password.
+export const authTokens = pgTable(
+  "auth_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    purpose: authTokenPurposeEnum("purpose").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("auth_tokens_user_purpose_idx").on(t.userId, t.purpose)],
+);

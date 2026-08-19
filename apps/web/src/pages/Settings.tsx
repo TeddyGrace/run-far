@@ -284,6 +284,7 @@ function AccountCard() {
 function EmailSignInCard() {
   const { user } = useAuth();
   const [email, setEmail] = useState(user?.email ?? "");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -294,9 +295,15 @@ function EmailSignInCard() {
   }, [user?.email]);
 
   const setPasswordMutation = useMutation({
-    mutationFn: () => api.post<{ id: string; email: string }>("/auth/set-password", { email, password }),
+    mutationFn: () =>
+      api.post<{ id: string; email: string }>("/auth/set-password", {
+        email,
+        password,
+        currentPassword: user?.hasPassword ? currentPassword : undefined,
+      }),
     onSuccess: () => {
       setSuccess(true);
+      setCurrentPassword("");
       setPassword("");
       setConfirmPassword("");
     },
@@ -328,6 +335,21 @@ function EmailSignInCard() {
         the same account — your data doesn't change.
       </p>
       <form onSubmit={onSubmit} className="mt-4 space-y-3">
+        {user?.hasPassword && (
+          <div>
+            <label htmlFor="settings-current-password" className="mb-1.5 block text-sm text-ink-secondary">
+              Current password
+            </label>
+            <input
+              id="settings-current-password"
+              type="password"
+              required
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
+            />
+          </div>
+        )}
         <div>
           <label htmlFor="settings-email" className="mb-1.5 block text-sm text-ink-secondary">
             Email

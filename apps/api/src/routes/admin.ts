@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { invitedEmails, accessRequests, users } from "../db/schema.js";
 import { requireAdminUserId } from "../lib/adminAuth.js";
+import { sendSystemMail } from "../lib/systemMail.js";
+import { accessApprovedEmail } from "../lib/emailTemplates.js";
+import { logger } from "../lib/logger.js";
 
 const addInviteSchema = z.object({
   email: z.string().email(),
@@ -83,6 +86,20 @@ export async function adminRoutes(app: FastifyInstance) {
         target: invitedEmails.email,
         set: { invitedBy: userId },
       });
+
+    // Keep the two approval surfaces in sync: an email approved here may already have a
+    // pending users row (e.g. a password signup) that's still waiting on approvedAt.
+    const [pendingUser] = await db
+      .update(users)
+      .set({ approvedAt: new Date(), approvedBy: userId })
+      .where(and(eq(users.email, requested.email), isNull(users.approvedAt)))
+      .returning({ id: users.id, email: users.email });
+    if (pendingUser) {
+      sendSystemMail({ to: pendingUser.email, ...accessApprovedEmail() }).catch((err) =>
+        logger.error({ err, userId: pendingUser.id }, "failed to send access-approved email"),
+      );
+    }
+
     const [updated] = await db
       .update(accessRequests)
       .set({ status: "invited" })
@@ -106,10 +123,72 @@ export async function adminRoutes(app: FastifyInstance) {
         email: users.email,
         role: users.role,
         disabledAt: users.disabledAt,
+        approvedAt: users.approvedAt,
+        emailVerifiedAt: users.emailVerifiedAt,
+        signupSource: users.signupSource,
         createdAt: users.createdAt,
       })
       .from(users)
       .orderBy(desc(users.createdAt));
+  });
+
+  app.post("/api/admin/users/:id/approve", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    const [updated] = await db
+      .update(users)
+      .set({ approvedAt: new Date(), approvedBy: userId })
+      .where(eq(users.id, id))
+      .returning({
+        id: users.id,
+        email: users.email,
+        approvedAt: users.approvedAt,
+      });
+    if (!updated) {
+      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+      return;
+    }
+
+    await db
+      .insert(invitedEmails)
+      .values({ email: updated.email, invitedBy: userId })
+      .onConflictDoUpdate({ target: invitedEmails.email, set: { invitedBy: userId } });
+    await db
+      .update(accessRequests)
+      .set({ status: "invited" })
+      .where(eq(accessRequests.email, updated.email));
+
+    sendSystemMail({ to: updated.email, ...accessApprovedEmail() }).catch((err) =>
+      logger.error({ err, userId: updated.id }, "failed to send access-approved email"),
+    );
+
+    return updated;
+  });
+
+  app.post("/api/admin/users/:id/unapprove", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    if (id === userId) {
+      reply.status(400).send({
+        error: { message: "You can't unapprove your own account", code: "SELF_TARGET" },
+      });
+      return;
+    }
+
+    const [updated] = await db
+      .update(users)
+      .set({ approvedAt: null, approvedBy: null })
+      .where(eq(users.id, id))
+      .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
+    if (!updated) {
+      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+      return;
+    }
+    return updated;
   });
 
   app.post("/api/admin/users/:id/disable", async (request, reply) => {

@@ -29,7 +29,10 @@ async function main() {
       .insert(users)
       .values({
         email: SEED_EMAIL,
-        passwordHash: hashPassword(SEED_PASSWORD),
+        passwordHash: await hashPassword(SEED_PASSWORD),
+        emailVerifiedAt: new Date(),
+        approvedAt: new Date(),
+        signupSource: "password",
         timezone: env.ATHLETE_TIMEZONE,
       })
       .returning();

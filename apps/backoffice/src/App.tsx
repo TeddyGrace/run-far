@@ -45,7 +45,10 @@ function Dashboard() {
     <div className="mx-auto max-w-3xl px-6 py-10">
       <p className="mb-1 font-mono text-[11px] tracking-[0.22em] text-accent">run-far backoffice</p>
       <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Invites &amp; access requests</h1>
-      <AccessRequests />
+      <PendingSignups />
+      <div className="mt-10">
+        <AccessRequests />
+      </div>
       <div className="mt-10">
         <InvitedEmails />
       </div>
@@ -53,6 +56,82 @@ function Dashboard() {
         <Accounts />
       </div>
     </div>
+  );
+}
+
+function PendingSignups() {
+  const [accounts, setAccounts] = useState<AdminUser[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = () => api.listUsers().then(setAccounts).catch((e) => setError(String(e)));
+  useEffect(() => {
+    reload();
+  }, []);
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    }
+    reload();
+  };
+
+  const pending = (accounts ?? []).filter((u) => !u.approvedAt);
+
+  return (
+    <section>
+      <h2 className="mb-1 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+        Pending signups
+      </h2>
+      <p className="mb-3 text-xs text-ink-muted">
+        Accounts that already exist but haven't been approved for access yet.
+      </p>
+      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
+      {accounts === null ? (
+        <p className="text-sm text-ink-muted">Loading…</p>
+      ) : pending.length === 0 ? (
+        <p className="text-sm text-ink-muted">No pending signups.</p>
+      ) : (
+        <ul className="divide-y divide-border rounded-md border border-border">
+          {pending.map((u) => (
+            <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-ink-primary">
+                  {u.email}
+                  <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-secondary">
+                    {u.signupSource}
+                  </span>
+                  {!u.emailVerifiedAt && (
+                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                      unverified
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-ink-muted">
+                  joined {new Date(u.createdAt).toLocaleDateString()}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  onClick={() => run(() => api.approveUser(u.id))}
+                  className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => run(() => api.disableUser(u.id))}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger"
+                >
+                  Deny
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -113,13 +192,26 @@ function Accounts() {
                       disabled
                     </span>
                   )}
+                  {!u.approvedAt && (
+                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                      pending
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-ink-muted">
-                  joined {new Date(u.createdAt).toLocaleDateString()}
+                  joined {new Date(u.createdAt).toLocaleDateString()} · {u.signupSource}
                   {u.disabledAt && ` · disabled ${new Date(u.disabledAt).toLocaleDateString()}`}
                 </p>
               </div>
               <div className="flex shrink-0 gap-2">
+                {u.approvedAt && (
+                  <button
+                    onClick={() => run(() => api.unapproveUser(u.id))}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
+                  >
+                    Unapprove
+                  </button>
+                )}
                 {u.disabledAt ? (
                   <button
                     onClick={() => run(() => api.enableUser(u.id))}

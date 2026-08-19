@@ -11,6 +11,9 @@ export type AdminUser = {
   email: string;
   role: "user" | "admin";
   disabledAt: string | null;
+  approvedAt: string | null;
+  emailVerifiedAt: string | null;
+  signupSource: "google" | "password";
   createdAt: string;
 };
 
@@ -57,6 +60,10 @@ export const api = {
     request<AdminUser>(`/api/admin/users/${id}/disable`, { method: "POST" }),
   enableUser: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/enable`, { method: "POST" }),
+  approveUser: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/approve`, { method: "POST" }),
+  unapproveUser: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/unapprove`, { method: "POST" }),
   deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
   listAccessRequests: () => request<AccessRequest[]>("/api/admin/access-requests"),
   approveAccessRequest: (id: string) =>

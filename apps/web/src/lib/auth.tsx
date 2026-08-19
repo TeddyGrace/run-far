@@ -2,12 +2,16 @@ import { createContext, useContext, useEffect, useRef, type ReactNode } from "re
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation } from "react-router-dom";
 import { api } from "./api.js";
+import { PendingApproval } from "../pages/PendingApproval.js";
 
 export interface CurrentUser {
   id: string;
   email: string;
   timezone: string | null;
   needsTutorial: boolean;
+  approved: boolean;
+  emailVerified: boolean;
+  hasPassword: boolean;
 }
 
 interface AuthContextValue {
@@ -69,6 +73,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+  if (!user.approved) {
+    return <PendingApproval />;
   }
   return <>{children}</>;
 }
