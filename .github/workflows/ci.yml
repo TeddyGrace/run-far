@@ -8,6 +8,30 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
+    # The API's tests are integration tests that hit a real Postgres.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: runfar
+          POSTGRES_PASSWORD: runfar
+          POSTGRES_DB: runfar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U runfar"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://runfar:runfar@localhost:5432/runfar
+      # Throwaway CI values. Never used outside this ephemeral runner.
+      SESSION_SECRET: ci-session-secret-not-a-real-secret
+      ENCRYPTION_KEY: cnVuZmFyLWNpLXRlc3Qta2V5LW5vdC1hLXNlY3JldCE=
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +45,8 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - run: pnpm db:migrate
 
       - run: pnpm typecheck
       - run: pnpm lint

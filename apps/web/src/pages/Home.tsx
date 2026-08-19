@@ -99,23 +99,6 @@ export function Home() {
           </dl>
         </section>
 
-        <section className="mt-12">
-          <h2 className="mb-3 font-display text-lg font-semibold text-ink-primary">
-            Who run-far is for
-          </h2>
-          <p className="text-sm leading-relaxed text-ink-secondary">
-            run-far is built and operated by a single developer — Teddy Grace — rather than a
-            company, and access is invite-only. If you&apos;d like an account, email{" "}
-            <a
-              href={`mailto:${CONTACT_EMAIL}`}
-              className="text-ink-primary underline-offset-4 hover:underline"
-            >
-              {CONTACT_EMAIL}
-            </a>
-            .
-          </p>
-        </section>
-
         <div className="mt-12 flex flex-wrap items-center gap-4">
           <Link
             to="/login"
