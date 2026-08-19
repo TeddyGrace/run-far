@@ -16,10 +16,10 @@ import { Settings } from "./pages/Settings.js";
 function HomeRoute() {
   const { user, isLoading } = useAuth();
 
-  if (isLoading) {
-    return <div className="flex min-h-screen items-center justify-center text-ink-muted">Loading…</div>;
-  }
-  if (!user) {
+  // Render the landing page while the session check is in flight. A crawler that executes JS
+  // snapshots the page before /api/me resolves, so a spinner here is all Google's branding
+  // verifier would ever see.
+  if (isLoading || !user) {
     return <Home />;
   }
   return (
