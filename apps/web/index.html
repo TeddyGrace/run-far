@@ -26,6 +26,29 @@
       then leave it in place permanently.
       <meta name="google-site-verification" content="REPLACE_WITH_TOKEN_FROM_SEARCH_CONSOLE" />
     -->
+    <!--
+      Critical inline styles. The fallback markup below uses light text, and the dark background
+      it needs lives in the Tailwind bundle — so any client that renders before (or without) the
+      external stylesheet gets cream-on-white and reads as a blank page. Google's OAuth branding
+      verifier is one such client, which is why it reported the home page as not describing the
+      app. Keep these here rather than relying on the bundle.
+    -->
+    <style>
+      html,
+      body {
+        background-color: #121815;
+        color: #edeae2;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />

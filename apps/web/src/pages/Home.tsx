@@ -128,9 +128,12 @@ export function Home() {
       </div>
 
       <style>{`
+        /* Deliberately no opacity ramp: this page is what Google's OAuth branding verifier
+           reads, and a headless renderer that screenshots within the first 500ms would
+           otherwise capture the copy mid-fade and score the page as empty. Slide only. */
         @keyframes fade-up {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
+          from { transform: translateY(10px); }
+          to { transform: translateY(0); }
         }
       `}</style>
     </div>
