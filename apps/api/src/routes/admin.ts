@@ -7,6 +7,9 @@ import { requireAdminUserId } from "../lib/adminAuth.js";
 import { sendSystemMail } from "../lib/systemMail.js";
 import { accessApprovedEmail } from "../lib/emailTemplates.js";
 import { logger } from "../lib/logger.js";
+import { hasGoogleConnection } from "../integrations/google/gmailClient.js";
+import { getConnectionMetadata } from "../integrations/google/oauth.js";
+import { findSystemMailAdmin } from "../lib/systemMail.js";
 
 const addInviteSchema = z.object({
   email: z.string().email(),
@@ -19,6 +22,22 @@ export async function adminRoutes(app: FastifyInstance) {
     const userId = await requireAdminUserId(request, reply);
     if (!userId) return;
     return { isAdmin: true };
+  });
+
+  // Reports whether the admin Gmail grant that sends all transactional email (signup
+  // verification, password reset, access-approved) is usable — see systemMail.ts.
+  app.get("/api/admin/mail-status", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const admin = await findSystemMailAdmin();
+    if (!admin) return { down: true, reason: "no_admin" as const, invalidAt: null };
+    if (!(await hasGoogleConnection(admin.id))) {
+      return { down: true, reason: "not_connected" as const, invalidAt: null };
+    }
+    const meta = await getConnectionMetadata(admin.id);
+    const invalidAt = (meta?.invalidAt as string | undefined) ?? null;
+    return { down: invalidAt !== null, reason: invalidAt !== null ? ("invalid_grant" as const) : null, invalidAt };
   });
 
   app.get("/api/admin/invites", async (request, reply) => {
@@ -184,6 +203,26 @@ export async function adminRoutes(app: FastifyInstance) {
       .set({ approvedAt: null, approvedBy: null })
       .where(eq(users.id, id))
       .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
+    if (!updated) {
+      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+      return;
+    }
+    return updated;
+  });
+
+  // Escape hatch for when the verification email couldn't be sent (see systemMail.ts /
+  // MailTransportDownError) — lets an admin unblock a signup by hand instead of the user
+  // being stuck forever without a working mail transport.
+  app.post("/api/admin/users/:id/verify-email", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    const [updated] = await db
+      .update(users)
+      .set({ emailVerifiedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning({ id: users.id, email: users.email, emailVerifiedAt: users.emailVerifiedAt });
     if (!updated) {
       reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
       return;

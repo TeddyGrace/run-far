@@ -15,7 +15,7 @@ import { users, invitedEmails, accessRequests } from "../db/schema.js";
 import { hashPassword, verifyPassword, verifyAgainstDummyHash, isLegacyHash } from "../lib/auth.js";
 import { normalizeEmail } from "../lib/email.js";
 import { issueAuthToken, consumeAuthToken } from "../lib/authTokens.js";
-import { sendSystemMail } from "../lib/systemMail.js";
+import { sendSystemMail, MailTransportDownError } from "../lib/systemMail.js";
 import {
   verificationEmail,
   alreadyHasAccountEmail,
@@ -152,8 +152,15 @@ export async function authRoutes(app: FastifyInstance) {
       const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
       if (existing) {
         // Same generic response whether or not the account exists, so a caller can't use
-        // this endpoint to enumerate accounts — but tell the real owner what happened.
-        await sendSystemMail({ to: email, ...alreadyHasAccountEmail() });
+        // this endpoint to enumerate accounts — but tell the real owner what happened. A dead
+        // mail transport shouldn't turn "you already have an account" into a 500, so it's
+        // logged and swallowed rather than surfaced.
+        try {
+          await sendSystemMail({ to: email, ...alreadyHasAccountEmail() });
+        } catch (err) {
+          if (!(err instanceof MailTransportDownError)) throw err;
+          logger.error({ err, email }, "could not send already-has-account email: mail transport down");
+        }
         return { ok: true };
       }
 
@@ -169,10 +176,24 @@ export async function authRoutes(app: FastifyInstance) {
         .returning();
       if (!created) throw new Error("failed to create user");
 
-      const token = await issueAuthToken(created.id, "email_verification");
-      await sendSystemMail({ to: email, ...verificationEmail(token) });
+      // Recorded here (not just from verify-email) so the pending signup is visible in the
+      // backoffice even if the verification email below never sends.
+      await recordAccessRequest(email);
 
-      return { ok: true };
+      const token = await issueAuthToken(created.id, "email_verification");
+      let mailSent = true;
+      try {
+        await sendSystemMail({ to: email, ...verificationEmail(token) });
+      } catch (err) {
+        if (!(err instanceof MailTransportDownError)) throw err;
+        mailSent = false;
+        logger.error(
+          { err, userId: created.id },
+          "account created but verification email could not be sent: mail transport down",
+        );
+      }
+
+      return { ok: true, mailSent };
     },
   );
 
@@ -214,9 +235,15 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (user && !user.emailVerifiedAt && !user.disabledAt) {
         const token = await issueAuthToken(user.id, "email_verification");
-        await sendSystemMail({ to: email, ...verificationEmail(token) });
+        try {
+          await sendSystemMail({ to: email, ...verificationEmail(token) });
+        } catch (err) {
+          if (!(err instanceof MailTransportDownError)) throw err;
+          logger.error({ err, userId: user.id }, "could not resend verification email: mail transport down");
+        }
       }
-      // Generic response regardless of whether the account exists or is already verified.
+      // Generic response regardless of whether the account exists, is already verified, or
+      // mail couldn't be sent — this endpoint can't be used to probe any of those.
       return { ok: true };
     },
   );
@@ -231,9 +258,15 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (user && !user.disabledAt) {
         const token = await issueAuthToken(user.id, "password_reset");
-        await sendSystemMail({ to: email, ...passwordResetEmail(token) });
+        try {
+          await sendSystemMail({ to: email, ...passwordResetEmail(token) });
+        } catch (err) {
+          if (!(err instanceof MailTransportDownError)) throw err;
+          logger.error({ err, userId: user.id }, "could not send password reset email: mail transport down");
+        }
       }
-      // Generic response whether or not the account exists, to avoid enumeration.
+      // Generic response whether or not the account exists or mail could be sent, to avoid
+      // enumeration.
       return { ok: true };
     },
   );

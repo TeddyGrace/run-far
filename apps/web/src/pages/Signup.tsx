@@ -9,6 +9,7 @@ export function Signup() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
+  const [mailSent, setMailSent] = useState(true);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -23,7 +24,8 @@ export function Signup() {
     }
     setSubmitting(true);
     try {
-      await api.post("/auth/signup", { email, password });
+      const res = await api.post<{ ok: boolean; mailSent?: boolean }>("/auth/signup", { email, password });
+      setMailSent(res.mailSent ?? true);
       setSent(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong creating your account");
@@ -45,15 +47,26 @@ export function Signup() {
         </h1>
 
         {sent ? (
-          <>
-            <p className="mb-1 text-sm leading-relaxed text-ink-secondary">
-              Check <span className="font-medium text-ink-primary">{email}</span> for a verification
-              link.
-            </p>
-            <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
-              Once verified, an admin will approve access before you can sign in.
-            </p>
-          </>
+          mailSent ? (
+            <>
+              <p className="mb-1 text-sm leading-relaxed text-ink-secondary">
+                Check <span className="font-medium text-ink-primary">{email}</span> for a verification
+                link.
+              </p>
+              <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
+                Once verified, an admin will approve access before you can sign in.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mb-1 text-sm leading-relaxed text-ink-secondary">
+                Your account was created, but we couldn't send a verification email right now.
+              </p>
+              <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
+                Contact an admin to get your email verified and access approved.
+              </p>
+            </>
+          )
         ) : (
           <>
             <p className="mb-8 text-sm leading-relaxed text-ink-secondary">

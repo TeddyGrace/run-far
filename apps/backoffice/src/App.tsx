@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, type AccessRequest, type AdminUser, type InvitedEmail } from "./api.js";
+import { api, ApiError, type AccessRequest, type AdminUser, type InvitedEmail, type MailStatus } from "./api.js";
 
 const WEB_LOGIN_URL = "https://run-far.cc/login";
 
@@ -45,6 +45,7 @@ function Dashboard() {
     <div className="mx-auto max-w-3xl px-6 py-10">
       <p className="mb-1 font-mono text-[11px] tracking-[0.22em] text-accent">run-far backoffice</p>
       <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Invites &amp; access requests</h1>
+      <MailStatusBanner />
       <PendingSignups />
       <div className="mt-10">
         <AccessRequests />
@@ -55,6 +56,34 @@ function Dashboard() {
       <div className="mt-10">
         <Accounts />
       </div>
+    </div>
+  );
+}
+
+function MailStatusBanner() {
+  const [status, setStatus] = useState<MailStatus | null>(null);
+
+  useEffect(() => {
+    api.mailStatus().then(setStatus).catch(() => setStatus(null));
+  }, []);
+
+  if (!status?.down) return null;
+
+  const reasonText =
+    status.reason === "invalid_grant"
+      ? `revoked or expired${status.invalidAt ? ` (since ${new Date(status.invalidAt).toLocaleString()})` : ""}`
+      : status.reason === "not_connected"
+        ? "not connected"
+        : "no admin account exists to send from";
+
+  return (
+    <div className="mb-6 rounded-md border border-danger/40 bg-danger/10 px-4 py-3">
+      <p className="text-sm font-medium text-danger">System email is down</p>
+      <p className="mt-1 text-xs text-ink-secondary">
+        The admin's Google connection is {reasonText}. Signup, verification, and password-reset
+        emails aren't sending — reconnect Google (Settings) to restore them. Affected signups are
+        still visible in Pending signups below and can be verified manually.
+      </p>
     </div>
   );
 }
@@ -114,6 +143,15 @@ function PendingSignups() {
                 </p>
               </div>
               <div className="flex shrink-0 gap-2">
+                {!u.emailVerifiedAt && (
+                  <button
+                    onClick={() => run(() => api.verifyUserEmail(u.id))}
+                    title="Mark verified without the emailed link — use when system email is down"
+                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
+                  >
+                    Mark verified
+                  </button>
+                )}
                 <button
                   onClick={() => run(() => api.approveUser(u.id))}
                   className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"

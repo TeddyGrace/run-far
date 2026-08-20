@@ -26,6 +26,12 @@ export type AccessRequest = {
   status: "pending" | "invited" | "dismissed";
 };
 
+export type MailStatus = {
+  down: boolean;
+  reason: "no_admin" | "not_connected" | "invalid_grant" | null;
+  invalidAt: string | null;
+};
+
 class ApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -48,6 +54,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => request<{ isAdmin: true }>("/api/admin/me"),
+  mailStatus: () => request<MailStatus>("/api/admin/mail-status"),
   listInvites: () => request<InvitedEmail[]>("/api/admin/invites"),
   addInvite: (email: string, note?: string) =>
     request<InvitedEmail>("/api/admin/invites", {
@@ -64,6 +71,8 @@ export const api = {
     request<AdminUser>(`/api/admin/users/${id}/approve`, { method: "POST" }),
   unapproveUser: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/unapprove`, { method: "POST" }),
+  verifyUserEmail: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/verify-email`, { method: "POST" }),
   deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
   listAccessRequests: () => request<AccessRequest[]>("/api/admin/access-requests"),
   approveAccessRequest: (id: string) =>
