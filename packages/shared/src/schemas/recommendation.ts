@@ -31,8 +31,15 @@ export const recoverySnapshotSchema = z.object({
   // How many of the last 7 cycles actually had a strain value — the denominator behind
   // cycleStrainAvg7d, so a thin history (e.g. 3 cycles synced) doesn't read as a full week.
   cyclesCounted7d: z.number().int().nonnegative(),
-  acuteTss7d: z.number().nullable(),
-  chronicTss28d: z.number().nullable(),
+  // @deprecated planned-TSS acute/chronic figures — ACWR is now computed from *actual* cycle
+  // load (cycleLoadSum7d as the acute term, chronicLoad28d below), not from the plan. Kept
+  // optional so historical rows already persisted in recommendations.inputSnapshot still parse.
+  acuteTss7d: z.number().nullable().optional(),
+  chronicTss28d: z.number().nullable().optional(),
+  // Actual chronic load: Whoop cycle kilojoules (or the strain-derived fallback) summed over the
+  // last 28 completed cycles. ACWR = cycleLoadSum7d / (chronicLoad28d / 4), the acute:chronic
+  // ratio on real load, so a rest week correctly pulls it down. Optional for historical parse.
+  chronicLoad28d: z.number().nullable().optional(),
   acwr: z.number().nullable(),
   // Whoop run mileage (meters): calendar week total, and calendar-month weekly average so far.
   runDistanceMThisWeek: z.number().nullable(),

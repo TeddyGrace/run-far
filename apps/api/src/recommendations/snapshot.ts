@@ -1,9 +1,8 @@
 import { and, eq, gte, lte, desc, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns } from "../db/schema.js";
+import { recoveryMetrics, sleepRecords, whoopWorkouts } from "../db/schema.js";
 import { RECOMMENDATION_CONFIG } from "./config.js";
 import type { RecoverySnapshot } from "@run-far/shared";
-import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 import { getCurrentCycle, getRecentCycles, getRecentCompletedCycles, cycleLoad } from "../metrics/cycleMetrics.js";
@@ -11,8 +10,11 @@ import { getCurrentCycle, getRecentCycles, getRecentCompletedCycles, cycleLoad }
 /** Whoop sport_name values that count as "runs" for mileage stats. */
 const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
 
-/** How many completed cycles the rolling strain/load window looks back over. */
+/** How many completed cycles the rolling strain/load (acute) window looks back over. */
 const STRAIN_WINDOW_CYCLES = 7;
+/** Chronic window for ACWR: trailing completed cycles whose weekly average (sum / 4) is the
+ * baseline the acute STRAIN_WINDOW_CYCLES load is compared against. */
+const ACWR_CHRONIC_CYCLES = 28;
 /** How many recent cycles (open or closed) we walk when checking HRV-suppressed streak. */
 const HRV_STREAK_LOOKBACK_CYCLES = 30;
 
@@ -56,8 +58,9 @@ function startOfLocalMonth(localIso: string): string {
 /**
  * Builds today's RecoverySnapshot for a user: recovery/HRV/RHR vs 30-day rolling baseline,
  * today's sleep debt (Whoop's own figure is already a rolling/cumulative metric — never
- * re-aggregate it over multiple days), 7-cycle strain/load, and the 7d:28d planned-load ratio
- * (ACWR). This is the only place in the recommendation engine that touches the database —
+ * re-aggregate it over multiple days), 7-cycle strain/load, and the acute:chronic load ratio
+ * (ACWR) built from actual Whoop cycle load (7 cycles vs a trailing 28-cycle weekly average).
+ * This is the only place in the recommendation engine that touches the database —
  * everything downstream (the rules) is pure, taking this snapshot as input.
  *
  * "Today" for recovery/sleep debt/strain is resolved via Whoop's own Physiological Cycle, not
@@ -148,53 +151,41 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
   // workout strains together isn't a meaningful quantity, and it ignores non-workout strain
   // entirely. The open (still-accumulating) cycle is excluded entirely — its strain is a
   // partial, necessarily-low reading with no honest interpretation until the cycle closes.
-  const recentCompletedCycles = await getRecentCompletedCycles(userId, STRAIN_WINDOW_CYCLES);
-  const cycleStrainValues = recentCompletedCycles
+  // Pull the full chronic window (28 completed cycles) once; the acute 7-cycle figures are its
+  // most-recent slice, so strain/load and ACWR all read from a single query.
+  const chronicCycles = await getRecentCompletedCycles(userId, ACWR_CHRONIC_CYCLES);
+  const acuteCycles = chronicCycles.slice(0, STRAIN_WINDOW_CYCLES);
+
+  const cycleStrainValues = acuteCycles
     .map((c) => c.strain)
     .filter((v): v is number => v != null);
-  const cycleLoadValues = recentCompletedCycles
+  const acuteLoadValues = acuteCycles
     .map((c) => cycleLoad(c))
     .filter((v): v is number => v != null);
   const cycleStrainAvg7d = cycleStrainValues.length ? mean(cycleStrainValues) : null;
-  const cycleLoadSum7d = cycleLoadValues.length
-    ? cycleLoadValues.reduce((a, b) => a + b, 0)
+  const cycleLoadSum7d = acuteLoadValues.length
+    ? acuteLoadValues.reduce((a, b) => a + b, 0)
     : null;
   const cyclesCounted7d = cycleStrainValues.length;
 
-  const acuteWindowStart = daysAgo(6);
-  const chronicWindowStart = daysAgo(27);
-  const activePlanId = await getActivePlanId(userId);
-  const acuteRuns = await db
-    .select()
-    .from(plannedRuns)
-    .where(
-      and(
-        visibleRunsSql(userId, activePlanId),
-        gte(plannedRuns.scheduledAt, acuteWindowStart),
-        lte(plannedRuns.scheduledAt, today),
-      ),
-    );
-  const chronicRuns = await db
-    .select()
-    .from(plannedRuns)
-    .where(
-      and(
-        visibleRunsSql(userId, activePlanId),
-        gte(plannedRuns.scheduledAt, chronicWindowStart),
-        lte(plannedRuns.scheduledAt, today),
-      ),
-    );
-
-  const acuteTss7d = acuteRuns.length
-    ? acuteRuns.reduce((sum, r) => sum + (r.plannedTss ?? 0), 0)
+  // ACWR on *actual* load, not the plan: acute is the 7-cycle load sum above, chronic is the
+  // trailing 28-cycle load averaged to a week (sum / 4). Load is Whoop cycle kilojoules (a real
+  // additive energy measure) with the strain-derived fallback, so an easy or missed week pulls
+  // the ratio down the way an injury-risk metric should. Withheld until minChronicCycles of
+  // history exist — below that the /4 baseline is too thin and the ratio reads as a false spike.
+  const chronicLoadValues = chronicCycles
+    .map((c) => cycleLoad(c))
+    .filter((v): v is number => v != null);
+  const chronicLoad28d = chronicLoadValues.length
+    ? chronicLoadValues.reduce((a, b) => a + b, 0)
     : null;
-  const chronicTss28d = chronicRuns.length
-    ? chronicRuns.reduce((sum, r) => sum + (r.plannedTss ?? 0), 0)
-    : null;
-  const chronicWeeklyEquivalent = chronicTss28d != null ? chronicTss28d / 4 : null;
+  const chronicWeeklyEquivalent = chronicLoad28d != null ? chronicLoad28d / 4 : null;
   const acwr =
-    acuteTss7d != null && chronicWeeklyEquivalent != null && chronicWeeklyEquivalent > 0
-      ? acuteTss7d / chronicWeeklyEquivalent
+    cycleLoadSum7d != null &&
+    chronicWeeklyEquivalent != null &&
+    chronicWeeklyEquivalent > 0 &&
+    chronicLoadValues.length >= RECOMMENDATION_CONFIG.acwr.minChronicCycles
+      ? cycleLoadSum7d / chronicWeeklyEquivalent
       : null;
 
   const weekStartIso = startOfLocalWeek(todayIso);
@@ -244,8 +235,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     cycleStrainAvg7d,
     cycleLoadSum7d,
     cyclesCounted7d,
-    acuteTss7d,
-    chronicTss28d,
+    chronicLoad28d,
     acwr,
     runDistanceMThisWeek: weekHasDistance ? weekMeters : null,
     runDistanceMPerWeekThisMonth,

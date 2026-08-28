@@ -168,3 +168,38 @@ describe("buildRecoverySnapshot cycle strain/load aggregation", () => {
     expect(snapshot.cycleLoadSum7d).toBeCloseTo(9000, 5);
   });
 });
+
+describe("buildRecoverySnapshot ACWR (actual cycle load)", () => {
+  it("is 1.0 when acute load matches the trailing weekly average", async () => {
+    // 28 uniform cycles: acute (7 * 4000) / chronic-weekly (28 * 4000 / 4) = 28000 / 28000 = 1.
+    for (let day = 1; day <= 28; day++) {
+      await insertCompletedCycle(userId, day, { strain: 10, kilojoule: 4000 });
+    }
+    const snapshot = await buildRecoverySnapshot(userId);
+    expect(snapshot.chronicLoad28d).toBeCloseTo(112000, 5);
+    expect(snapshot.acwr).toBeCloseTo(1, 5);
+  });
+
+  it("rises above 1 when the recent 7 cycles are loaded heavier than the chronic baseline", async () => {
+    for (let day = 1; day <= 7; day++) {
+      await insertCompletedCycle(userId, day, { strain: 14, kilojoule: 8000 });
+    }
+    for (let day = 8; day <= 28; day++) {
+      await insertCompletedCycle(userId, day, { strain: 8, kilojoule: 4000 });
+    }
+    // acute = 7 * 8000 = 56000; chronic-weekly = (56000 + 21 * 4000) / 4 = 35000; ratio = 1.6.
+    const snapshot = await buildRecoverySnapshot(userId);
+    expect(snapshot.acwr).toBeCloseTo(1.6, 5);
+  });
+
+  it("withholds ACWR until a chronic baseline of enough cycles exists", async () => {
+    // Only 10 completed cycles — below minChronicCycles, so the /4 weekly baseline is too thin
+    // to trust and ACWR should read null rather than a spurious ratio.
+    for (let day = 1; day <= 10; day++) {
+      await insertCompletedCycle(userId, day, { strain: 10, kilojoule: 4000 });
+    }
+    const snapshot = await buildRecoverySnapshot(userId);
+    expect(snapshot.cycleLoadSum7d).toBeCloseTo(28000, 5);
+    expect(snapshot.acwr).toBeNull();
+  });
+});

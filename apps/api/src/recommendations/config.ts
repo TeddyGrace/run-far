@@ -14,6 +14,10 @@ export const RECOMMENDATION_CONFIG = {
   },
   acwr: {
     spikeThreshold: 1.5, // acute:chronic training load ratio above this is a ramp-rate warning
+    // Minimum completed cycles required before ACWR is reported at all. The chronic baseline is
+    // a 28-cycle sum / 4; with only a handful of cycles that weekly figure is tiny and the ratio
+    // explodes into a meaningless "spike", so we withhold ACWR until ~3 weeks of history exist.
+    minChronicCycles: 21,
   },
   volumeReduction: {
     yellowPct: 0.2, // reduce volume/intensity ~20% on a yellow-zone hard day
