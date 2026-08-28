@@ -258,13 +258,16 @@ export async function assistantRoutes(app: FastifyInstance) {
     const priorMessages = priorRows.reverse().map(toChatMessage);
     const isFirstMessage = priorMessages.length === 0;
 
-    const [userMsg] = await db
-      .insert(chatMessages)
-      .values({ sessionId: id, role: "user", content: body.content })
-      .returning();
-    if (!userMsg) throw new Error("failed to save user message");
-
-    const conversation: ChatMessage[] = [...priorMessages, toChatMessage(userMsg)];
+    // The user's turn is held in memory and only persisted once the turn succeeds — a failed
+    // turn (e.g. an upstream outage) must not leave an orphaned user message that a retry would
+    // then duplicate.
+    const pendingUser: ChatMessage = {
+      id: "pending",
+      role: "user",
+      content: body.content,
+      createdAt: new Date().toISOString(),
+    };
+    const conversation: ChatMessage[] = [...priorMessages, pendingUser];
 
     // Take over the socket for Server-Sent Events. Each frame is one JSON object matching
     // chatStreamEventSchema in @run-far/shared.
@@ -285,6 +288,9 @@ export async function assistantRoutes(app: FastifyInstance) {
         onEvent: (event) => send(event),
       });
 
+      // Persist the user turn then the assistant reply, in order, so their timestamps sort
+      // correctly and neither is saved if the turn threw above.
+      await db.insert(chatMessages).values({ sessionId: id, role: "user", content: body.content });
       const [assistantMsg] = await db
         .insert(chatMessages)
         .values({ sessionId: id, role: "assistant", content: turn.assistantMessage })

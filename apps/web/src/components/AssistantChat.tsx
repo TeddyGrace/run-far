@@ -232,12 +232,29 @@ export function AssistantChat() {
       return;
     }
 
-    // Refetch the persisted thread, THEN clear the local turn so the streamed content never
-    // flashes out before the real messages land.
-    await qc.invalidateQueries({ queryKey: ["assistant", "messages", sessionId] });
-    void qc.invalidateQueries({ queryKey: ["assistant", "sessions"] });
-    void doneEvent; // payload already persisted server-side; refetch is the source of truth
+    // Write the finished turn straight into the cache and clear the local turn in the same
+    // commit — so the streamed content is replaced by the persisted messages with no gap and,
+    // crucially, no frame where the optimistic bubble and the refetched one both show. A
+    // background refetch then reconciles the synthesized user id with the server's.
+    const done = doneEvent as Extract<ChatStreamEvent, { type: "done" }> | null;
+    if (done) {
+      qc.setQueryData<SessionMessagesResponse>(["assistant", "messages", sessionId], (prev) => {
+        const userMsg: ChatMessage = {
+          id: `local-user-${Date.now()}`,
+          role: "user",
+          content,
+          createdAt: new Date(new Date(done.assistantMessage.createdAt).getTime() - 1000).toISOString(),
+        };
+        const base = prev ?? {
+          session: done.session,
+          messages: [] as ChatMessage[],
+        };
+        return { ...base, session: done.session, messages: [...base.messages, userMsg, done.assistantMessage] };
+      });
+    }
     clearTurn();
+    void qc.invalidateQueries({ queryKey: ["assistant", "sessions"] });
+    void qc.invalidateQueries({ queryKey: ["assistant", "messages", sessionId] });
   }
 
   function openSession(id: string) {

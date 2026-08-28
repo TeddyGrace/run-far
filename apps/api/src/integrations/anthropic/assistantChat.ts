@@ -6,6 +6,7 @@ import {
   type ScheduleChangeProposal,
 } from "@run-far/shared";
 import { env } from "../../env.js";
+import { logger } from "../../lib/logger.js";
 import { db } from "../../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns, recommendations, users } from "../../db/schema.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
@@ -368,6 +369,31 @@ async function executeTool(
   }
 }
 
+// Run a data tool and always return a tool_result the model can act on. A single tool failing
+// (an expired Google token, a weather outage, a DB hiccup) must never abort the whole turn —
+// the model gets an is_error result and can tell the athlete that source is unavailable and
+// still answer with what it does have.
+async function executeToolSafely(
+  name: string,
+  input: Record<string, unknown>,
+  userId: string,
+  tz: string,
+  toolUseId: string,
+): Promise<Anthropic.ToolResultBlockParam> {
+  try {
+    const output = await executeTool(name, input, userId, tz);
+    return { type: "tool_result", tool_use_id: toolUseId, content: JSON.stringify(output) };
+  } catch (err) {
+    logger.error({ err, tool: name, userId }, "assistant tool failed");
+    return {
+      type: "tool_result",
+      tool_use_id: toolUseId,
+      is_error: true,
+      content: `${name} is temporarily unavailable (${err instanceof Error ? err.message : "unknown error"}). Tell the athlete you couldn't reach that data source right now, then answer with whatever else you have.`,
+    };
+  }
+}
+
 export function isAnthropicConfigured(): boolean {
   return Boolean(env.ANTHROPIC_API_KEY);
 }
@@ -609,8 +635,15 @@ export async function runAssistantChatTurn(params: {
             content: `Staged ${result.proposal.items.length} change(s) for the athlete to confirm.`,
           });
         } else {
-          const output = await executeTool(block.name, (block.input as Record<string, unknown>) ?? {}, params.userId, tz);
-          toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(output) });
+          toolResults.push(
+            await executeToolSafely(
+              block.name,
+              (block.input as Record<string, unknown>) ?? {},
+              params.userId,
+              tz,
+              block.id,
+            ),
+          );
         }
       }
     }
