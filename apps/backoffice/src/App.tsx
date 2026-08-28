@@ -235,7 +235,13 @@ function Accounts() {
                 </p>
               </div>
               <div className="flex shrink-0 gap-2">
-                {u.approvedAt && (
+                {/* The admin row is deliberately actionless: the role is only ever granted by
+                    data migration, so deleting or locking out the last admin orphans this
+                    backoffice for good. The API refuses all three anyway (ADMIN_TARGET). */}
+                {u.role === "admin" && (
+                  <span className="self-center text-xs text-ink-muted">protected account</span>
+                )}
+                {u.role !== "admin" && u.approvedAt && (
                   <button
                     onClick={() => run(() => api.unapproveUser(u.id))}
                     className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
@@ -243,27 +249,30 @@ function Accounts() {
                     Unapprove
                   </button>
                 )}
-                {u.disabledAt ? (
+                {u.role !== "admin" &&
+                  (u.disabledAt ? (
+                    <button
+                      onClick={() => run(() => api.enableUser(u.id))}
+                      className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"
+                    >
+                      Enable
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => run(() => api.disableUser(u.id))}
+                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
+                    >
+                      Disable
+                    </button>
+                  ))}
+                {u.role !== "admin" && (
                   <button
-                    onClick={() => run(() => api.enableUser(u.id))}
-                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"
+                    onClick={() => remove(u)}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger"
                   >
-                    Enable
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => run(() => api.disableUser(u.id))}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
-                  >
-                    Disable
+                    Delete
                   </button>
                 )}
-                <button
-                  onClick={() => remove(u)}
-                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger"
-                >
-                  Delete
-                </button>
               </div>
             </li>
           ))}

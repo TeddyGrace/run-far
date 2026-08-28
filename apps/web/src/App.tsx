@@ -8,6 +8,7 @@ import { ForgotPassword } from "./pages/ForgotPassword.js";
 import { ResetPassword } from "./pages/ResetPassword.js";
 import { Privacy } from "./pages/Privacy.js";
 import { Home } from "./pages/Home.js";
+import { PendingApproval } from "./pages/PendingApproval.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { Calendar } from "./pages/Calendar.js";
 import { Build } from "./pages/Build.js";
@@ -24,6 +25,9 @@ function HomeRoute() {
   // verifier would ever see.
   if (isLoading || !user) {
     return <Home />;
+  }
+  if (!user.approved) {
+    return <PendingApproval />;
   }
   return (
     <Layout>

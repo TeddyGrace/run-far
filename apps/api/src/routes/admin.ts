@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
@@ -14,6 +14,35 @@ const addInviteSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 const idParamSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * Loads the target of a destructive account action, refusing it outright when that account is
+ * an admin. `role` is granted only by data migration (drizzle/0018_handy_maddog.sql) and by no
+ * app route, so an admin that gets deleted — or locked out via disable/unapprove — can't be
+ * replaced from inside the app, permanently orphaning the backoffice. The SELF_TARGET checks
+ * don't cover this: they only stop an admin acting on their own row, not on another admin's.
+ * Sends 404/403 and returns undefined on failure — callers should `if (!target) return;`.
+ */
+async function loadDestructibleUser(id: string, reply: FastifyReply) {
+  const [target] = await db
+    .select({ id: users.id, email: users.email, role: users.role })
+    .from(users)
+    .where(eq(users.id, id));
+  if (!target) {
+    reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+    return undefined;
+  }
+  if (target.role === "admin") {
+    reply.status(403).send({
+      error: {
+        message: "Admin accounts can't be deleted, disabled, or unapproved",
+        code: "ADMIN_TARGET",
+      },
+    });
+    return undefined;
+  }
+  return target;
+}
 
 export async function adminRoutes(app: FastifyInstance) {
   app.get("/api/admin/me", async (request, reply) => {
@@ -191,6 +220,7 @@ export async function adminRoutes(app: FastifyInstance) {
       });
       return;
     }
+    if (!(await loadDestructibleUser(id, reply))) return;
 
     const [updated] = await db
       .update(users)
@@ -235,6 +265,7 @@ export async function adminRoutes(app: FastifyInstance) {
       });
       return;
     }
+    if (!(await loadDestructibleUser(id, reply))) return;
 
     const [updated] = await db
       .update(users)
@@ -277,11 +308,8 @@ export async function adminRoutes(app: FastifyInstance) {
       return;
     }
 
-    const [target] = await db.select({ email: users.email }).from(users).where(eq(users.id, id));
-    if (!target) {
-      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
-      return;
-    }
+    const target = await loadDestructibleUser(id, reply);
+    if (!target) return;
 
     // Drop the invite too, otherwise the same email can immediately sign up again and the
     // delete reads as a no-op.
