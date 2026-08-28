@@ -164,21 +164,27 @@ export async function authRoutes(app: FastifyInstance) {
         return { ok: true };
       }
 
+      // Invited (allowlisted) emails are auto-approved on signup regardless of method, matching
+      // the Google path in findOrCreateGoogleUser — an admin invite shouldn't need a second
+      // manual approval just because the person chose a password.
+      const allowed = await isEmailAllowedToSignUp(email);
+
       const [created] = await db
         .insert(users)
         .values({
           email,
           passwordHash: await hashPassword(body.password),
           emailVerifiedAt: null,
-          approvedAt: null,
+          approvedAt: allowed ? new Date() : null,
           signupSource: "password",
         })
         .returning();
       if (!created) throw new Error("failed to create user");
 
-      // Recorded here (not just from verify-email) so the pending signup is visible in the
-      // backoffice even if the verification email below never sends.
-      await recordAccessRequest(email);
+      // Only surface a pending signup in the backoffice when it actually needs approval.
+      // Recorded here (not just from verify-email) so it's visible even if the verification
+      // email below never sends.
+      if (!allowed) await recordAccessRequest(email);
 
       const token = await issueAuthToken(created.id, "email_verification");
       let mailSent = true;

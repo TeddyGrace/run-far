@@ -6,7 +6,7 @@ import { env } from "../env.js";
 import { invitedEmails, accessRequests, users } from "../db/schema.js";
 import { requireAdminUserId } from "../lib/adminAuth.js";
 import { sendSystemMail } from "../lib/systemMail.js";
-import { accessApprovedEmail } from "../lib/emailTemplates.js";
+import { accessApprovedEmail, inviteEmail } from "../lib/emailTemplates.js";
 import { logger } from "../lib/logger.js";
 
 const addInviteSchema = z.object({
@@ -42,6 +42,42 @@ async function loadDestructibleUser(id: string, reply: FastifyReply) {
     return undefined;
   }
   return target;
+}
+
+/**
+ * Approves whatever account exists for `email`, idempotently, and keeps the invite/access-request
+ * surfaces in sync. Every approval path (invite creation, the users list, the access-requests
+ * list) funnels through here so the behaviour — and the single "you're approved" email — is
+ * identical no matter where the admin clicked.
+ *
+ * The `isNull(approvedAt)` guard is the idempotency key: re-approving an already-approved account
+ * flips nothing and sends no second email. Returns the row it actually flipped, or undefined when
+ * there was no account, or it was already approved.
+ */
+async function approveExistingUser(
+  email: string,
+  adminId: string,
+): Promise<{ id: string; email: string; approvedAt: Date | null } | undefined> {
+  // Always ensure the email is invited (allowlisted) and drops off the access-requests list,
+  // even when there's no account yet — this is what makes a future signup auto-approve.
+  await db
+    .insert(invitedEmails)
+    .values({ email, invitedBy: adminId })
+    .onConflictDoUpdate({ target: invitedEmails.email, set: { invitedBy: adminId } });
+  await db.update(accessRequests).set({ status: "invited" }).where(eq(accessRequests.email, email));
+
+  const [flipped] = await db
+    .update(users)
+    .set({ approvedAt: new Date(), approvedBy: adminId })
+    .where(and(eq(users.email, email), isNull(users.approvedAt)))
+    .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
+
+  if (flipped) {
+    sendSystemMail({ to: flipped.email, ...accessApprovedEmail() }).catch((err) =>
+      logger.error({ err, userId: flipped.id }, "failed to send access-approved email"),
+    );
+  }
+  return flipped;
 }
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -85,12 +121,16 @@ export async function adminRoutes(app: FastifyInstance) {
       })
       .returning();
 
-    // Someone who already tried and was denied should drop off the access-requests list
-    // once they're invited.
-    await db
-      .update(accessRequests)
-      .set({ status: "invited" })
-      .where(eq(accessRequests.email, email));
+    // Auto-approve any account already waiting for this email, and drop them off the
+    // access-requests list. Exactly one email goes out per invite: if an existing pending
+    // account was just approved, approveExistingUser already sent the "you're approved" mail;
+    // otherwise (no account yet, or already approved) send the invitation with a signup link.
+    const approved = await approveExistingUser(email, userId);
+    if (!approved) {
+      sendSystemMail({ to: email, ...inviteEmail() }).catch((err) =>
+        logger.error({ err, email }, "failed to send invite email"),
+      );
+    }
 
     reply.status(201).send(invite);
   });
@@ -121,24 +161,13 @@ export async function adminRoutes(app: FastifyInstance) {
       return;
     }
 
-    await db
-      .insert(invitedEmails)
-      .values({ email: requested.email, invitedBy: userId })
-      .onConflictDoUpdate({
-        target: invitedEmails.email,
-        set: { invitedBy: userId },
-      });
-
-    // Keep the two approval surfaces in sync: an email approved here may already have a
-    // pending users row (e.g. a password signup) that's still waiting on approvedAt.
-    const [pendingUser] = await db
-      .update(users)
-      .set({ approvedAt: new Date(), approvedBy: userId })
-      .where(and(eq(users.email, requested.email), isNull(users.approvedAt)))
-      .returning({ id: users.id, email: users.email });
-    if (pendingUser) {
-      sendSystemMail({ to: pendingUser.email, ...accessApprovedEmail() }).catch((err) =>
-        logger.error({ err, userId: pendingUser.id }, "failed to send access-approved email"),
+    // Approve any pending account for this email (sends the "you're approved" mail). If there's
+    // no account yet — the common case, someone who was denied and hasn't registered — send them
+    // the invitation instead, so approving from this list always notifies someone.
+    const approved = await approveExistingUser(requested.email, userId);
+    if (!approved) {
+      sendSystemMail({ to: requested.email, ...inviteEmail() }).catch((err) =>
+        logger.error({ err, email: requested.email }, "failed to send invite email"),
       );
     }
 
@@ -179,34 +208,20 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!userId) return;
 
     const { id } = idParamSchema.parse(request.params);
-    const [updated] = await db
-      .update(users)
-      .set({ approvedAt: new Date(), approvedBy: userId })
-      .where(eq(users.id, id))
-      .returning({
-        id: users.id,
-        email: users.email,
-        approvedAt: users.approvedAt,
-      });
-    if (!updated) {
+    const [target] = await db
+      .select({ id: users.id, email: users.email, approvedAt: users.approvedAt })
+      .from(users)
+      .where(eq(users.id, id));
+    if (!target) {
       reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
       return;
     }
 
-    await db
-      .insert(invitedEmails)
-      .values({ email: updated.email, invitedBy: userId })
-      .onConflictDoUpdate({ target: invitedEmails.email, set: { invitedBy: userId } });
-    await db
-      .update(accessRequests)
-      .set({ status: "invited" })
-      .where(eq(accessRequests.email, updated.email));
-
-    sendSystemMail({ to: updated.email, ...accessApprovedEmail() }).catch((err) =>
-      logger.error({ err, userId: updated.id }, "failed to send access-approved email"),
-    );
-
-    return updated;
+    // Idempotent: approveExistingUser only flips a pending row and only emails when it does, so
+    // approving an already-approved account (a double click, or overlap with the access-requests
+    // list) is a no-op that returns the current row without re-sending the approval email.
+    const flipped = await approveExistingUser(target.email, userId);
+    return { id: target.id, email: target.email, approvedAt: flipped?.approvedAt ?? target.approvedAt };
   });
 
   app.post("/api/admin/users/:id/unapprove", async (request, reply) => {

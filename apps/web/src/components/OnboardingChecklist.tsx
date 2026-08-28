@@ -24,9 +24,9 @@ export function OnboardingChecklist() {
   const data = status.data;
   const items = data
     ? [
-        { done: data.hasWhoop, label: "Connect Whoop for recovery, sleep, and strain data" },
-        { done: data.hasLocation, label: "Set your location for weather-aware recommendations" },
-        { done: data.hasPlan, label: "Build or import a training plan" },
+        { done: data.hasWhoop, label: "Connect Whoop for recovery, sleep, and strain data", to: "/settings" },
+        { done: data.hasLocation, label: "Set your location for weather-aware recommendations", to: "/settings" },
+        { done: data.hasPlan, label: "Build or import a training plan", to: "/build" },
       ]
     : [];
   const incomplete = items.filter((i) => !i.done);
@@ -41,7 +41,7 @@ export function OnboardingChecklist() {
           <ul className="mt-2 space-y-1 text-sm text-ink-secondary">
             {incomplete.map((item) => (
               <li key={item.label}>
-                <Link to="/settings" className="hover:text-ink-primary hover:underline">
+                <Link to={item.to} className="hover:text-ink-primary hover:underline">
                   {item.label}
                 </Link>
               </li>

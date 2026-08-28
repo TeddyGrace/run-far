@@ -49,6 +49,19 @@ export function passwordResetEmail(token: string): { subject: string; html: stri
   };
 }
 
+export function inviteEmail(): { subject: string; html: string; text: string } {
+  const signupUrl = `${env.WEB_ORIGIN}/signup`;
+  return {
+    subject: "You're invited to run-far",
+    html: wrap(
+      `<p>You've been invited to run-far.</p>
+       <p><a href="${signupUrl}" style="color:#4fb0a6">Create your account</a> — you're already
+       approved, so you'll be in as soon as you sign up. You can use Google or a password.</p>`,
+    ),
+    text: `You've been invited to run-far.\n\nCreate your account — you're already approved, so you'll be in as soon as you sign up:\n${signupUrl}`,
+  };
+}
+
 export function accessApprovedEmail(): { subject: string; html: string; text: string } {
   const loginUrl = `${env.WEB_ORIGIN}/login`;
   return {
