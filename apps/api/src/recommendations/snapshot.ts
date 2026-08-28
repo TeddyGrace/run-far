@@ -6,6 +6,15 @@ import type { RecoverySnapshot } from "@run-far/shared";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 import { getCurrentCycle, getRecentCycles, getRecentCompletedCycles, cycleLoad } from "../metrics/cycleMetrics.js";
+import { syncSingleResource } from "../integrations/whoop/sync.js";
+import { logger } from "../lib/logger.js";
+
+/** How long a stored sleep row is trusted before an on-read snapshot re-fetches it from Whoop
+ * by id. Whoop re-scores sleep (and its sleep-debt component) after the initial upload and
+ * signals it with a sleep.updated webhook; a dropped/late webhook would otherwise leave a
+ * stale value in place until the twice-daily safety sweep. Refreshing on read closes that
+ * gap, and the TTL keeps repeated reads from hammering the Whoop API. */
+const SLEEP_FRESHNESS_TTL_MS = 10 * 60 * 1000;
 
 /** Whoop sport_name values that count as "runs" for mileage stats. */
 const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
@@ -139,10 +148,31 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
       );
   }
   if (!todaySleepRow) {
+    // No current cycle to anchor on: fall back to today's calendar date, but still restrict to
+    // the primary sleep (nap = false) and pick the most recently created one — a bare date match
+    // can't tell a nap from the main sleep when both land on the same day (see schema comment).
     [todaySleepRow] = await db
       .select()
       .from(sleepRecords)
-      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.date, todayIso)));
+      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.date, todayIso), eq(sleepRecords.nap, false)))
+      .orderBy(desc(sleepRecords.createdAt));
+  }
+
+  // On-read freshness top-up: if today's stored sleep row is older than the TTL, re-fetch just
+  // that one sleep from Whoop by id (idempotent upsert) so a missed sleep.updated webhook can't
+  // serve a stale sleep-debt value. Best-effort — on any failure we fall through to the stored
+  // value rather than break background regeneration or the digest.
+  if (todaySleepRow && Date.now() - todaySleepRow.updatedAt.getTime() > SLEEP_FRESHNESS_TTL_MS) {
+    try {
+      await syncSingleResource(userId, "sleep", todaySleepRow.whoopSleepId);
+      const [refreshed] = await db
+        .select()
+        .from(sleepRecords)
+        .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.whoopSleepId, todaySleepRow.whoopSleepId)));
+      if (refreshed) todaySleepRow = refreshed;
+    } catch (err) {
+      logger.warn({ err, userId, whoopSleepId: todaySleepRow.whoopSleepId }, "on-read sleep refresh failed; using stored value");
+    }
   }
   const sleepDebtMinToday = todaySleepRow?.sleepDebtMin ?? null;
 
