@@ -23,8 +23,8 @@ const STARTER_PROMPTS = [
   "Is this a good week to add mileage?",
 ];
 
-/** A winding-trail glyph — the coach's mark, standing in for an avatar. */
-function TrailMark({ className }: { className?: string }) {
+/** A mountain-range glyph — the coach's mark, standing in for an avatar. */
+function PeakMark({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -36,8 +36,8 @@ function TrailMark({ className }: { className?: string }) {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M5 20c2-2.5.5-5.5 3.5-7.5S13 13 15 10s.5-5.5 2.5-6.5" />
-      <circle cx="18" cy="4" r="1.6" fill="currentColor" stroke="none" />
+      <path d="M2.5 19.5l6-10 4 5.5 2.5-4 6.5 8.5" />
+      <circle cx="17" cy="4.75" r="1.5" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -300,7 +300,7 @@ export function AssistantChat() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
           </svg>
         ) : (
-          <TrailMark className="h-5 w-5" />
+          <PeakMark className="h-5 w-5" />
         )}
       </button>
 
@@ -426,7 +426,7 @@ function Header({
   return (
     <div className="flex items-center gap-3 border-b border-border px-4 py-3">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent-strong">
-        <TrailMark className="h-[18px] w-[18px]" />
+        <PeakMark className="h-[18px] w-[18px]" />
       </div>
       <div className="min-w-0 flex-1">
         <p className="font-display text-sm font-semibold leading-tight text-ink-primary">Coach</p>
