@@ -13,7 +13,7 @@ import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { getActivePlanId, visibleRunsSql } from "../../plans/lifecycle.js";
 import { offsetStringForZone, dateYmdInZone } from "../../lib/zonedTime.js";
 import { formatFeet, formatMiles, withImperialRunFields } from "../../lib/units.js";
-import { sendRecoveryDigestNow } from "../google/recoveryDigest.js";
+import { sendRecoveryDigestNow } from "../../email/recoveryDigest.js";
 import { hasGoogleConnection } from "../google/push.js";
 import { listPrimaryEvents } from "../google/calendarClient.js";
 import { getForecastForRange } from "../weather/weatherClient.js";

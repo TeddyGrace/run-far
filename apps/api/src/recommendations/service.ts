@@ -12,7 +12,7 @@ import { logger } from "../lib/logger.js";
 import { env } from "../env.js";
 import type { ProposedChange } from "@run-far/shared";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
-import { maybeSendRecoveryDigest } from "../integrations/google/recoveryDigest.js";
+import { maybeSendRecoveryDigest } from "../email/recoveryDigest.js";
 
 const LOOKAHEAD_DAYS = 10;
 

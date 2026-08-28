@@ -1,12 +1,12 @@
 import { and, eq, isNull, ne, or } from "drizzle-orm";
 import type { RecoverySnapshot, WeatherHour } from "@run-far/shared";
-import { db } from "../../db/client.js";
-import { recommendations, users, weatherForecasts } from "../../db/schema.js";
-import { env } from "../../env.js";
-import { logger } from "../../lib/logger.js";
-import { buildRecoverySnapshot } from "../../recommendations/snapshot.js";
-import type { RuleOutput } from "../../recommendations/types.js";
-import { hasGoogleConnection, sendGmail } from "./gmailClient.js";
+import { db } from "../db/client.js";
+import { recommendations, users, weatherForecasts } from "../db/schema.js";
+import { env } from "../env.js";
+import { logger } from "../lib/logger.js";
+import { sendMail } from "../lib/mailer.js";
+import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
+import type { RuleOutput } from "../recommendations/types.js";
 
 /** The digest only reads severity/summary/reason — satisfied by both a freshly-evaluated
  * RuleOutput and a persisted `recommendations` row. */
@@ -180,20 +180,17 @@ function buildDigest(
 }
 
 /**
- * Sends the daily recovery/recommendations digest via Gmail (as the athlete's own connected
- * Google account) at most once per calendar day (`snapshot.date`, the athlete-local date
- * buildRecoverySnapshot computed against — see snapshot.ts). Only meant to be called from the
- * ingestion path (Whoop webhooks) — never from a passive dashboard read — so the gate
- * reflects "new data landed today," not "someone opened the app today." No-op (and never
- * throws) if Google isn't connected.
+ * Sends the daily recovery/recommendations digest via email at most once per calendar day
+ * (`snapshot.date`, the athlete-local date buildRecoverySnapshot computed against — see
+ * snapshot.ts). Only meant to be called from the ingestion path (Whoop webhooks) — never from
+ * a passive dashboard read — so the gate reflects "new data landed today," not "someone
+ * opened the app today."
  */
 export async function maybeSendRecoveryDigest(
   userId: string,
   snapshot: RecoverySnapshot,
   fired: RuleOutput[],
 ): Promise<void> {
-  if (!(await hasGoogleConnection(userId))) return;
-
   // Claim the day atomically *before* sending, via a single conditional UPDATE, instead of the
   // read-then-write this replaced (check lastRecoveryEmailDate, send, then set it) — that gap
   // let two concurrent callers for the same user (paired webhooks, or a webhook racing a
@@ -222,7 +219,7 @@ export async function maybeSendRecoveryDigest(
   try {
     const weather = await getTodayWeatherForDigest(userId, snapshot.date, snapshot.timeZone ?? env.ATHLETE_TIMEZONE);
     const { subject, html, text } = buildDigest(snapshot, fired, weather);
-    await sendGmail(userId, { to: claimedUser.email, subject, html, text });
+    await sendMail({ to: claimedUser.email, subject, html, text });
     logger.info({ userId, date: snapshot.date }, "recovery digest email sent");
   } catch (err) {
     // Send failed after we'd already claimed the day — release the claim so a retry (or
@@ -242,10 +239,6 @@ export async function maybeSendRecoveryDigest(
 export async function sendRecoveryDigestNow(
   userId: string,
 ): Promise<{ sent: boolean; reason?: string }> {
-  if (!(await hasGoogleConnection(userId))) {
-    return { sent: false, reason: "Google isn't connected — connect it in Settings to enable email." };
-  }
-
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!user) return { sent: false, reason: "User not found." };
 
@@ -263,7 +256,7 @@ export async function sendRecoveryDigestNow(
   try {
     const weather = await getTodayWeatherForDigest(userId, snapshot.date, snapshot.timeZone ?? env.ATHLETE_TIMEZONE);
     const { subject, html, text } = buildDigest(snapshot, fired, weather);
-    await sendGmail(userId, { to: user.email, subject, html, text });
+    await sendMail({ to: user.email, subject, html, text });
     await db.update(users).set({ lastRecoveryEmailDate: snapshot.date }).where(eq(users.id, userId));
     logger.info({ userId, date: snapshot.date }, "recovery digest email sent (chat-requested)");
     return { sent: true };

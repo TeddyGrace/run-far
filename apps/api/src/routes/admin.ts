@@ -2,14 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
+import { env } from "../env.js";
 import { invitedEmails, accessRequests, users } from "../db/schema.js";
 import { requireAdminUserId } from "../lib/adminAuth.js";
 import { sendSystemMail } from "../lib/systemMail.js";
 import { accessApprovedEmail } from "../lib/emailTemplates.js";
 import { logger } from "../lib/logger.js";
-import { hasGoogleConnection } from "../integrations/google/gmailClient.js";
-import { getConnectionMetadata } from "../integrations/google/oauth.js";
-import { findSystemMailAdmin } from "../lib/systemMail.js";
 
 const addInviteSchema = z.object({
   email: z.string().email(),
@@ -24,20 +22,16 @@ export async function adminRoutes(app: FastifyInstance) {
     return { isAdmin: true };
   });
 
-  // Reports whether the admin Gmail grant that sends all transactional email (signup
-  // verification, password reset, access-approved) is usable — see systemMail.ts.
+  // Reports whether the Resend transport that sends all transactional email (signup
+  // verification, password reset, access-approved) is configured — see lib/mailer.ts. In
+  // development an unset key just logs mail to the console, so this only ever reports down
+  // in production.
   app.get("/api/admin/mail-status", async (request, reply) => {
     const userId = await requireAdminUserId(request, reply);
     if (!userId) return;
 
-    const admin = await findSystemMailAdmin();
-    if (!admin) return { down: true, reason: "no_admin" as const, invalidAt: null };
-    if (!(await hasGoogleConnection(admin.id))) {
-      return { down: true, reason: "not_connected" as const, invalidAt: null };
-    }
-    const meta = await getConnectionMetadata(admin.id);
-    const invalidAt = (meta?.invalidAt as string | undefined) ?? null;
-    return { down: invalidAt !== null, reason: invalidAt !== null ? ("invalid_grant" as const) : null, invalidAt };
+    const down = env.NODE_ENV === "production" && !env.RESEND_API_KEY;
+    return { down, reason: down ? ("not_configured" as const) : null, invalidAt: null };
   });
 
   app.get("/api/admin/invites", async (request, reply) => {

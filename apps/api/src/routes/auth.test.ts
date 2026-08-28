@@ -5,6 +5,11 @@ process.env.DATABASE_URL ??= "postgres://runfar:runfar@localhost:5432/runfar";
 process.env.SESSION_SECRET ??= "test-session-secret-not-for-prod";
 process.env.ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
 process.env.WEB_ORIGIN ??= "http://localhost:5174";
+// Force the same "transport unusable" path production hits when RESEND_API_KEY is unset —
+// see lib/mailer.ts. Outside production an unset key just logs the email instead of failing,
+// which wouldn't exercise the degrade-instead-of-500 behavior this suite covers.
+process.env.NODE_ENV = "production";
+delete process.env.RESEND_API_KEY;
 
 const { db } = await import("../db/client.js");
 const { users, accessRequests } = await import("../db/schema.js");
@@ -12,35 +17,21 @@ const { buildServer } = await import("../server.js");
 const { eq } = await import("drizzle-orm");
 
 /**
- * Regression coverage for the outage where a password signup 500'd because the admin's
- * Gmail grant (the only mail transport — see systemMail.ts) was dead: sendSystemMail should
- * degrade instead of throwing, so the account still gets created and shows up for an admin
- * to handle by hand instead of the signup silently failing.
- *
- * No Google connection is set up for the admin here, which is enough to reach the same
- * MailTransportDownError path invalid_grant does (both are "the transport is unusable").
+ * Regression coverage for the outage where a password signup 500'd because the mail
+ * transport (Resend — see lib/mailer.ts) was unconfigured: sendSystemMail should degrade
+ * instead of throwing, so the account still gets created and shows up for an admin to handle
+ * by hand instead of the signup silently failing.
  */
 describe("POST /api/auth/signup with the mail transport down", () => {
-  let adminId: string;
   let createdEmail: string;
 
-  beforeEach(async () => {
-    const [admin] = await db
-      .insert(users)
-      .values({
-        email: `mail-down-admin-${randomUUID()}@run-far.local`,
-        passwordHash: "x",
-        role: "admin",
-      })
-      .returning({ id: users.id });
-    adminId = admin!.id;
+  beforeEach(() => {
     createdEmail = `mail-down-signup-${randomUUID()}@run-far.local`;
   });
 
   afterEach(async () => {
     await db.delete(accessRequests).where(eq(accessRequests.email, createdEmail));
     await db.delete(users).where(eq(users.email, createdEmail));
-    await db.delete(users).where(eq(users.id, adminId));
   });
 
   it("still creates the account and returns 200 instead of 500ing", async () => {

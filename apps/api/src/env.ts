@@ -73,6 +73,12 @@ const envSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-5"),
+
+  // --- Email (Resend) --- see lib/mailer.ts. Empty in dev logs mail to the console instead
+  // of sending; empty in production makes sendMail throw MailTransportDownError.
+  RESEND_API_KEY: z.string().default(""),
+  MAIL_FROM: z.string().default("Run Far <noreply@mail.run-far.cc>"),
+  MAIL_REPLY_TO: z.string().default(""),
   // Comma-separated allowlist gating account CREATION (not existing users). Empty allows
   // anyone to sign up in development, but fails closed (denies everyone) in production, so a
   // deploy that forgets to set it doesn't accidentally open public signup.

@@ -6,12 +6,7 @@ import { oauthConnections } from "../../db/schema.js";
 import { encryptSecret, decryptSecret } from "../../lib/crypto.js";
 import { logger } from "../../lib/logger.js";
 
-const SCOPES = [
-  "https://www.googleapis.com/auth/calendar",
-  // Send-only — lets the app email the athlete (e.g. the recovery digest) as their own
-  // connected account. Never reads or lists mail.
-  "https://www.googleapis.com/auth/gmail.send",
-];
+const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
 function newOAuthClient(): OAuth2Client {
   return new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REDIRECT_URI);

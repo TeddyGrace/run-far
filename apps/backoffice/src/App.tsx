@@ -69,20 +69,13 @@ function MailStatusBanner() {
 
   if (!status?.down) return null;
 
-  const reasonText =
-    status.reason === "invalid_grant"
-      ? `revoked or expired${status.invalidAt ? ` (since ${new Date(status.invalidAt).toLocaleString()})` : ""}`
-      : status.reason === "not_connected"
-        ? "not connected"
-        : "no admin account exists to send from";
-
   return (
     <div className="mb-6 rounded-md border border-danger/40 bg-danger/10 px-4 py-3">
       <p className="text-sm font-medium text-danger">System email is down</p>
       <p className="mt-1 text-xs text-ink-secondary">
-        The admin's Google connection is {reasonText}. Signup, verification, and password-reset
-        emails aren't sending — reconnect Google (Settings) to restore them. Affected signups are
-        still visible in Pending signups below and can be verified manually.
+        RESEND_API_KEY isn't set. Signup, verification, and password-reset emails aren't
+        sending — set it to restore them. Affected signups are still visible in Pending
+        signups below and can be verified manually.
       </p>
     </div>
   );

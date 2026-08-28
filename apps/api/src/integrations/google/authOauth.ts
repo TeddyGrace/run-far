@@ -1,14 +1,14 @@
 import { OAuth2Client, type Credentials } from "google-auth-library";
 import { env } from "../../env.js";
 
-// Sign-in asks for Calendar (and Gmail send, for the recovery digest email) up front so
-// connecting them isn't a second consent screen after login.
+// Sign-in asks for Calendar up front so connecting it isn't a second consent screen after
+// login. Mail (transactional + recovery digest) goes through Resend, not Gmail — see
+// lib/mailer.ts — so no gmail.send scope is requested here.
 export const LOGIN_SCOPES = [
   "openid",
   "email",
   "profile",
   "https://www.googleapis.com/auth/calendar",
-  "https://www.googleapis.com/auth/gmail.send",
 ];
 
 function newAuthOAuthClient(): OAuth2Client {

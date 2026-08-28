@@ -28,7 +28,7 @@ export type AccessRequest = {
 
 export type MailStatus = {
   down: boolean;
-  reason: "no_admin" | "not_connected" | "invalid_grant" | null;
+  reason: "not_configured" | null;
   invalidAt: string | null;
 };
 
