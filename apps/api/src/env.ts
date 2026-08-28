@@ -83,6 +83,10 @@ const envSchema = z.object({
   // anyone to sign up in development, but fails closed (denies everyone) in production, so a
   // deploy that forgets to set it doesn't accidentally open public signup.
   ALLOWED_EMAILS: z.string().default(""),
+  /** Comma-separated break-glass admin allowlist, reconciled into the users table on every
+   * boot — see lib/adminBootstrap.ts. Exists because `role` was otherwise grantable only by
+   * data migration, which made a deleted or disabled admin an unrecoverable lockout. */
+  ADMIN_EMAILS: z.string().default(""),
   /** IANA timezone for scheduling planned runs (wall-clock times the athlete sees). */
   ATHLETE_TIMEZONE: z.string().default("America/New_York"),
   /** Contact NWS shows to the app operator (not the athlete) in the API's User-Agent header. */
@@ -114,11 +118,17 @@ if (!parsed.success) {
 
 const data = parsed.data;
 
-const allowedEmails = new Set(
-  data.ALLOWED_EMAILS.split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean),
-);
+function parseEmailList(raw: string): Set<string> {
+  return new Set(
+    raw
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+const allowedEmails = parseEmailList(data.ALLOWED_EMAILS);
+const adminEmails = parseEmailList(data.ADMIN_EMAILS);
 
 export const env = {
   ...data,
@@ -130,4 +140,8 @@ export const env = {
   /** Empty set means "allow all" outside production, "deny all" in production — see
    * findOrCreateGoogleUser (routes/auth.ts), the only place this gates account creation. */
   allowedEmails,
+  /** Empty means "no break-glass configured" — reconcileAdminEmails then does nothing but
+   * warn. Never used for authorization at request time; admin is still read off the DB row
+   * by lib/adminAuth.ts, so an env var alone can't authenticate anyone. */
+  adminEmails,
 };

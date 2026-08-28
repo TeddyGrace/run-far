@@ -27,6 +27,7 @@ import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
 import { startGoogleChannelRenewalJob } from "./integrations/google/channelRenewal.js";
 import { runMigrations } from "./db/migrate.js";
+import { reconcileAdminEmails } from "./lib/adminBootstrap.js";
 import { activeUserGuard } from "./lib/activeUser.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -186,6 +187,8 @@ async function main() {
   try {
     await runMigrations();
     logger.info("migrations applied");
+    // After migrations, so a fresh database has the users table to reconcile against.
+    await reconcileAdminEmails();
   } catch (err) {
     logger.error({ err }, "migrations failed — API is up but the schema may be stale");
   }

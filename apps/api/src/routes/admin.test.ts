@@ -48,8 +48,14 @@ describe("destructive admin actions against an admin account", () => {
         },
       ])
       .returning({ id: users.id });
-    [actingAdminId, otherAdminId, plainUserId] = rows.map((r) => r.id);
     createdIds = rows.map((r) => r.id);
+    const [acting, other, plain] = rows;
+    // Asserting here (rather than casting) keeps a short insert from surfacing later as a
+    // confusing "undefined is not a uuid" deep inside a request assertion.
+    if (!acting || !other || !plain) throw new Error("failed to seed test users");
+    actingAdminId = acting.id;
+    otherAdminId = other.id;
+    plainUserId = plain.id;
   });
 
   afterEach(async () => {
