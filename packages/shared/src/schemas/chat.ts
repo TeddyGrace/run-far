@@ -77,3 +77,25 @@ export const applyScheduleChangesResponseSchema = z.object({
   deleted: z.number().int().nonnegative(),
 });
 export type ApplyScheduleChangesResponse = z.infer<typeof applyScheduleChangesResponseSchema>;
+
+// --- Streaming chat events (SSE). The stream endpoint emits one JSON object per SSE frame;
+// the client reduces them into the in-flight turn. `tool` reports what data the coach is
+// consulting, `text` carries prose deltas, `proposal` stages a confirmable diff, `done`
+// closes the turn with the persisted message + (possibly renamed) session title. ---
+
+export const chatStreamEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("tool"), label: z.string() }),
+  z.object({ type: z.literal("text"), delta: z.string() }),
+  z.object({
+    type: z.literal("proposal"),
+    proposal: scheduleChangeProposalSchema,
+    proposalToken: z.string(),
+  }),
+  z.object({
+    type: z.literal("done"),
+    session: chatSessionSchema,
+    assistantMessage: chatMessageSchema,
+  }),
+  z.object({ type: z.literal("error"), message: z.string(), code: z.string().optional() }),
+]);
+export type ChatStreamEvent = z.infer<typeof chatStreamEventSchema>;

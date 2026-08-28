@@ -9,7 +9,11 @@ import {
 import { requireUserId } from "../lib/session.js";
 import { db } from "../db/client.js";
 import { chatSessions, chatMessages } from "../db/schema.js";
-import { isAnthropicConfigured, runAssistantChatTurn } from "../integrations/anthropic/assistantChat.js";
+import {
+  isAnthropicConfigured,
+  runAssistantChatTurn,
+  runAssistantChatTurnStream,
+} from "../integrations/anthropic/assistantChat.js";
 import { loadProposal, deleteProposal } from "../integrations/anthropic/proposalStore.js";
 import { applyScheduleChanges } from "../assistant/scheduleChanges.js";
 import { logger } from "../lib/logger.js";
@@ -220,6 +224,100 @@ export async function assistantRoutes(app: FastifyInstance) {
       proposal: turn.proposal,
       proposalToken: turn.proposalToken,
     };
+  });
+
+  app.post("/api/assistant/sessions/:id/chat/stream", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+
+    if (!isAnthropicConfigured()) {
+      reply.status(503).send({
+        error: { message: "Anthropic is not configured. Set ANTHROPIC_API_KEY in .env.", code: "AI_NOT_CONFIGURED" },
+      });
+      return;
+    }
+
+    const [session] = await db
+      .select()
+      .from(chatSessions)
+      .where(and(eq(chatSessions.id, id), eq(chatSessions.userId, userId)));
+    if (!session) {
+      reply.status(404).send({ error: { message: "Chat not found", code: "NOT_FOUND" } });
+      return;
+    }
+
+    const body = sendChatMessageSchema.parse(request.body);
+
+    const priorRows = await db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.sessionId, id))
+      .orderBy(desc(chatMessages.createdAt))
+      .limit(MAX_HISTORY_MESSAGES);
+    const priorMessages = priorRows.reverse().map(toChatMessage);
+    const isFirstMessage = priorMessages.length === 0;
+
+    const [userMsg] = await db
+      .insert(chatMessages)
+      .values({ sessionId: id, role: "user", content: body.content })
+      .returning();
+    if (!userMsg) throw new Error("failed to save user message");
+
+    const conversation: ChatMessage[] = [...priorMessages, toChatMessage(userMsg)];
+
+    // Take over the socket for Server-Sent Events. Each frame is one JSON object matching
+    // chatStreamEventSchema in @run-far/shared.
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    const send = (event: unknown) => raw.write(`data: ${JSON.stringify(event)}\n\n`);
+
+    try {
+      const turn = await runAssistantChatTurnStream({
+        userId,
+        messages: conversation,
+        onEvent: (event) => send(event),
+      });
+
+      const [assistantMsg] = await db
+        .insert(chatMessages)
+        .values({ sessionId: id, role: "assistant", content: turn.assistantMessage })
+        .returning();
+      if (!assistantMsg) throw new Error("failed to save assistant message");
+
+      const newTitle = isFirstMessage ? titleFromFirstMessage(body.content) : session.title;
+      const updatedAt = new Date();
+      await db
+        .update(chatSessions)
+        .set({ title: newTitle, updatedAt })
+        .where(and(eq(chatSessions.id, id), eq(chatSessions.userId, userId)));
+
+      send({
+        type: "done",
+        session: {
+          id: session.id,
+          title: newTitle,
+          createdAt: session.createdAt.toISOString(),
+          updatedAt: updatedAt.toISOString(),
+        },
+        assistantMessage: toChatMessage(assistantMsg),
+      });
+    } catch (err) {
+      logger.error({ err, userId, sessionId: id }, "assistant chat stream failed");
+      send({
+        type: "error",
+        message: err instanceof Error ? err.message : "AI chat failed",
+        code: "AI_CHAT_FAILED",
+      });
+    } finally {
+      raw.end();
+    }
   });
 
   app.post("/api/assistant/apply", async (request, reply) => {

@@ -372,6 +372,176 @@ export function isAnthropicConfigured(): boolean {
   return Boolean(env.ANTHROPIC_API_KEY);
 }
 
+// Human-readable labels for the live "coach activity" readout the streaming UI shows while
+// the agent consults the athlete's data. Keeps the tool vocabulary out of the athlete's face.
+const TOOL_ACTIVITY_LABELS: Record<string, string> = {
+  get_current_date: "Checking the date",
+  get_athlete_context: "Reviewing your training",
+  get_recovery_history: "Reading recovery",
+  get_recent_activities: "Reviewing recent runs",
+  get_runs: "Reading your week",
+  get_calendar_events: "Checking your calendar",
+  get_weather: "Pulling the forecast",
+  get_active_plan: "Opening your plan",
+  get_recommendations: "Checking flags",
+  send_recovery_email: "Sending your email",
+  propose_schedule_changes: "Drafting changes",
+};
+
+// Validate a propose_schedule_changes tool payload. Shared by the streaming and non-streaming
+// turns so the confirm-before-write contract stays identical on both paths.
+function validateProposalInput(
+  input: unknown,
+): { ok: true; proposal: ScheduleChangeProposal } | { ok: false; error: string } {
+  const parsed = scheduleChangeProposalSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `Invalid proposal: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    };
+  }
+  const badItem = parsed.data.items.find((it) => {
+    if (it.op === "create") return !it.scheduledAt || !it.runType;
+    return !it.runId;
+  });
+  if (badItem) {
+    return {
+      ok: false,
+      error: "Invalid proposal: create items need scheduledAt+runType; update/delete items need runId.",
+    };
+  }
+  return { ok: true, proposal: parsed.data };
+}
+
+export type AssistantStreamEvent =
+  | { type: "tool"; label: string }
+  | { type: "text"; delta: string }
+  | { type: "proposal"; proposal: ScheduleChangeProposal; proposalToken: string };
+
+/**
+ * Streaming twin of runAssistantChatTurn. Runs the same agentic tool loop, but streams the
+ * coach's prose token-by-token and reports each tool the coach consults via `onEvent`, so the
+ * UI can show a live readout instead of a static "Thinking…". Returns the final aggregate
+ * (persisted by the caller) so the confirm-before-write proposal contract is unchanged.
+ *
+ * Text semantics match the non-streaming turn: only the final tool-free turn's text is the
+ * answer. Interim text emitted before a tool call is streamed live for immediacy, but a
+ * subsequent `tool` event signals the client to discard it — so what remains on screen equals
+ * the persisted message.
+ */
+export async function runAssistantChatTurnStream(params: {
+  userId: string;
+  messages: ChatMessage[];
+  onEvent: (event: AssistantStreamEvent) => void;
+}): Promise<{
+  assistantMessage: string;
+  proposal: ScheduleChangeProposal | null;
+  proposalToken: string | null;
+}> {
+  if (!isAnthropicConfigured()) {
+    throw new Error("AI_NOT_CONFIGURED");
+  }
+
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const tz = await getAthleteTimezone(params.userId);
+  const todayIso = isoDate(new Date(), tz);
+
+  const [user] = await db
+    .select({ assistantModel: users.assistantModel })
+    .from(users)
+    .where(eq(users.id, params.userId));
+  const model = user?.assistantModel || env.ANTHROPIC_MODEL;
+
+  const conversation: Anthropic.MessageParam[] = params.messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  let assistantMessage = "";
+  let proposal: ScheduleChangeProposal | null = null;
+  let proposalToken: string | null = null;
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const stream = client.messages.stream({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt(todayIso, tz),
+      tools: TOOLS,
+      messages: conversation,
+    });
+
+    // Stream prose deltas as they arrive.
+    stream.on("text", (delta) => {
+      if (delta) params.onEvent({ type: "text", delta });
+    });
+    // Announce each tool the coach starts consulting, the moment it begins.
+    stream.on("streamEvent", (event) => {
+      if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+        const label = TOOL_ACTIVITY_LABELS[event.content_block.name] ?? "Working";
+        params.onEvent({ type: "tool", label });
+      }
+    });
+
+    const response = await stream.finalMessage();
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    let turnText = "";
+
+    for (const block of response.content) {
+      if (block.type === "text") {
+        turnText += (turnText ? "\n\n" : "") + block.text;
+      } else if (block.type === "tool_use") {
+        if (block.name === "propose_schedule_changes") {
+          const result = validateProposalInput(block.input);
+          if (!result.ok) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              is_error: true,
+              content: result.error,
+            });
+            continue;
+          }
+          proposal = result.proposal;
+          proposalToken = newProposalToken();
+          await saveProposal(proposalToken, proposal, {
+            userId: params.userId,
+            createdAt: new Date().toISOString(),
+          });
+          params.onEvent({ type: "proposal", proposal, proposalToken });
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: `Staged ${result.proposal.items.length} change(s) for the athlete to confirm.`,
+          });
+        } else {
+          const output = await executeTool(
+            block.name,
+            (block.input as Record<string, unknown>) ?? {},
+            params.userId,
+            tz,
+          );
+          toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(output) });
+        }
+      }
+    }
+
+    if (turnText) assistantMessage = turnText;
+    if (toolResults.length === 0) break;
+
+    conversation.push({ role: "assistant", content: response.content });
+    conversation.push({ role: "user", content: toolResults });
+  }
+
+  if (!assistantMessage) {
+    assistantMessage = proposal
+      ? "I've staged those changes — review and confirm below to apply them."
+      : "I'm not sure how to respond to that yet.";
+  }
+
+  return { assistantMessage, proposal, proposalToken };
+}
+
 export async function runAssistantChatTurn(params: {
   userId: string;
   messages: ChatMessage[];
@@ -420,37 +590,23 @@ export async function runAssistantChatTurn(params: {
         turnText += (turnText ? "\n\n" : "") + block.text;
       } else if (block.type === "tool_use") {
         if (block.name === "propose_schedule_changes") {
-          const parsed = scheduleChangeProposalSchema.safeParse(block.input);
-          if (!parsed.success) {
+          const result = validateProposalInput(block.input);
+          if (!result.ok) {
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
               is_error: true,
-              content: `Invalid proposal: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+              content: result.error,
             });
             continue;
           }
-          const badItem = parsed.data.items.find((it) => {
-            if (it.op === "create") return !it.scheduledAt || !it.runType;
-            return !it.runId;
-          });
-          if (badItem) {
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: block.id,
-              is_error: true,
-              content:
-                "Invalid proposal: create items need scheduledAt+runType; update/delete items need runId.",
-            });
-            continue;
-          }
-          proposal = parsed.data;
+          proposal = result.proposal;
           proposalToken = newProposalToken();
           await saveProposal(proposalToken, proposal, { userId: params.userId, createdAt: new Date().toISOString() });
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: `Staged ${parsed.data.items.length} change(s) for the athlete to confirm.`,
+            content: `Staged ${result.proposal.items.length} change(s) for the athlete to confirm.`,
           });
         } else {
           const output = await executeTool(block.name, (block.input as Record<string, unknown>) ?? {}, params.userId, tz);
