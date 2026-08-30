@@ -559,13 +559,18 @@ export async function runAssistantChatTurnStream(params: {
             content: `Staged ${result.proposal.items.length} change(s) for the athlete to confirm.`,
           });
         } else {
-          const output = await executeTool(
-            block.name,
-            (block.input as Record<string, unknown>) ?? {},
-            params.userId,
-            tz,
+          // Route through executeToolSafely so a single tool failure degrades to an
+          // is_error tool_result the model can recover from, rather than throwing out
+          // of the stream and killing the whole turn.
+          toolResults.push(
+            await executeToolSafely(
+              block.name,
+              (block.input as Record<string, unknown>) ?? {},
+              params.userId,
+              tz,
+              block.id,
+            ),
           );
-          toolResults.push({ type: "tool_result", tool_use_id: block.id, content: JSON.stringify(output) });
         }
       }
     }
