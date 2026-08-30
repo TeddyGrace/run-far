@@ -14,7 +14,7 @@ export function Privacy() {
         <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight text-ink-primary">
           Privacy policy
         </h1>
-        <p className="mb-10 text-sm text-ink-muted">Last updated August 17, 2026</p>
+        <p className="mb-10 text-sm text-ink-muted">Last updated August 30, 2026</p>
 
         <div className="space-y-8 text-sm leading-relaxed text-ink-secondary">
           <section>
@@ -64,11 +64,47 @@ export function Privacy() {
           </section>
 
           <section>
-            <h2 className="mb-2 font-display text-lg font-semibold text-ink-primary">How data is stored</h2>
-            <p>
-              Data is hosted on Railway. OAuth tokens (Google, Whoop) are encrypted at rest. Passwords
-              are hashed, never stored in plain text.
+            <h2 className="mb-2 font-display text-lg font-semibold text-ink-primary">
+              How we protect your data
+            </h2>
+            <p className="mb-3">
+              We treat your Google Calendar data, Gmail access, and Whoop health metrics as sensitive
+              and apply the following safeguards to protect them:
             </p>
+            <ul className="list-disc space-y-3 pl-5">
+              <li>
+                <span className="font-medium text-ink-primary">Encryption in transit.</span> All
+                traffic between your device, run-far, and every third-party provider (Google, Whoop,
+                Anthropic) is encrypted using HTTPS/TLS.
+              </li>
+              <li>
+                <span className="font-medium text-ink-primary">Encryption at rest.</span> OAuth access
+                and refresh tokens for Google and Whoop are encrypted before storage using AES-256-GCM
+                authenticated encryption. Plaintext tokens are never written to the database.
+              </li>
+              <li>
+                <span className="font-medium text-ink-primary">Password protection.</span> If you set a
+                password, it is hashed with argon2id and never stored in plain text. We cannot recover
+                or view your password.
+              </li>
+              <li>
+                <span className="font-medium text-ink-primary">Least-privilege access.</span> We
+                request the narrowest Google scopes needed (send-only Gmail, and calendar access
+                limited to the dedicated Running calendar plus read access for conflict detection).
+                Encryption keys are held as server-side secrets, separate from the stored data.
+              </li>
+              <li>
+                <span className="font-medium text-ink-primary">Restricted infrastructure.</span> Data
+                is hosted on Railway, and access to the production database and secrets is limited to
+                the single developer who operates run-far.
+              </li>
+              <li>
+                <span className="font-medium text-ink-primary">Retention and deletion.</span> Your data
+                is kept only while your account is active. When you revoke access or request deletion,
+                the associated tokens and data are removed. You can revoke run-far&apos;s access to your
+                Google account at any time (see below).
+              </li>
+            </ul>
           </section>
 
           <section>
