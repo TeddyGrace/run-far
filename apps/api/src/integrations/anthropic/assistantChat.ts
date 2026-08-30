@@ -16,6 +16,7 @@ import { offsetStringForZone, dateYmdInZone } from "../../lib/zonedTime.js";
 import { formatFeet, formatMiles, withImperialRunFields } from "../../lib/units.js";
 import { sendRecoveryDigestNow } from "../../email/recoveryDigest.js";
 import { hasGoogleConnection } from "../google/push.js";
+import { isInvalidGrant } from "../google/oauth.js";
 import { listPrimaryEvents } from "../google/calendarClient.js";
 import { getForecastForRange } from "../weather/weatherClient.js";
 import { getAthleteLocation } from "../../lib/athleteLocation.js";
@@ -325,8 +326,25 @@ async function executeTool(
       const to =
         typeof input.to === "string" ? input.to : isoDate(new Date(fromDate.getTime() + 14 * 86_400_000), tz);
       const toDate = new Date(`${to}T23:59:59Z`);
-      const events = await listPrimaryEvents(userId, fromDate.toISOString(), toDate.toISOString());
-      return { connected: true, events };
+      try {
+        const events = await listPrimaryEvents(userId, fromDate.toISOString(), toDate.toISOString());
+        return { connected: true, events };
+      } catch (err) {
+        if (isInvalidGrant(err)) {
+          // Stored refresh token is dead (revoked/expired) — the connection row still
+          // exists but is unusable. Degrade to "needs reconnect" instead of failing the turn.
+          logger.warn({ userId }, "google refresh token invalid — prompting reconnect");
+          return {
+            connected: false,
+            needsReauth: true,
+            events: [],
+            message:
+              "The athlete's Google Calendar connection has expired. Tell them to reconnect " +
+              "Google Calendar in Settings.",
+          };
+        }
+        throw err;
+      }
     }
     case "get_weather": {
       const location = await getAthleteLocation(userId);

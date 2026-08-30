@@ -8,6 +8,16 @@ import { logger } from "../../lib/logger.js";
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
+/**
+ * True when Google rejected our stored refresh token (revoked, expired, or superseded).
+ * These are unrecoverable without a fresh OAuth consent — callers should treat the
+ * connection as broken and prompt the user to reconnect, not retry.
+ */
+export function isInvalidGrant(err: unknown): boolean {
+  const e = err as { response?: { data?: { error?: string } }; message?: string };
+  return e?.response?.data?.error === "invalid_grant" || /invalid_grant/.test(e?.message ?? "");
+}
+
 function newOAuthClient(): OAuth2Client {
   return new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REDIRECT_URI);
 }
