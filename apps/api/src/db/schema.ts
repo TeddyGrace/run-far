@@ -127,6 +127,10 @@ export const oauthConnections = pgTable(
     refreshTokenEnc: text("refresh_token_enc").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     scopes: text("scopes").array().notNull().default(sql`'{}'::text[]`),
+    // Set true when the provider rejects our refresh token (invalid_grant): the row still
+    // exists but is unusable until the user re-consents. hasGoogleConnection() treats a
+    // flagged row as disconnected, and re-authorizing clears it. See integrations/google/oauth.ts.
+    needsReauth: boolean("needs_reauth").notNull().default(false),
     // Provider-specific bookkeeping, e.g. Google's dedicated "Running" calendarId.
     metadata: jsonb("metadata").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -6,6 +6,7 @@ import {
   hasGoogleConnection,
   pushPlannedRunToGoogle,
 } from "../integrations/google/push.js";
+import { isInvalidGrant } from "../integrations/google/oauth.js";
 import { logger } from "../lib/logger.js";
 
 export async function getActivePlanId(userId: string): Promise<string | null> {
@@ -133,6 +134,10 @@ export async function resyncPlanToGoogle(
       await pushPlannedRunToGoogle(run.id, userId);
       synced++;
     } catch (err) {
+      // A dead refresh token fails every remaining run identically — getAuthedClient has
+      // already flagged the connection needs-reauth, so stop and surface that distinctly
+      // instead of grinding out N identical failures and reporting an opaque failed count.
+      if (isInvalidGrant(err)) throw new Error("GOOGLE_NEEDS_REAUTH");
       failed++;
       logger.error({ err, runId: run.id, planId }, "failed to resync plan run to google");
     }

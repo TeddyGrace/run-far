@@ -8,10 +8,12 @@ import { formatMiles } from "../../lib/units.js";
 
 export async function hasGoogleConnection(userId: string): Promise<boolean> {
   const [conn] = await db
-    .select({ id: oauthConnections.id })
+    .select({ id: oauthConnections.id, needsReauth: oauthConnections.needsReauth })
     .from(oauthConnections)
     .where(and(eq(oauthConnections.userId, userId), eq(oauthConnections.provider, "google")));
-  return Boolean(conn);
+  // A row flagged needsReauth exists but its refresh token is dead — treat as disconnected
+  // so every caller (sync, resync, the assistant) uniformly no-ops or prompts reconnect.
+  return Boolean(conn) && !conn?.needsReauth;
 }
 
 function toEventInput(run: typeof plannedRuns.$inferSelect): EventUpsertInput {

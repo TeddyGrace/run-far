@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_connections" ADD COLUMN "needs_reauth" boolean DEFAULT false NOT NULL;

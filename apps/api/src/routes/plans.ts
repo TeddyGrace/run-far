@@ -121,6 +121,12 @@ export async function planRoutes(app: FastifyInstance) {
           .send({ error: { message: "Connect Google Calendar in Settings first", code } });
         return;
       }
+      if (code === "GOOGLE_NEEDS_REAUTH") {
+        reply
+          .status(400)
+          .send({ error: { message: "Google Calendar access expired — reconnect it in Settings", code } });
+        return;
+      }
       throw err;
     }
   });

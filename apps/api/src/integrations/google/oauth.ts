@@ -18,6 +18,20 @@ export function isInvalidGrant(err: unknown): boolean {
   return e?.response?.data?.error === "invalid_grant" || /invalid_grant/.test(e?.message ?? "");
 }
 
+/**
+ * Flags a Google connection as needing re-authorization after an invalid_grant. Every gate
+ * (hasGoogleConnection) then treats it as disconnected until the user re-consents, which
+ * clears the flag via persistGoogleTokens. Best-effort: a failure to mark just means the
+ * next request re-detects and re-marks.
+ */
+export async function markGoogleNeedsReauth(userId: string): Promise<void> {
+  await db
+    .update(oauthConnections)
+    .set({ needsReauth: true, updatedAt: new Date() })
+    .where(and(eq(oauthConnections.userId, userId), eq(oauthConnections.provider, "google")))
+    .catch((err) => logger.error({ err, userId }, "failed to flag google connection needs-reauth"));
+}
+
 function newOAuthClient(): OAuth2Client {
   return new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REDIRECT_URI);
 }
@@ -59,6 +73,7 @@ export async function persistGoogleTokens(
         refreshTokenEnc: encryptSecret(tokens.refresh_token),
         expiresAt,
         scopes,
+        needsReauth: false,
       })
       .onConflictDoUpdate({
         target: [oauthConnections.userId, oauthConnections.provider],
@@ -67,6 +82,7 @@ export async function persistGoogleTokens(
           refreshTokenEnc: encryptSecret(tokens.refresh_token),
           expiresAt,
           scopes,
+          needsReauth: false, // fresh consent — connection is healthy again
           updatedAt: new Date(),
         },
       });
@@ -75,7 +91,7 @@ export async function persistGoogleTokens(
 
   const updated = await db
     .update(oauthConnections)
-    .set({ accessTokenEnc, expiresAt, scopes, updatedAt: new Date() })
+    .set({ accessTokenEnc, expiresAt, scopes, needsReauth: false, updatedAt: new Date() })
     .where(and(eq(oauthConnections.userId, userId), eq(oauthConnections.provider, "google")))
     .returning({ id: oauthConnections.id });
 
@@ -124,6 +140,18 @@ export async function getAuthedClient(userId: string): Promise<OAuth2Client> {
         .catch((err) => logger.error({ err, userId }, "failed to persist refreshed google token"));
     }
   });
+
+  // Central chokepoint for detecting a dead refresh token. getAccessToken() returns the
+  // cached token untouched when it's still valid (no network call), and refreshes it when
+  // expired — the same refresh the first API call would trigger. Surfacing it here means a
+  // revoked/expired refresh token is caught and flagged once, in one place, rather than
+  // throwing raw from whichever calendar call happened to run first.
+  try {
+    await client.getAccessToken();
+  } catch (err) {
+    if (isInvalidGrant(err)) await markGoogleNeedsReauth(userId);
+    throw err;
+  }
 
   return client;
 }
