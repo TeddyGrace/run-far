@@ -14,7 +14,7 @@ export function Privacy() {
         <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight text-ink-primary">
           Privacy policy
         </h1>
-        <p className="mb-10 text-sm text-ink-muted">Last updated August 30, 2026</p>
+        <p className="mb-10 text-sm text-ink-muted">Last updated September 1, 2026</p>
 
         <div className="space-y-8 text-sm leading-relaxed text-ink-secondary">
           <section>
@@ -113,6 +113,31 @@ export function Privacy() {
               We don&apos;t sell or share your data. It&apos;s only sent to the service providers
               listed above (Google, Whoop, Anthropic), and only as needed to provide the app&apos;s
               features.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="mb-2 font-display text-lg font-semibold text-ink-primary">
+              Limited Use of Google user data
+            </h2>
+            <p className="mb-3">
+              run-far&apos;s use and transfer of information received from Google APIs adheres to the{" "}
+              <a
+                href="https://developers.google.com/terms/api-services-user-data-policy"
+                target="_blank"
+                rel="noreferrer"
+                className="text-ink-primary underline-offset-4 hover:underline"
+              >
+                Google API Services User Data Policy
+              </a>
+              , including the Limited Use requirements.
+            </p>
+            <p>
+              In particular, raw or derived data received from Google Workspace APIs is never used,
+              transferred, or sold to develop, improve, or train foundational or generalized machine
+              learning or artificial intelligence models. Any AI features (the plan builder and
+              assistant chat) operate only on your training schedule to generate responses for you, and
+              our AI provider (Anthropic) does not train its models on data sent through its API.
             </p>
           </section>
 
