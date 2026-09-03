@@ -1,10 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   AiPlanDraft,
   ImportPreview,
-  PlanAiChatResponse,
   PlanChatMessage,
+  PlanChatStreamEvent,
   TrainingPlan,
 } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
@@ -381,6 +381,25 @@ function CsvImport({
   );
 }
 
+const PLAN_STARTER_PROMPTS = [
+  "12-week half marathon, currently ~25 mi/week",
+  "Move all my runs to weekday evenings",
+  "Add a recovery week before my next block",
+];
+
+interface DescribeMessage {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+function formatChatTime(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 function DescribePlan({
   onCancel,
   onError,
@@ -390,27 +409,130 @@ function DescribePlan({
   onError: (msg: string | null) => void;
   onSuccess: (data: { inserted: number; updated: number; skipped: number }) => void;
 }) {
-  const [messages, setMessages] = useState<PlanChatMessage[]>([]);
+  const [messages, setMessages] = useState<DescribeMessage[]>([]);
   const [input, setInput] = useState("");
   const [draftToken, setDraftToken] = useState<string | null>(null);
   const [draft, setDraft] = useState<AiPlanDraft | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [planName, setPlanName] = useState("");
 
-  const chat = useMutation({
-    mutationFn: (nextMessages: PlanChatMessage[]) =>
-      api.post<PlanAiChatResponse>("/plans/ai/chat", { messages: nextMessages }),
-    onSuccess: (data, nextMessages) => {
-      setMessages([...nextMessages, { role: "assistant", content: data.assistantMessage }]);
-      if (data.draft && data.draftToken) {
-        setDraft(data.draft);
-        setDraftToken(data.draftToken);
-        setPlanName(data.draft.name);
-      }
-      onError(null);
-    },
-    onError: (err) => onError(err instanceof ApiError ? err.message : "Chat failed"),
-  });
+  const [streaming, setStreaming] = useState(false);
+  const [streamText, setStreamText] = useState("");
+  const [activity, setActivity] = useState<string[]>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const lastMessagesRef = useRef<PlanChatMessage[] | null>(null);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [stuckToBottom, setStuckToBottom] = useState(true);
+
+  useEffect(() => {
+    if (stuckToBottom) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    }
+  }, [messages, streamText, activity, stuckToBottom]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  function onScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    setStuckToBottom(nearBottom);
+  }
+
+  function jumpToLatest() {
+    setStuckToBottom(true);
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }
+
+  function clearTurn() {
+    setStreaming(false);
+    setStreamText("");
+    setActivity([]);
+  }
+
+  async function runStream(nextMessages: PlanChatMessage[]) {
+    lastMessagesRef.current = nextMessages;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setChatError(null);
+    setStreaming(true);
+    setStreamText("");
+    setActivity([]);
+    setStuckToBottom(true);
+
+    let doneEvent: Extract<PlanChatStreamEvent, { type: "done" }> | null = null;
+    let errorEvent: Extract<PlanChatStreamEvent, { type: "error" }> | null = null;
+
+    try {
+      await api.stream<PlanChatStreamEvent>(
+        "/plans/ai/chat/stream",
+        { messages: nextMessages },
+        (event) => {
+          switch (event.type) {
+            case "text":
+              setStreamText((t) => t + event.delta);
+              break;
+            case "tool":
+              // Text emitted before a tool call is interim, not the answer — drop it and log
+              // the activity instead.
+              setStreamText("");
+              setActivity((a) => [...a, event.label]);
+              break;
+            case "draft":
+              setDraft(event.draft);
+              setDraftToken(event.draftToken);
+              setPlanName(event.draft.name);
+              break;
+            case "done":
+              doneEvent = event;
+              break;
+            case "error":
+              errorEvent = event;
+              break;
+          }
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      if (controller.signal.aborted) return; // superseded by a newer send; nothing to show
+      setChatError(err instanceof ApiError ? err.message : "The coach didn't respond");
+      clearTurn();
+      return;
+    }
+
+    if (errorEvent) {
+      setChatError((errorEvent as { message: string }).message);
+      clearTurn();
+      return;
+    }
+
+    const done = doneEvent as Extract<PlanChatStreamEvent, { type: "done" }> | null;
+    if (done) {
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", content: done.assistantMessage, createdAt: new Date().toISOString() },
+      ]);
+    }
+    clearTurn();
+  }
+
+  function send(text?: string) {
+    const content = (text ?? input).trim();
+    if (!content || streaming) return;
+    setInput("");
+    const userMsg: DescribeMessage = { role: "user", content, createdAt: new Date().toISOString() };
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
+    void runStream(nextMessages.map((m) => ({ role: m.role, content: m.content })));
+  }
+
+  function retry() {
+    if (lastMessagesRef.current) void runStream(lastMessagesRef.current);
+  }
 
   const commit = useMutation({
     mutationFn: () =>
@@ -421,15 +543,6 @@ function DescribePlan({
     onSuccess: (data) => onSuccess(data),
     onError: (err) => onError(err instanceof ApiError ? err.message : "Couldn't save that plan"),
   });
-
-  function send() {
-    const text = input.trim();
-    if (!text || chat.isPending) return;
-    const next: PlanChatMessage[] = [...messages, { role: "user", content: text }];
-    setInput("");
-    setMessages(next);
-    chat.mutate(next);
-  }
 
   if (previewing && draft) {
     return (
@@ -478,61 +591,54 @@ function DescribePlan({
     );
   }
 
+  const showEmpty = messages.length === 0 && !streaming;
+
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-ink-secondary">
-        Describe your goal, timeline, and available days — or ask to revise your current plan
-        (e.g. “move all my runs to 4:30pm”). The coach will propose a plan you can preview
-        before it goes on your calendar.
-      </p>
-
-      <div className="max-h-80 space-y-3 overflow-y-auto rounded-xl border border-border bg-surface-1 p-4">
-        {messages.length === 0 && (
-          <p className="text-sm text-ink-muted">
-            e.g. “12-week half marathon plan, currently ~25 mi/week, can train Mon–Fri mornings and
-            Sunday long run.”
-          </p>
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={`${m.role}-${i}`}
-            className={clsx(
-              "text-sm",
-              m.role === "user" ? "whitespace-pre-wrap text-ink-primary" : "text-ink-secondary",
-            )}
-          >
-            <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-ink-muted">
-              {m.role === "user" ? "You" : "Coach"}
-            </span>
-            {m.role === "user" ? m.content : <Markdown content={m.content} />}
-          </div>
-        ))}
-        {chat.isPending && <p className="text-sm text-ink-muted">Thinking…</p>}
-      </div>
-
-      <div className="flex gap-2">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          rows={2}
-          placeholder="Message the coach…"
-          className="min-h-[2.75rem] flex-1 resize-y rounded-md border border-border bg-surface-1 px-3 py-2 text-base text-ink-primary sm:text-sm"
-        />
-        <button
-          type="button"
-          onClick={send}
-          disabled={chat.isPending || !input.trim()}
-          className="self-end rounded-md bg-accent px-4 py-2 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+    <div className="space-y-3">
+      <div className="relative">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="max-h-96 space-y-4 overflow-y-auto rounded-xl border border-border bg-surface-1 p-4"
         >
-          Send
-        </button>
+          {showEmpty && <DescribeEmptyState onPick={(p) => send(p)} disabled={streaming} />}
+
+          {messages.map((m, i) => (
+            <DescribeMessageRow key={i} role={m.role} content={m.content} createdAt={m.createdAt} />
+          ))}
+
+          {streaming && activity.length > 0 && !streamText && <DescribeActivity activity={activity} />}
+
+          {streaming && streamText && (
+            <DescribeMessageRow role="assistant" content={streamText} createdAt="" streaming />
+          )}
+        </div>
+
+        {!stuckToBottom && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-surface-2 px-3 py-1 text-xs font-medium text-ink-secondary shadow-lg hover:text-ink-primary"
+          >
+            Jump to latest ↓
+          </button>
+        )}
       </div>
+
+      {chatError && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-zone-red/30 bg-zone-red/5 px-3 py-2">
+          <p className="text-xs text-zone-red">{chatError}</p>
+          <button
+            type="button"
+            onClick={retry}
+            className="shrink-0 rounded-md border border-zone-red/40 px-2 py-1 text-xs font-medium text-zone-red hover:bg-zone-red/10"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      <DescribeComposer value={input} onChange={setInput} onSend={() => send()} disabled={streaming} />
 
       <div className="flex flex-wrap items-center gap-3">
         {draft && draftToken && (
@@ -552,6 +658,158 @@ function DescribePlan({
           Cancel
         </button>
       </div>
+    </div>
+  );
+}
+
+function DescribeMessageRow({
+  role,
+  content,
+  createdAt,
+  streaming,
+}: {
+  role: DescribeMessage["role"];
+  content: string;
+  createdAt: string;
+  streaming?: boolean;
+}) {
+  const time = formatChatTime(createdAt);
+  if (role === "user") {
+    return (
+      <div className="flex flex-col items-end">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-surface-2 px-3.5 py-2 text-sm text-ink-primary">
+          <p className="whitespace-pre-wrap">{content}</p>
+        </div>
+        {time && <span className="mt-1 pr-1 font-mono text-[10px] text-ink-muted">{time}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="border-l-2 border-accent/40 pl-3">
+      <div className="text-sm text-ink-secondary [&_strong]:text-ink-primary">
+        <Markdown content={content} />
+        {streaming && (
+          <span className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-0.5 animate-pulse bg-accent-strong align-middle" />
+        )}
+      </div>
+      {time && <span className="mt-1 block font-mono text-[10px] text-ink-muted">{time}</span>}
+    </div>
+  );
+}
+
+/** Live readout of the tools the coach is consulting while drafting, ticking in like splits. */
+function DescribeActivity({ activity }: { activity: string[] }) {
+  return (
+    <div className="border-l-2 border-accent/40 pl-3">
+      <ul className="space-y-1.5">
+        {activity.map((label, i) => {
+          const active = i === activity.length - 1;
+          return (
+            <li key={i} className="flex items-center gap-2 font-mono text-xs">
+              <span className="flex h-2 w-2 items-center justify-center">
+                {active ? (
+                  <span className="flex gap-[2px]">
+                    <span className="h-2 w-[2px] animate-pulse rounded bg-accent-strong" />
+                    <span
+                      className="h-2 w-[2px] animate-pulse rounded bg-accent-strong"
+                      style={{ animationDelay: "150ms" }}
+                    />
+                    <span
+                      className="h-2 w-[2px] animate-pulse rounded bg-accent-strong"
+                      style={{ animationDelay: "300ms" }}
+                    />
+                  </span>
+                ) : (
+                  <span className="text-accent">✓</span>
+                )}
+              </span>
+              <span className={active ? "text-ink-secondary" : "text-ink-muted line-through decoration-border"}>
+                {label}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function DescribeEmptyState({ onPick, disabled }: { onPick: (prompt: string) => void; disabled: boolean }) {
+  return (
+    <div className="flex flex-col gap-4 py-2">
+      <div className="border-l-2 border-accent/40 pl-3">
+        <p className="text-sm text-ink-secondary">
+          Describe your goal, timeline, and available days — or ask to revise your current plan
+          (e.g. "move all my runs to 4:30pm"). I'll propose a plan you can preview before it goes
+          on your calendar.
+        </p>
+      </div>
+      <div className="flex flex-col gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-muted">Try asking</span>
+        {PLAN_STARTER_PROMPTS.map((p) => (
+          <button
+            key={p}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(p)}
+            className="group flex items-center justify-between gap-2 rounded-xl border border-border bg-surface-2 px-3.5 py-2.5 text-left text-sm text-ink-primary transition-colors hover:border-accent/40 hover:bg-surface-0 disabled:opacity-50"
+          >
+            <span>{p}</span>
+            <span className="text-ink-muted transition-colors group-hover:text-accent-strong">→</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DescribeComposer({
+  value,
+  onChange,
+  onSend,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  disabled: boolean;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [value]);
+
+  return (
+    <div className="flex items-end gap-2">
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+        rows={1}
+        placeholder="Message the coach…"
+        className="max-h-[120px] min-h-[2.75rem] flex-1 resize-none rounded-xl border border-border bg-surface-1 px-3.5 py-2.5 text-base text-ink-primary placeholder:text-ink-muted sm:text-sm"
+      />
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={disabled || !value.trim()}
+        aria-label="Send message"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
+      >
+        <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M13 6l6 6-6 6" />
+        </svg>
+      </button>
     </div>
   );
 }

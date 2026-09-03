@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { eq } from "drizzle-orm";
-import { aiPlanDraftSchema, type AiPlanDraft, type PlanChatMessage } from "@run-far/shared";
+import {
+  aiPlanDraftSchema,
+  type AiPlanDraft,
+  type PlanChatMessage,
+  type PlanChatStreamEvent,
+} from "@run-far/shared";
 import { env } from "../../env.js";
 import { db } from "../../db/client.js";
 import { users } from "../../db/schema.js";
@@ -197,6 +202,18 @@ function planSchemaForTool(): Anthropic.Tool.InputSchema {
 export function isAnthropicConfigured(): boolean {
   return Boolean(env.ANTHROPIC_API_KEY);
 }
+
+// Human-readable labels for the live "coach activity" readout the streaming UI shows while the
+// coach is consulting data or drafting. Keeps the tool vocabulary out of the athlete's face.
+const TOOL_ACTIVITY_LABELS: Record<string, string> = {
+  get_current_date: "Checking the date",
+  get_athlete_context: "Reviewing your training",
+  get_active_plan: "Opening your plan",
+  shift_run_times: "Applying your training time",
+  compute_plan_window: "Mapping out the weeks",
+  validate_training_plan: "Validating the plan",
+  propose_training_plan: "Drafting your plan",
+};
 
 interface ToolBounds {
   startDate?: string;
@@ -422,6 +439,155 @@ export async function runPlanChatTurn(params: {
         createdAt: new Date().toISOString(),
       });
     }
+  }
+
+  if (draft && !assistantMessage) {
+    assistantMessage =
+      draft.summary ??
+      `Here's a draft plan (“${draft.name}”) with ${draft.runs.length} sessions. Preview it below, or tell me what to change.`;
+  }
+  if (!assistantMessage) {
+    assistantMessage = "Tell me more about your goal, timeline, and how many days you can train.";
+  }
+
+  return { assistantMessage, draftToken, draft };
+}
+
+/**
+ * Streaming twin of runPlanChatTurn. Runs the same agentic tool loop, but streams the coach's
+ * prose token-by-token and reports each tool the coach consults via `onEvent`, so the UI can
+ * show a live readout instead of a static "Thinking…". A successful propose_training_plan call
+ * emits a `draft` event (this chat's analog of the assistant's `proposal` event) as soon as the
+ * draft is validated and saved, rather than waiting for the whole turn to finish.
+ */
+export async function runPlanChatTurnStream(params: {
+  userId: string;
+  messages: PlanChatMessage[];
+  onEvent: (event: PlanChatStreamEvent) => void;
+}): Promise<{
+  assistantMessage: string;
+  draftToken: string | null;
+  draft: AiPlanDraft | null;
+}> {
+  if (!isAnthropicConfigured()) {
+    throw new Error("AI_NOT_CONFIGURED");
+  }
+
+  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const tz = await getAthleteTimezone(params.userId);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const bounds: ToolBounds = {};
+
+  const [user] = await db
+    .select({ planModel: users.planModel })
+    .from(users)
+    .where(eq(users.id, params.userId));
+  const model = user?.planModel || env.ANTHROPIC_MODEL;
+
+  const conversation: Anthropic.MessageParam[] = params.messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  let assistantMessage = "";
+  let draft: AiPlanDraft | null = null;
+  let draftToken: string | null = null;
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const stream = client.messages.stream({
+      model,
+      max_tokens: 8192,
+      system: systemPrompt(todayIso, tz),
+      tools: TOOLS,
+      messages: conversation,
+    });
+
+    stream.on("text", (delta) => {
+      if (delta) params.onEvent({ type: "text", delta });
+    });
+    stream.on("streamEvent", (event) => {
+      if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+        const label = TOOL_ACTIVITY_LABELS[event.content_block.name] ?? "Working";
+        params.onEvent({ type: "tool", label });
+      }
+    });
+
+    const response = await stream.finalMessage();
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    let turnText = "";
+    let proposedThisTurn = false;
+
+    for (const block of response.content) {
+      if (block.type === "text") {
+        turnText += (turnText ? "\n\n" : "") + block.text;
+      } else if (block.type === "tool_use") {
+        if (block.name === "propose_training_plan") {
+          const parsed = aiPlanDraftSchema.safeParse(block.input);
+          if (!parsed.success) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              is_error: true,
+              content: `Invalid plan: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+            });
+            continue;
+          }
+          const check = validatePlanDraft({
+            draft: parsed.data,
+            today: new Date(),
+            startDate: bounds.startDate,
+            raceDate: bounds.raceDate,
+            availableWeekdays: bounds.availableWeekdays,
+          });
+          if (!check.valid) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              is_error: true,
+              content: `Plan rejected by validator. Fix these errors then re-propose: ${check.errors.join("; ")}`,
+            });
+            continue;
+          }
+          draft = parsed.data;
+          proposedThisTurn = true;
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: `Accepted. ${check.warnings.length ? `Warnings: ${check.warnings.join("; ")}` : "No warnings."}`,
+          });
+        } else {
+          const output = await executeTool(
+            block.name,
+            (block.input as Record<string, unknown>) ?? {},
+            { userId: params.userId, bounds, timeZone: tz },
+          );
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: block.id,
+            content: JSON.stringify(output),
+          });
+        }
+      }
+    }
+
+    if (turnText) assistantMessage = turnText;
+
+    if (proposedThisTurn && draft) {
+      draftToken = newDraftToken();
+      const brief = params.messages.find((m) => m.role === "user")?.content.slice(0, 500) ?? null;
+      await saveAiDraft(draftToken, draft, {
+        userId: params.userId,
+        brief,
+        createdAt: new Date().toISOString(),
+      });
+      params.onEvent({ type: "draft", draft, draftToken });
+    }
+
+    if (toolResults.length === 0) break;
+
+    conversation.push({ role: "assistant", content: response.content });
+    conversation.push({ role: "user", content: toolResults });
   }
 
   if (draft && !assistantMessage) {

@@ -165,3 +165,21 @@ export const commitAiPlanSchema = z.object({
   planName: z.string().min(1).max(120).optional(),
 });
 export type CommitAiPlanInput = z.infer<typeof commitAiPlanSchema>;
+
+// --- Streaming plan chat events (SSE). Mirrors chatStreamEventSchema in schemas/chat.ts: one
+// JSON object per SSE frame. `draft` is this chat's analog of Assistant's `proposal` — a
+// finished, validated plan staged for the athlete to preview before committing. There's no
+// `session` object on `done` since plan-chat turns aren't persisted server-side. ---
+
+export const planChatStreamEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("tool"), label: z.string() }),
+  z.object({ type: z.literal("text"), delta: z.string() }),
+  z.object({
+    type: z.literal("draft"),
+    draft: aiPlanDraftSchema,
+    draftToken: z.string(),
+  }),
+  z.object({ type: z.literal("done"), assistantMessage: z.string() }),
+  z.object({ type: z.literal("error"), message: z.string(), code: z.string().optional() }),
+]);
+export type PlanChatStreamEvent = z.infer<typeof planChatStreamEventSchema>;

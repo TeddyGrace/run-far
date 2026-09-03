@@ -14,7 +14,11 @@ import { db } from "../db/client.js";
 import { trainingPlans, plannedRuns } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
 import { activatePlan, archivePlan, resyncPlanToGoogle, unarchivePlan } from "../plans/lifecycle.js";
-import { isAnthropicConfigured, runPlanChatTurn } from "../integrations/anthropic/planChat.js";
+import {
+  isAnthropicConfigured,
+  runPlanChatTurn,
+  runPlanChatTurnStream,
+} from "../integrations/anthropic/planChat.js";
 import { loadAiDraft } from "../integrations/anthropic/draftStore.js";
 
 export async function planRoutes(app: FastifyInstance) {
@@ -173,6 +177,53 @@ export async function planRoutes(app: FastifyInstance) {
           code: "AI_CHAT_FAILED",
         },
       });
+    }
+  });
+
+  app.post("/api/plans/ai/chat/stream", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+
+    if (!isAnthropicConfigured()) {
+      reply.status(503).send({
+        error: {
+          message: "Anthropic is not configured. Set ANTHROPIC_API_KEY in .env.",
+          code: "AI_NOT_CONFIGURED",
+        },
+      });
+      return;
+    }
+
+    const body = planAiChatRequestSchema.parse(request.body);
+
+    // Take over the socket for Server-Sent Events. Each frame is one JSON object matching
+    // planChatStreamEventSchema in @run-far/shared.
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    const send = (event: unknown) => raw.write(`data: ${JSON.stringify(event)}\n\n`);
+
+    try {
+      const turn = await runPlanChatTurnStream({
+        userId,
+        messages: body.messages,
+        onEvent: (event) => send(event),
+      });
+      send({ type: "done", assistantMessage: turn.assistantMessage });
+    } catch (err) {
+      logger.error({ err, userId }, "plan AI chat stream failed");
+      send({
+        type: "error",
+        message: err instanceof Error ? err.message : "AI chat failed",
+        code: "AI_CHAT_FAILED",
+      });
+    } finally {
+      raw.end();
     }
   });
 
