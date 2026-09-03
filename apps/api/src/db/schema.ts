@@ -479,9 +479,12 @@ export const invitedEmails = pgTable("invited_emails", {
   invitedAt: timestamp("invited_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// One row per email that has attempted (and been denied) Google sign-up — upserted by
-// findOrCreateGoogleUser (routes/auth.ts) so the backoffice can surface real access requests
-// instead of relying on the client-side mailto link in AccessRequested.tsx.
+// One row per email that has attempted a sign-up/sign-in without being on the invite
+// allowlist — upserted by recordAccessRequest (routes/auth.ts). Not an actionable queue on
+// its own: the backoffice joins this into the users list (GET /api/admin/users) to show
+// attempt counts inline on the pending account, since every uninvited signup already creates
+// a `users` row with approvedAt null. `status` here is just a log of what happened to the
+// email, not a gate — approving/denying always acts on the users row.
 export const accessRequests = pgTable("access_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),

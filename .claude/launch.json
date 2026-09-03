@@ -12,6 +12,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["run", "dev:api"],
       "port": 8787
+    },
+    {
+      "name": "backoffice",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["run", "dev:backoffice"],
+      "port": 5175
     }
   ]
 }

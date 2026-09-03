@@ -75,6 +75,9 @@ async function recordAccessRequest(email: string): Promise<void> {
       set: {
         lastRequestedAt: new Date(),
         requestCount: sql`${accessRequests.requestCount} + 1`,
+        // A returning applicant should resurface in the review queue even if a prior request
+        // was invited/dismissed — status isn't a permanent verdict, just "where things stand".
+        status: "pending",
       },
     });
 }

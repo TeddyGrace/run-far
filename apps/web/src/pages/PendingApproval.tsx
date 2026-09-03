@@ -1,8 +1,18 @@
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth, useLogout } from "../lib/auth.js";
 
 export function PendingApproval() {
   const { user } = useAuth();
   const logout = useLogout();
+  const queryClient = useQueryClient();
+  const [checking, setChecking] = useState(false);
+
+  const checkAgain = async () => {
+    setChecking(true);
+    await queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+    setChecking(false);
+  };
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-surface-0 px-6">
@@ -21,17 +31,27 @@ export function PendingApproval() {
           is waiting on approval.
         </p>
         <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
-          You'll be able to sign in as soon as it's approved — no need to do anything else.
-          Check back later, or sign out for now.
+          You'll be let in automatically as soon as it's approved. You can check now, or sign
+          out for the moment.
         </p>
 
-        <button
-          type="button"
-          onClick={() => logout()}
-          className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-2.5 text-sm font-medium text-ink-primary transition-[border-color,background-color] duration-200 hover:border-accent/50 hover:bg-surface-2"
-        >
-          Sign out
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={checkAgain}
+            disabled={checking}
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-3 py-2.5 text-sm font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {checking ? "Checking…" : "Check again"}
+          </button>
+          <button
+            type="button"
+            onClick={() => logout()}
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-2.5 text-sm font-medium text-ink-primary transition-[border-color,background-color] duration-200 hover:border-accent/50 hover:bg-surface-2"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
 
       <style>{`

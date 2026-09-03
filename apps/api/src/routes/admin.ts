@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { env } from "../env.js";
@@ -46,9 +46,9 @@ async function loadDestructibleUser(id: string, reply: FastifyReply) {
 
 /**
  * Approves whatever account exists for `email`, idempotently, and keeps the invite/access-request
- * surfaces in sync. Every approval path (invite creation, the users list, the access-requests
- * list) funnels through here so the behaviour — and the single "you're approved" email — is
- * identical no matter where the admin clicked.
+ * surfaces in sync. Every approval path (invite creation, the users list) funnels through here so
+ * the behaviour — and the single "you're approved" email — is identical no matter where the admin
+ * clicked.
  *
  * The `isNull(approvedAt)` guard is the idempotency key: re-approving an already-approved account
  * flips nothing and sends no second email. Returns the row it actually flipped, or undefined when
@@ -58,8 +58,8 @@ async function approveExistingUser(
   email: string,
   adminId: string,
 ): Promise<{ id: string; email: string; approvedAt: Date | null } | undefined> {
-  // Always ensure the email is invited (allowlisted) and drops off the access-requests list,
-  // even when there's no account yet — this is what makes a future signup auto-approve.
+  // Always ensure the email is invited (allowlisted) and drops off the access-requests review
+  // queue, even when there's no account yet — this is what makes a future signup auto-approve.
   await db
     .insert(invitedEmails)
     .values({ email, invitedBy: adminId })
@@ -102,7 +102,21 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/api/admin/invites", async (request, reply) => {
     const userId = await requireAdminUserId(request, reply);
     if (!userId) return;
-    return db.select().from(invitedEmails).orderBy(desc(invitedEmails.invitedAt));
+    // hasAccount lets the backoffice hide invites that already turned into an account — the
+    // invite list's job is "who may sign up", not a permanent log of who was ever approved.
+    const rows = await db
+      .select({
+        id: invitedEmails.id,
+        email: invitedEmails.email,
+        note: invitedEmails.note,
+        invitedBy: invitedEmails.invitedBy,
+        invitedAt: invitedEmails.invitedAt,
+        hasAccount: sql<boolean>`(${users.id} is not null)`,
+      })
+      .from(invitedEmails)
+      .leftJoin(users, eq(users.email, invitedEmails.email))
+      .orderBy(desc(invitedEmails.invitedAt));
+    return rows;
   });
 
   app.post("/api/admin/invites", async (request, reply) => {
@@ -122,9 +136,10 @@ export async function adminRoutes(app: FastifyInstance) {
       .returning();
 
     // Auto-approve any account already waiting for this email, and drop them off the
-    // access-requests list. Exactly one email goes out per invite: if an existing pending
-    // account was just approved, approveExistingUser already sent the "you're approved" mail;
-    // otherwise (no account yet, or already approved) send the invitation with a signup link.
+    // access-requests review queue. Exactly one email goes out per invite: if an existing
+    // pending account was just approved, approveExistingUser already sent the "you're
+    // approved" mail; otherwise (no account yet, or already approved) send the invitation
+    // with a signup link.
     const approved = await approveExistingUser(email, userId);
     if (!approved) {
       sendSystemMail({ to: email, ...inviteEmail() }).catch((err) =>
@@ -144,46 +159,15 @@ export async function adminRoutes(app: FastifyInstance) {
     reply.status(204).send();
   });
 
-  app.get("/api/admin/access-requests", async (request, reply) => {
-    const userId = await requireAdminUserId(request, reply);
-    if (!userId) return;
-    return db.select().from(accessRequests).orderBy(desc(accessRequests.lastRequestedAt));
-  });
-
-  app.post("/api/admin/access-requests/:id/approve", async (request, reply) => {
-    const userId = await requireAdminUserId(request, reply);
-    if (!userId) return;
-
-    const { id } = idParamSchema.parse(request.params);
-    const [requested] = await db.select().from(accessRequests).where(eq(accessRequests.id, id));
-    if (!requested) {
-      reply.status(404).send({ error: { message: "Access request not found", code: "NOT_FOUND" } });
-      return;
-    }
-
-    // Approve any pending account for this email (sends the "you're approved" mail). If there's
-    // no account yet — the common case, someone who was denied and hasn't registered — send them
-    // the invitation instead, so approving from this list always notifies someone.
-    const approved = await approveExistingUser(requested.email, userId);
-    if (!approved) {
-      sendSystemMail({ to: requested.email, ...inviteEmail() }).catch((err) =>
-        logger.error({ err, email: requested.email }, "failed to send invite email"),
-      );
-    }
-
-    const [updated] = await db
-      .update(accessRequests)
-      .set({ status: "invited" })
-      .where(eq(accessRequests.id, id))
-      .returning();
-    return updated;
-  });
-
   // --- Accounts ---
   //
   // The invite list only gates account CREATION, so removing an invite does nothing to an
   // account that already exists — revoking a real account happens here instead. Disabling is
   // reversible and keeps their data; deleting is not, and cascades to everything they own.
+  //
+  // "Needs review" in the backoffice is just this same list filtered to !approvedAt &&
+  // !disabledAt — accessRequests.requestCount/lastRequestedAt are joined in so the backoffice
+  // can show sign-in attempt history inline instead of as a separate, actionable queue.
 
   app.get("/api/admin/users", async (request, reply) => {
     const userId = await requireAdminUserId(request, reply);
@@ -198,8 +182,11 @@ export async function adminRoutes(app: FastifyInstance) {
         emailVerifiedAt: users.emailVerifiedAt,
         signupSource: users.signupSource,
         createdAt: users.createdAt,
+        requestCount: accessRequests.requestCount,
+        lastRequestedAt: accessRequests.lastRequestedAt,
       })
       .from(users)
+      .leftJoin(accessRequests, eq(accessRequests.email, users.email))
       .orderBy(desc(users.createdAt));
   });
 
@@ -218,10 +205,41 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     // Idempotent: approveExistingUser only flips a pending row and only emails when it does, so
-    // approving an already-approved account (a double click, or overlap with the access-requests
-    // list) is a no-op that returns the current row without re-sending the approval email.
+    // approving an already-approved account (a double click) is a no-op that returns the current
+    // row without re-sending the approval email.
     const flipped = await approveExistingUser(target.email, userId);
     return { id: target.id, email: target.email, approvedAt: flipped?.approvedAt ?? target.approvedAt };
+  });
+
+  // Denies a pending signup: disables the account (so it can't sign in) without ever approving
+  // it, drops it off the review queue (dismissed on the access-requests log, invite removed so
+  // it isn't silently re-allowlisted), while keeping the row itself around under Accounts.
+  app.post("/api/admin/users/:id/deny", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    if (id === userId) {
+      reply.status(400).send({
+        error: { message: "You can't deny your own account", code: "SELF_TARGET" },
+      });
+      return;
+    }
+    const target = await loadDestructibleUser(id, reply);
+    if (!target) return;
+
+    const [updated] = await db
+      .update(users)
+      .set({ disabledAt: new Date() })
+      .where(eq(users.id, id))
+      .returning({ id: users.id, email: users.email, disabledAt: users.disabledAt, approvedAt: users.approvedAt });
+    if (!updated) {
+      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+      return;
+    }
+    await db.update(accessRequests).set({ status: "dismissed" }).where(eq(accessRequests.email, target.email));
+    await db.delete(invitedEmails).where(eq(invitedEmails.email, target.email));
+    return updated;
   });
 
   app.post("/api/admin/users/:id/unapprove", async (request, reply) => {
@@ -326,27 +344,12 @@ export async function adminRoutes(app: FastifyInstance) {
     const target = await loadDestructibleUser(id, reply);
     if (!target) return;
 
-    // Drop the invite too, otherwise the same email can immediately sign up again and the
-    // delete reads as a no-op.
+    // Drop the invite and access-request log too, otherwise the same email can immediately
+    // sign up again and either the delete reads as a no-op (invite) or the re-signup inherits
+    // a stale status like "dismissed" (access request).
     await db.delete(invitedEmails).where(eq(invitedEmails.email, target.email));
+    await db.delete(accessRequests).where(eq(accessRequests.email, target.email));
     await db.delete(users).where(eq(users.id, id));
     reply.status(204).send();
-  });
-
-  app.delete("/api/admin/access-requests/:id", async (request, reply) => {
-    const userId = await requireAdminUserId(request, reply);
-    if (!userId) return;
-
-    const { id } = idParamSchema.parse(request.params);
-    const [updated] = await db
-      .update(accessRequests)
-      .set({ status: "dismissed" })
-      .where(eq(accessRequests.id, id))
-      .returning();
-    if (!updated) {
-      reply.status(404).send({ error: { message: "Access request not found", code: "NOT_FOUND" } });
-      return;
-    }
-    return updated;
   });
 }

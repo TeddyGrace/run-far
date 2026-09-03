@@ -1,23 +1,21 @@
-import { useEffect, useState } from "react";
-import { api, ApiError, type AccessRequest, type AdminUser, type InvitedEmail, type MailStatus } from "./api.js";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, ApiError, type AdminUser, type InvitedEmail, type MailStatus } from "./api.js";
 
 const WEB_LOGIN_URL = "https://run-far.cc/login";
 
-type Gate = { status: "loading" } | { status: "signed-out" } | { status: "ok" };
+function errorMessage(e: unknown): string {
+  return e instanceof ApiError ? e.message : "Something went wrong";
+}
 
 export function App() {
-  const [gate, setGate] = useState<Gate>({ status: "loading" });
+  const me = useQuery({ queryKey: ["admin", "me"], queryFn: api.me, retry: false });
 
-  useEffect(() => {
-    api
-      .me()
-      .then(() => setGate({ status: "ok" }))
-      .catch(() => setGate({ status: "signed-out" }));
-  }, []);
+  if (me.isLoading) {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-ink-muted">Loading…</div>;
+  }
 
-  if (gate.status === "loading") return null;
-
-  if (gate.status === "signed-out") {
+  if (!me.data) {
     return (
       <div className="flex min-h-screen items-center justify-center px-6">
         <div className="max-w-sm text-center">
@@ -44,28 +42,24 @@ function Dashboard() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
       <p className="mb-1 font-mono text-[11px] tracking-[0.22em] text-accent">run-far backoffice</p>
-      <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Invites &amp; access requests</h1>
+      <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Invites &amp; access</h1>
       <MailStatusBanner />
-      <PendingSignups />
-      <div className="mt-10">
-        <AccessRequests />
-      </div>
-      <div className="mt-10">
-        <InvitedEmails />
-      </div>
+      <NeedsReview />
       <div className="mt-10">
         <Accounts />
+      </div>
+      <div className="mt-10">
+        <Invites />
       </div>
     </div>
   );
 }
 
 function MailStatusBanner() {
-  const [status, setStatus] = useState<MailStatus | null>(null);
-
-  useEffect(() => {
-    api.mailStatus().then(setStatus).catch(() => setStatus(null));
-  }, []);
+  const { data: status } = useQuery<MailStatus>({
+    queryKey: ["admin", "mail-status"],
+    queryFn: api.mailStatus,
+  });
 
   if (!status?.down) return null;
 
@@ -74,92 +68,110 @@ function MailStatusBanner() {
       <p className="text-sm font-medium text-danger">System email is down</p>
       <p className="mt-1 text-xs text-ink-secondary">
         RESEND_API_KEY isn't set. Signup, verification, and password-reset emails aren't
-        sending — set it to restore them. Affected signups are still visible in Pending
-        signups below and can be verified manually.
+        sending — set it to restore them. Affected signups are still visible in Needs review
+        below and can be verified manually.
       </p>
     </div>
   );
 }
 
-function PendingSignups() {
-  const [accounts, setAccounts] = useState<AdminUser[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+/** Shared by NeedsReview and Accounts so both sections read the same cached list and never
+ * disagree after a mutation — see the plan's react-query section. */
+function useUsers() {
+  return useQuery<AdminUser[]>({ queryKey: ["admin", "users"], queryFn: api.listUsers });
+}
 
-  const reload = () => api.listUsers().then(setAccounts).catch((e) => setError(String(e)));
-  useEffect(() => {
-    reload();
-  }, []);
+/** Every mutation here touches both users and invited_emails (approveExistingUser upserts the
+ * invite), so both caches are invalidated together on settle. */
+function useUserAction(fn: (id: string) => Promise<AdminUser>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "invites"] });
+    },
+  });
+}
 
-  const run = async (fn: () => Promise<unknown>) => {
-    setError(null);
-    try {
-      await fn();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    }
-    reload();
-  };
+function NeedsReview() {
+  const { data: accounts, isLoading, error } = useUsers();
+  const approve = useUserAction(api.approveUser);
+  const deny = useUserAction(api.denyUser);
+  const verifyEmail = useUserAction(api.verifyUserEmail);
 
-  const pending = (accounts ?? []).filter((u) => !u.approvedAt);
+  const pending = (accounts ?? []).filter((u) => !u.approvedAt && !u.disabledAt);
+  const activeMutation = [approve, deny, verifyEmail].find((m) => m.isPending);
+  const activeId = activeMutation?.variables as string | undefined;
 
   return (
     <section>
       <h2 className="mb-1 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
-        Pending signups
+        Needs review
       </h2>
       <p className="mb-3 text-xs text-ink-muted">
-        Accounts that already exist but haven't been approved for access yet.
+        New signups that aren't on the invite allowlist. Approve to let them in, Deny to block
+        the account (it stays visible under Accounts).
       </p>
-      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-      {accounts === null ? (
+      {error && <p className="mb-3 text-sm text-danger">{errorMessage(error)}</p>}
+      {isLoading ? (
         <p className="text-sm text-ink-muted">Loading…</p>
       ) : pending.length === 0 ? (
-        <p className="text-sm text-ink-muted">No pending signups.</p>
+        <p className="text-sm text-ink-muted">Nothing waiting on review.</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
-          {pending.map((u) => (
-            <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-ink-primary">
-                  {u.email}
-                  <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-secondary">
-                    {u.signupSource}
-                  </span>
-                  {!u.emailVerifiedAt && (
-                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
-                      unverified
+          {pending.map((u) => {
+            const busy = activeId === u.id;
+            return (
+              <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-ink-primary">
+                    {u.email}
+                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-secondary">
+                      {u.signupSource}
                     </span>
+                    {!u.emailVerifiedAt && (
+                      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                        unverified
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    joined {new Date(u.createdAt).toLocaleDateString()}
+                    {u.requestCount && u.requestCount > 1
+                      ? ` · ${u.requestCount} sign-in attempts, last ${new Date(u.lastRequestedAt!).toLocaleString()}`
+                      : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  {!u.emailVerifiedAt && (
+                    <button
+                      onClick={() => verifyEmail.mutate(u.id)}
+                      disabled={busy}
+                      title="Mark verified without the emailed link — use when system email is down"
+                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                    >
+                      Mark verified
+                    </button>
                   )}
-                </p>
-                <p className="text-xs text-ink-muted">
-                  joined {new Date(u.createdAt).toLocaleDateString()}
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                {!u.emailVerifiedAt && (
                   <button
-                    onClick={() => run(() => api.verifyUserEmail(u.id))}
-                    title="Mark verified without the emailed link — use when system email is down"
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
+                    onClick={() => approve.mutate(u.id)}
+                    disabled={busy}
+                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
                   >
-                    Mark verified
+                    {approve.isPending && busy ? "Approving…" : "Approve"}
                   </button>
-                )}
-                <button
-                  onClick={() => run(() => api.approveUser(u.id))}
-                  className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => run(() => api.disableUser(u.id))}
-                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger"
-                >
-                  Deny
-                </button>
-              </div>
-            </li>
-          ))}
+                  <button
+                    onClick={() => deny.mutate(u.id)}
+                    disabled={busy}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger disabled:opacity-50"
+                  >
+                    {deny.isPending && busy ? "Denying…" : "Deny"}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
@@ -167,23 +179,17 @@ function PendingSignups() {
 }
 
 function Accounts() {
-  const [accounts, setAccounts] = useState<AdminUser[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: accounts, isLoading, error } = useUsers();
+  const unapprove = useUserAction(api.unapproveUser);
+  const disable = useUserAction(api.disableUser);
+  const enable = useUserAction(api.enableUser);
+  const del = useUserAction(async (id: string) => {
+    await api.deleteUser(id);
+    return {} as AdminUser;
+  });
 
-  const reload = () => api.listUsers().then(setAccounts).catch((e) => setError(String(e)));
-  useEffect(() => {
-    reload();
-  }, []);
-
-  const run = async (fn: () => Promise<unknown>) => {
-    setError(null);
-    try {
-      await fn();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    }
-    reload();
-  };
+  const activeMutation = [unapprove, disable, enable, del].find((m) => m.isPending);
+  const activeId = activeMutation?.variables as string | undefined;
 
   const remove = (u: AdminUser) => {
     const ok = window.confirm(
@@ -191,7 +197,7 @@ function Accounts() {
         `accounts, and removes them from the invite list. This cannot be undone.\n\n` +
         `To block access reversibly, use Disable instead.`,
     );
-    if (ok) run(() => api.deleteUser(u.id));
+    if (ok) del.mutate(u.id);
   };
 
   return (
@@ -200,192 +206,147 @@ function Accounts() {
         Accounts
       </h2>
       <p className="mb-3 text-xs text-ink-muted">
-        Removing an invite above only blocks new signups. Existing accounts keep access until
-        disabled or deleted here.
+        Everyone approved or denied so far. Removing an invite under Invites below only blocks
+        new signups — revoke existing access here.
       </p>
-      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-      {accounts === null ? (
+      {error && <p className="mb-3 text-sm text-danger">{errorMessage(error)}</p>}
+      {isLoading ? (
         <p className="text-sm text-ink-muted">Loading…</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
-          {accounts.map((u) => (
-            <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-ink-primary">
-                  {u.email}
-                  {u.role === "admin" && (
-                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
-                      admin
-                    </span>
-                  )}
-                  {u.disabledAt && (
-                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
-                      disabled
-                    </span>
-                  )}
-                  {!u.approvedAt && (
-                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
-                      pending
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs text-ink-muted">
-                  joined {new Date(u.createdAt).toLocaleDateString()} · {u.signupSource}
-                  {u.disabledAt && ` · disabled ${new Date(u.disabledAt).toLocaleDateString()}`}
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                {/* The admin row is deliberately actionless: the role is only ever granted by
-                    data migration, so deleting or locking out the last admin orphans this
-                    backoffice for good. The API refuses all three anyway (ADMIN_TARGET). */}
-                {u.role === "admin" && (
-                  <span className="self-center text-xs text-ink-muted">protected account</span>
-                )}
-                {u.role !== "admin" && u.approvedAt && (
-                  <button
-                    onClick={() => run(() => api.unapproveUser(u.id))}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
-                  >
-                    Unapprove
-                  </button>
-                )}
-                {u.role !== "admin" &&
-                  (u.disabledAt ? (
-                    <button
-                      onClick={() => run(() => api.enableUser(u.id))}
-                      className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"
-                    >
-                      Enable
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => run(() => api.disableUser(u.id))}
-                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
-                    >
-                      Disable
-                    </button>
-                  ))}
-                {u.role !== "admin" && (
-                  <button
-                    onClick={() => remove(u)}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger"
-                  >
-                    Delete
-                  </button>
-                )}
-              </div>
-            </li>
-          ))}
+          {(accounts ?? [])
+            .filter((u) => u.approvedAt || u.disabledAt)
+            .map((u) => {
+              const busy = activeId === u.id;
+              const denied = u.disabledAt && !u.approvedAt;
+              return (
+                <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                  <div>
+                    <p className="text-sm font-medium text-ink-primary">
+                      {u.email}
+                      {u.role === "admin" && (
+                        <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
+                          admin
+                        </span>
+                      )}
+                      {denied ? (
+                        <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                          denied
+                        </span>
+                      ) : (
+                        u.disabledAt && (
+                          <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                            disabled
+                          </span>
+                        )
+                      )}
+                    </p>
+                    <p className="text-xs text-ink-muted">
+                      joined {new Date(u.createdAt).toLocaleDateString()} · {u.signupSource}
+                      {u.disabledAt && ` · ${denied ? "denied" : "disabled"} ${new Date(u.disabledAt).toLocaleDateString()}`}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    {/* The admin row is deliberately actionless: the role is only ever granted
+                        by data migration, so deleting or locking out the last admin orphans
+                        this backoffice for good. The API refuses all four anyway
+                        (ADMIN_TARGET). */}
+                    {u.role === "admin" && (
+                      <span className="self-center text-xs text-ink-muted">protected account</span>
+                    )}
+                    {u.role !== "admin" && u.approvedAt && (
+                      <button
+                        onClick={() => unapprove.mutate(u.id)}
+                        disabled={busy}
+                        className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                      >
+                        {unapprove.isPending && busy ? "Unapproving…" : "Unapprove"}
+                      </button>
+                    )}
+                    {u.role !== "admin" &&
+                      (u.disabledAt ? (
+                        <button
+                          onClick={() => enable.mutate(u.id)}
+                          disabled={busy}
+                          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+                        >
+                          {enable.isPending && busy ? "Enabling…" : "Enable"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => disable.mutate(u.id)}
+                          disabled={busy}
+                          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                        >
+                          {disable.isPending && busy ? "Disabling…" : "Disable"}
+                        </button>
+                      ))}
+                    {u.role !== "admin" && (
+                      <button
+                        onClick={() => remove(u)}
+                        disabled={busy}
+                        className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger disabled:opacity-50"
+                      >
+                        {del.isPending && busy ? "Deleting…" : "Delete"}
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
         </ul>
       )}
     </section>
   );
 }
 
-function AccessRequests() {
-  const [requests, setRequests] = useState<AccessRequest[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const reload = () => api.listAccessRequests().then(setRequests).catch((e) => setError(String(e)));
-  useEffect(() => {
-    reload();
-  }, []);
-
-  const pending = requests?.filter((r) => r.status === "pending") ?? [];
-
-  const approve = async (id: string) => {
-    await api.approveAccessRequest(id).catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
-    reload();
-  };
-  const dismiss = async (id: string) => {
-    await api.dismissAccessRequest(id).catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
-    reload();
-  };
-
-  return (
-    <section>
-      <h2 className="mb-3 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
-        Access requests
-      </h2>
-      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-      {requests === null ? (
-        <p className="text-sm text-ink-muted">Loading…</p>
-      ) : pending.length === 0 ? (
-        <p className="text-sm text-ink-muted">No pending requests.</p>
-      ) : (
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {pending.map((r) => (
-            <li key={r.id} className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium text-ink-primary">{r.email}</p>
-                <p className="text-xs text-ink-muted">
-                  {r.requestCount} attempt{r.requestCount === 1 ? "" : "s"} · last{" "}
-                  {new Date(r.lastRequestedAt).toLocaleString()}
-                </p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <button
-                  onClick={() => approve(r.id)}
-                  className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90"
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={() => dismiss(r.id)}
-                  className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-function InvitedEmails() {
-  const [invites, setInvites] = useState<InvitedEmail[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+function Invites() {
+  const queryClient = useQueryClient();
+  const { data: invites, isLoading, error } = useQuery<InvitedEmail[]>({
+    queryKey: ["admin", "invites"],
+    queryFn: api.listInvites,
+  });
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const reload = () => api.listInvites().then(setInvites).catch((e) => setError(String(e)));
-  useEffect(() => {
-    reload();
-  }, []);
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["admin", "invites"] });
+    queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+  };
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim()) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await api.addInvite(email.trim(), note.trim());
+  const add = useMutation({
+    mutationFn: () => api.addInvite(email.trim(), note.trim()),
+    onSuccess: () => {
       setEmail("");
       setNote("");
-      reload();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setSubmitting(false);
-    }
+      setFormError(null);
+    },
+    onError: (e) => setFormError(errorMessage(e)),
+    onSettled: invalidateAll,
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.deleteInvite(id),
+    onSettled: invalidateAll,
+  });
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    add.mutate();
   };
 
-  const remove = async (id: string) => {
-    await api.deleteInvite(id).catch((e) => setError(e instanceof ApiError ? e.message : String(e)));
-    reload();
-  };
+  const pending = (invites ?? []).filter((inv) => !inv.hasAccount);
 
   return (
     <section>
       <h2 className="mb-1 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
-        Invited emails
+        Invites
       </h2>
       <p className="mb-3 text-xs text-ink-muted">
-        Who may create a new account. Revoking an existing account happens under Accounts below.
+        Who may create a new account. Once an invite turns into an account it moves to Needs
+        review or Accounts above and drops off this list.
       </p>
 
       <form onSubmit={submit} className="mb-4 flex flex-wrap gap-2">
@@ -406,22 +367,23 @@ function InvitedEmails() {
         />
         <button
           type="submit"
-          disabled={submitting}
+          disabled={add.isPending}
           className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
         >
-          Add
+          {add.isPending ? "Adding…" : "Add"}
         </button>
       </form>
 
-      {error && <p className="mb-3 text-sm text-danger">{error}</p>}
+      {formError && <p className="mb-3 text-sm text-danger">{formError}</p>}
+      {error && <p className="mb-3 text-sm text-danger">{errorMessage(error)}</p>}
 
-      {invites === null ? (
+      {isLoading ? (
         <p className="text-sm text-ink-muted">Loading…</p>
-      ) : invites.length === 0 ? (
-        <p className="text-sm text-ink-muted">No invited emails yet.</p>
+      ) : pending.length === 0 ? (
+        <p className="text-sm text-ink-muted">No pending invites.</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
-          {invites.map((inv) => (
+          {pending.map((inv) => (
             <li key={inv.id} className="flex items-center justify-between gap-4 px-4 py-3">
               <div>
                 <p className="text-sm font-medium text-ink-primary">{inv.email}</p>
@@ -430,10 +392,11 @@ function InvitedEmails() {
                 </p>
               </div>
               <button
-                onClick={() => remove(inv.id)}
-                className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger"
+                onClick={() => remove.mutate(inv.id)}
+                disabled={remove.isPending && remove.variables === inv.id}
+                className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger disabled:opacity-50"
               >
-                Remove
+                {remove.isPending && remove.variables === inv.id ? "Removing…" : "Remove"}
               </button>
             </li>
           ))}

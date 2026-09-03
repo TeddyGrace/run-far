@@ -114,6 +114,9 @@ importers:
 
   apps/backoffice:
     dependencies:
+      '@tanstack/react-query':
+        specifier: ^5.59.20
+        version: 5.101.4(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1

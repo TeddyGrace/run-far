@@ -4,6 +4,7 @@ export type InvitedEmail = {
   note: string | null;
   invitedBy: string | null;
   invitedAt: string;
+  hasAccount: boolean;
 };
 
 export type AdminUser = {
@@ -15,15 +16,8 @@ export type AdminUser = {
   emailVerifiedAt: string | null;
   signupSource: "google" | "password";
   createdAt: string;
-};
-
-export type AccessRequest = {
-  id: string;
-  email: string;
-  firstRequestedAt: string;
-  lastRequestedAt: string;
-  requestCount: number;
-  status: "pending" | "invited" | "dismissed";
+  requestCount: number | null;
+  lastRequestedAt: string | null;
 };
 
 export type MailStatus = {
@@ -69,16 +63,12 @@ export const api = {
     request<AdminUser>(`/api/admin/users/${id}/enable`, { method: "POST" }),
   approveUser: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/approve`, { method: "POST" }),
+  denyUser: (id: string) => request<AdminUser>(`/api/admin/users/${id}/deny`, { method: "POST" }),
   unapproveUser: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/unapprove`, { method: "POST" }),
   verifyUserEmail: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/verify-email`, { method: "POST" }),
   deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
-  listAccessRequests: () => request<AccessRequest[]>("/api/admin/access-requests"),
-  approveAccessRequest: (id: string) =>
-    request<AccessRequest>(`/api/admin/access-requests/${id}/approve`, { method: "POST" }),
-  dismissAccessRequest: (id: string) =>
-    request<AccessRequest>(`/api/admin/access-requests/${id}`, { method: "DELETE" }),
 };
 
 export { ApiError };

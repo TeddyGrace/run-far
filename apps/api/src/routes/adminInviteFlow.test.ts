@@ -147,51 +147,83 @@ describe("backoffice invite & approval flow", () => {
     }
   });
 
-  it("emails an invitation when approving an access request with no account", async () => {
+  it("emails an invitation when inviting an email with an access-request log but no account", async () => {
     const app = await buildServer();
     try {
       const email = seedEmail("request-no-account");
-      const [reqRow] = await db
-        .insert(accessRequests)
-        .values({ email })
-        .returning({ id: accessRequests.id });
-      if (!reqRow) throw new Error("failed to seed access request");
+      await db.insert(accessRequests).values({ email });
 
       const res = await app.inject({
         method: "POST",
-        url: `/api/admin/access-requests/${reqRow.id}/approve`,
+        url: "/api/admin/invites",
         cookies: adminCookie(app),
+        payload: { email },
       });
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().status).toBe("invited");
+      expect(res.statusCode).toBe(201);
+      const [reqRow] = await db.select().from(accessRequests).where(eq(accessRequests.email, email));
+      expect(reqRow?.status).toBe("invited");
       expect(subjects()).toEqual(["You're invited to run-far"]);
     } finally {
       await app.close();
     }
   });
 
-  it("approves the account and sends the approved mail when the access request has a pending account", async () => {
+  it("approves the account and sends the approved mail when approving a user with an access-request log", async () => {
     const app = await buildServer();
     try {
       const email = seedEmail("request-with-account");
-      await db.insert(users).values({ email, passwordHash: "x", approvedAt: null });
-      const [reqRow] = await db
-        .insert(accessRequests)
-        .values({ email })
-        .returning({ id: accessRequests.id });
-      if (!reqRow) throw new Error("failed to seed access request");
+      const [user] = await db
+        .insert(users)
+        .values({ email, passwordHash: "x", approvedAt: null })
+        .returning({ id: users.id });
+      if (!user) throw new Error("failed to seed user");
+      await db.insert(accessRequests).values({ email });
 
       const res = await app.inject({
         method: "POST",
-        url: `/api/admin/access-requests/${reqRow.id}/approve`,
+        url: `/api/admin/users/${user.id}/approve`,
         cookies: adminCookie(app),
       });
 
       expect(res.statusCode).toBe(200);
-      const [user] = await db.select().from(users).where(eq(users.email, email));
-      expect(user?.approvedAt).not.toBeNull();
+      const [updatedUser] = await db.select().from(users).where(eq(users.email, email));
+      expect(updatedUser?.approvedAt).not.toBeNull();
+      const [reqRow] = await db.select().from(accessRequests).where(eq(accessRequests.email, email));
+      expect(reqRow?.status).toBe("invited");
       expect(subjects()).toEqual(["You're in — run-far access approved"]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("denying a pending signup disables the account, dismisses its access request, and clears its invite", async () => {
+    const app = await buildServer();
+    try {
+      const email = seedEmail("denied-signup");
+      const [user] = await db
+        .insert(users)
+        .values({ email, passwordHash: "x", approvedAt: null })
+        .returning({ id: users.id });
+      if (!user) throw new Error("failed to seed user");
+      await db.insert(accessRequests).values({ email });
+      await db.insert(invitedEmails).values({ email, invitedBy: adminId });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/admin/users/${user.id}/deny`,
+        cookies: adminCookie(app),
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [updatedUser] = await db.select().from(users).where(eq(users.email, email));
+      expect(updatedUser?.disabledAt).not.toBeNull();
+      expect(updatedUser?.approvedAt).toBeNull();
+      const [reqRow] = await db.select().from(accessRequests).where(eq(accessRequests.email, email));
+      expect(reqRow?.status).toBe("dismissed");
+      const [invite] = await db.select().from(invitedEmails).where(eq(invitedEmails.email, email));
+      expect(invite).toBeUndefined();
+      expect(sendMail).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

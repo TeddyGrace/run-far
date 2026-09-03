@@ -26,6 +26,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryKey: ["auth", "me"],
     queryFn: () => api.get<CurrentUser>("/auth/me"),
     retry: false,
+    // A pending athlete's PendingApproval screen has no other way to learn they've been
+    // approved — poll gently so it lands within half a minute without a manual reload.
+    refetchInterval: (query) => (query.state.data && !query.state.data.approved ? 30_000 : false),
   });
 
   // Captures the browser's IANA zone on first login and whenever it drifts (e.g. travel) —
