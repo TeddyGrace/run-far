@@ -269,13 +269,22 @@ function AccountCard() {
           <h3 className="font-display font-semibold text-ink-primary">Account</h3>
           <p className="mt-1 text-sm text-ink-secondary">Signed in as {user?.email}</p>
         </div>
-        {user?.role === "admin" && <a href="https://backoffice.run-far.cc" className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary">Backoffice</a>}
-        <button
-          onClick={() => logout()}
-          className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
-        >
-          Sign out
-        </button>
+        <div className="flex flex-col items-end gap-2">
+          <button
+            onClick={() => logout()}
+            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
+          >
+            Sign out
+          </button>
+          {user?.role === "admin" && (
+            <a
+              href="https://backoffice.run-far.cc"
+              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
+            >
+              Backoffice
+            </a>
+          )}
+        </div>
       </div>
     </div>
   );
