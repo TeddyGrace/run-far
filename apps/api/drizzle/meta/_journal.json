@@ -162,6 +162,13 @@
       "when": 1788125399355,
       "tag": "0022_same_killmonger",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788465310377,
+      "tag": "0023_wide_sandman",
+      "breakpoints": true
     }
   ]
 }

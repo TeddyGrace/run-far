@@ -43,6 +43,7 @@ export interface RecentActivity {
   maxHr: number | null;
   kilojoules: number | null;
   distanceM: number | null;
+  distanceManual?: boolean;
   percentRecorded: number | null;
   altitudeGainM: number | null;
   altitudeChangeM: number | null;

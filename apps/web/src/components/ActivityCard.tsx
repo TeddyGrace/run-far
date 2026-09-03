@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { RecentActivity, ZoneDurations } from "../types.js";
-import { sportLabel } from "../lib/sports.js";
-import { formatMiles, formatPacePerMile, metersToFeet } from "../lib/units.js";
+import { isRunSport, sportLabel } from "../lib/sports.js";
+import { api, ApiError } from "../lib/api.js";
+import { formatMiles, formatPacePerMile, metersToFeet, milesToMeters } from "../lib/units.js";
 
 /** Strain runs 0–21; tint once it crosses into a genuinely hard effort. */
 function strainTone(strain: number | null): string {
@@ -192,12 +194,90 @@ function metricsFor(activity: RecentActivity): Metric[] {
   return out;
 }
 
+/** Inline "no distance? add it" affordance for a run Whoop synced with no GPS/footpod data —
+ * otherwise the workout silently contributes 0 to weekly mileage with no indication why. */
+function AddDistance({ activityId }: { activityId: string }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+
+  const save = useMutation({
+    mutationFn: (miles: number) =>
+      api.patch(`/recovery/activities/${activityId}`, { distanceM: milesToMeters(miles) }),
+    onSuccess: () => {
+      setEditing(false);
+      void qc.invalidateQueries({ queryKey: ["recovery", "activities"] });
+    },
+  });
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="mt-3 border-t border-border pt-3 text-xs font-medium text-accent hover:text-accent-strong"
+      >
+        + Add distance
+      </button>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        const miles = Number(value);
+        if (Number.isFinite(miles) && miles > 0) save.mutate(miles);
+      }}
+      className="mt-3 flex items-center gap-2 border-t border-border pt-3"
+    >
+      <input
+        autoFocus
+        type="number"
+        inputMode="decimal"
+        step="0.01"
+        min="0"
+        placeholder="Miles"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        disabled={save.isPending}
+        className="w-20 rounded-md border border-border bg-surface-0 px-2 py-1 text-xs text-ink-primary"
+      />
+      <button
+        type="submit"
+        disabled={save.isPending || !value.trim()}
+        className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+      >
+        {save.isPending ? "Saving…" : "Save"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(false);
+          setValue("");
+        }}
+        disabled={save.isPending}
+        className="text-xs text-ink-muted hover:text-ink-secondary"
+      >
+        Cancel
+      </button>
+      {save.isError && (
+        <span className="text-xs text-zone-red">
+          {save.error instanceof ApiError ? save.error.message : "Couldn't save that"}
+        </span>
+      )}
+    </form>
+  );
+}
+
 export function ActivityCard({ activity }: { activity: RecentActivity }) {
   const when = [formatDay(activity.date), activity.startedAt ? formatClock(activity.startedAt) : null]
     .filter(Boolean)
     .join(" · ");
 
   const metrics = metricsFor(activity);
+  const missingDistance =
+    isRunSport(activity.sport) && (activity.distanceM == null || activity.distanceM <= 0);
 
   return (
     <div className="rounded-xl border border-border bg-surface-1 p-4 transition-colors hover:border-accent/40">
@@ -225,6 +305,8 @@ export function ActivityCard({ activity }: { activity: RecentActivity }) {
       )}
 
       {activity.zoneDurations && <ZoneBar zones={activity.zoneDurations} />}
+
+      {missingDistance && <AddDistance activityId={activity.id} />}
     </div>
   );
 }

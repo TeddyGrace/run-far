@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles, syncState } from "../../db/schema.js";
 import { whoopGet, whoopPaginate } from "./client.js";
@@ -133,6 +133,7 @@ async function upsertWorkout(userId: string, w: WhoopWorkout, tz: string): Promi
       ? Math.max(0, (endedAt.getTime() - startedAt.getTime()) / 60_000)
       : null;
   const score = w.score;
+  const distanceM = score?.distance_meter ?? null;
   const row = {
     startedAt: Number.isFinite(startedAt.getTime()) ? startedAt : null,
     durationMin,
@@ -141,7 +142,7 @@ async function upsertWorkout(userId: string, w: WhoopWorkout, tz: string): Promi
     avgHr: score?.average_heart_rate ?? null,
     maxHr: score?.max_heart_rate ?? null,
     kilojoules: score?.kilojoule ?? null,
-    distanceM: score?.distance_meter ?? null,
+    distanceM,
     percentRecorded: score?.percent_recorded ?? null,
     altitudeGainM: score?.altitude_gain_meter ?? null,
     altitudeChangeM: score?.altitude_change_meter ?? null,
@@ -158,7 +159,16 @@ async function upsertWorkout(userId: string, w: WhoopWorkout, tz: string): Promi
     })
     .onConflictDoUpdate({
       target: [whoopWorkouts.userId, whoopWorkouts.whoopWorkoutId],
-      set: { ...row, updatedAt: new Date() },
+      set: {
+        ...row,
+        // Whoop can report a workout before scoring finishes (or never populate distance for a
+        // no-GPS activity) and re-sync it later with distance still null — never let that null
+        // clobber a real value, whether it came from Whoop earlier or the athlete hand-entered
+        // it. A fresh non-null distance from Whoop still wins over a manual entry.
+        distanceM: distanceM != null ? distanceM : sql`${whoopWorkouts.distanceM}`,
+        distanceManual: distanceM != null ? false : sql`${whoopWorkouts.distanceManual}`,
+        updatedAt: new Date(),
+      },
     });
 }
 

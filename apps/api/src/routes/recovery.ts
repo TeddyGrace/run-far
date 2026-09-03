@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, gte, desc, count, sql, inArray } from "drizzle-orm";
+import { updateWorkoutDistanceSchema } from "@run-far/shared";
 import { db } from "../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
@@ -118,6 +119,7 @@ export async function recoveryRoutes(app: FastifyInstance) {
           maxHr: whoopWorkouts.maxHr,
           kilojoules: whoopWorkouts.kilojoules,
           distanceM: whoopWorkouts.distanceM,
+          distanceManual: whoopWorkouts.distanceManual,
           percentRecorded: whoopWorkouts.percentRecorded,
           altitudeGainM: whoopWorkouts.altitudeGainM,
           altitudeChangeM: whoopWorkouts.altitudeChangeM,
@@ -150,5 +152,31 @@ export async function recoveryRoutes(app: FastifyInstance) {
       hasMore: skip + items.length < total,
       sports: sportRows.map((r) => r.sport).filter((s): s is string => Boolean(s)),
     };
+  });
+
+  // Hand-enter distance for a workout Whoop synced with no distance (e.g. a treadmill run
+  // with no GPS/footpod) — otherwise it silently contributes 0 to weekly mileage forever.
+  // Marks distanceManual so a future resync won't blank it back out (see upsertWorkout).
+  app.patch("/api/recovery/activities/:id", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+    const body = updateWorkoutDistanceSchema.parse(request.body);
+
+    const [existing] = await db
+      .select({ id: whoopWorkouts.id })
+      .from(whoopWorkouts)
+      .where(and(eq(whoopWorkouts.id, id), eq(whoopWorkouts.userId, userId)));
+    if (!existing) {
+      reply.status(404).send({ error: { message: "Activity not found", code: "NOT_FOUND" } });
+      return;
+    }
+
+    await db
+      .update(whoopWorkouts)
+      .set({ distanceM: body.distanceM, distanceManual: true, updatedAt: new Date() })
+      .where(and(eq(whoopWorkouts.id, id), eq(whoopWorkouts.userId, userId)));
+
+    return { ok: true, id, distanceM: body.distanceM };
   });
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "whoop_workouts" ADD COLUMN "distance_manual" boolean DEFAULT false NOT NULL;

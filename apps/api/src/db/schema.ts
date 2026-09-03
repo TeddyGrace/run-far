@@ -285,6 +285,11 @@ export const whoopWorkouts = pgTable(
     maxHr: doublePrecision("max_hr"),
     kilojoules: doublePrecision("kilojoules"),
     distanceM: doublePrecision("distance_m"),
+    // True once the athlete has hand-entered distanceM (e.g. a treadmill/no-GPS workout Whoop
+    // synced with no distance). A resync only overwrites distanceM when Whoop sends a real
+    // value — see upsertWorkout — so a manual entry survives future syncs until Whoop itself
+    // reports a distance, at which point this flips back to false.
+    distanceManual: boolean("distance_manual").notNull().default(false),
     // Full Whoop WorkoutScore extras — present for GPS sports and HR-zone breakdowns.
     percentRecorded: doublePrecision("percent_recorded"),
     altitudeGainM: doublePrecision("altitude_gain_m"),

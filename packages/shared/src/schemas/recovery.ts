@@ -50,9 +50,17 @@ export const whoopWorkoutSchema = z.object({
   maxHr: z.number().nullable(),
   kilojoules: z.number().nullable(),
   distanceM: z.number().nullable(),
+  distanceManual: z.boolean().optional(),
   percentRecorded: z.number().nullable().optional(),
   altitudeGainM: z.number().nullable().optional(),
   altitudeChangeM: z.number().nullable().optional(),
   zoneDurations: whoopZoneDurationsSchema.nullable().optional(),
 });
 export type WhoopWorkout = z.infer<typeof whoopWorkoutSchema>;
+
+// Hand-entered distance for a workout Whoop synced with no distance (e.g. a treadmill run
+// with no GPS/footpod). Capped well above any plausible single-run distance.
+export const updateWorkoutDistanceSchema = z.object({
+  distanceM: z.number().positive().max(200_000),
+});
+export type UpdateWorkoutDistanceInput = z.infer<typeof updateWorkoutDistanceSchema>;
