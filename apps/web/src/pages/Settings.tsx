@@ -262,7 +262,6 @@ function LocationCard() {
 function AccountCard() {
   const { user } = useAuth();
   const logout = useLogout();
-
   return (
     <div className="rounded-xl border border-border bg-surface-1 p-5">
       <div className="flex items-center justify-between gap-4">
@@ -270,6 +269,7 @@ function AccountCard() {
           <h3 className="font-display font-semibold text-ink-primary">Account</h3>
           <p className="mt-1 text-sm text-ink-secondary">Signed in as {user?.email}</p>
         </div>
+        {user?.role === "admin" && <a href="https://backoffice.run-far.cc" className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary">Backoffice</a>}
         <button
           onClick={() => logout()}
           className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"

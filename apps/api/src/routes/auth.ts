@@ -505,6 +505,7 @@ export async function authRoutes(app: FastifyInstance) {
       id: user.id,
       email: user.email,
       timezone: user.timezone,
+      role: user.role,
       needsTutorial: user.tutorialCompletedAt == null,
       approved: user.approvedAt != null,
       emailVerified: user.emailVerifiedAt != null,

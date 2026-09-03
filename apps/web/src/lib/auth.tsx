@@ -8,6 +8,7 @@ export interface CurrentUser {
   id: string;
   email: string;
   timezone: string | null;
+  role: "admin" | "user";
   needsTutorial: boolean;
   approved: boolean;
   emailVerified: boolean;
