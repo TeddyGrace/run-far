@@ -73,6 +73,29 @@ export function Home() {
         </section>
 
         <section className="mt-12">
+          <h2 className="mb-5 font-display text-lg font-semibold text-ink-primary">Pricing</h2>
+          <div className="flex flex-wrap gap-4">
+            <div className="rounded-lg border border-border bg-surface-1 px-5 py-4">
+              <p className="text-xs font-medium text-ink-secondary">Monthly</p>
+              <p className="font-display text-2xl font-semibold text-ink-primary">
+                $6.99<span className="text-sm font-normal text-ink-muted">/mo</span>
+              </p>
+            </div>
+            <div className="rounded-lg border border-border bg-surface-1 px-5 py-4">
+              <p className="text-xs font-medium text-ink-secondary">Annual</p>
+              <p className="font-display text-2xl font-semibold text-ink-primary">
+                $59.99<span className="text-sm font-normal text-ink-muted">/yr</span>
+              </p>
+              <p className="mt-0.5 text-xs text-accent">save ~29%</p>
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-ink-secondary">
+            Every plan starts with a 14-day free trial — a card is required, but you&apos;re not
+            charged until the trial ends.
+          </p>
+        </section>
+
+        <section className="mt-12">
           <h2 className="mb-3 font-display text-lg font-semibold text-ink-primary">
             How run-far uses your Google account
           </h2>
@@ -111,6 +134,18 @@ export function Home() {
             className="text-sm text-ink-muted underline-offset-4 transition-colors hover:text-ink-secondary hover:underline"
           >
             Privacy policy
+          </Link>
+          <Link
+            to="/terms"
+            className="text-sm text-ink-muted underline-offset-4 transition-colors hover:text-ink-secondary hover:underline"
+          >
+            Terms
+          </Link>
+          <Link
+            to="/refunds"
+            className="text-sm text-ink-muted underline-offset-4 transition-colors hover:text-ink-secondary hover:underline"
+          >
+            Refunds
           </Link>
         </div>
 

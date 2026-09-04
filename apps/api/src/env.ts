@@ -73,15 +73,23 @@ const envSchema = z.object({
 
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-4-5"),
+  /** Per-user calendar-month spend cap on the AI plan builder + assistant combined, in whole
+   * US cents — see lib/aiCost.ts assertWithinAiQuota, the only reader. $8 by default: a
+   * deliberately generous ceiling that ~everyone stays under, there purely to stop one runaway
+   * user (or a bug causing an infinite tool-use loop) from being an open-ended bill. Comped
+   * accounts and admins bypass it entirely. */
+  AI_MONTHLY_COST_LIMIT_CENTS: z.coerce.number().int().positive().default(800),
 
   // --- Email (Resend) --- see lib/mailer.ts. Empty in dev logs mail to the console instead
   // of sending; empty in production makes sendMail throw MailTransportDownError.
   RESEND_API_KEY: z.string().default(""),
   MAIL_FROM: z.string().default("Run Far <noreply@mail.run-far.cc>"),
   MAIL_REPLY_TO: z.string().default(""),
-  // Comma-separated allowlist gating account CREATION (not existing users). Empty allows
-  // anyone to sign up in development, but fails closed (denies everyone) in production, so a
-  // deploy that forgets to set it doesn't accidentally open public signup.
+  // Comma-separated list of emails auto-comped (full free access, no Stripe) the moment they
+  // sign up — see shouldAutoComp in routes/auth.ts. Signup itself is open to anyone; this only
+  // controls who skips the paywall on day one. Empty means nobody is auto-comped in
+  // production; in development it means everybody is, so a fresh checkout can exercise paid
+  // features without env setup.
   ALLOWED_EMAILS: z.string().default(""),
   /** Comma-separated break-glass admin allowlist, reconciled into the users table on every
    * boot — see lib/adminBootstrap.ts. Exists because `role` was otherwise grantable only by
@@ -97,6 +105,22 @@ const envSchema = z.object({
   COOKIE_DOMAIN: z.string().default(""),
   /** Host the backoffice SPA is served on — see server.ts host-constrained static serving. */
   BACKOFFICE_HOSTNAME: z.string().default("backoffice.run-far.cc"),
+
+  // --- Stripe (billing) --- see integrations/stripe/. Empty STRIPE_SECRET_KEY means Stripe
+  // isn't configured (routes/billing.ts returns 503) — same "empty means off" pattern as
+  // ANTHROPIC_API_KEY above, so a dev checkout works with zero billing setup.
+  STRIPE_SECRET_KEY: z.string().default(""),
+  /** Verifies /webhooks/stripe signatures — see integrations/stripe/webhooks.ts. Required
+   * (non-empty) before that route will accept anything, even with STRIPE_SECRET_KEY set. */
+  STRIPE_WEBHOOK_SECRET: z.string().default(""),
+  /** Price ids from the Stripe dashboard, not modeled in Postgres — Stripe is the source of
+   * truth for what a price actually costs. */
+  STRIPE_PRICE_MONTHLY: z.string().default(""),
+  STRIPE_PRICE_ANNUAL: z.string().default(""),
+  /** Trial length for a new Checkout subscription. Card is still collected up front
+   * (payment_method_collection: "always" in routes/billing.ts) — the trial exists to let an
+   * athlete see their own data in the app before being charged, not to skip card entry. */
+  STRIPE_TRIAL_DAYS: z.coerce.number().int().nonnegative().default(14),
 });
 
 const parsed = envSchema.safeParse(rawEnv);
@@ -137,11 +161,14 @@ export const env = {
     (isLoopback(data.WEB_ORIGIN) ? "" : `${data.WEB_ORIGIN}/webhooks/google`),
   /** Prefer Railway's PORT when present. */
   listenPort: data.PORT ?? data.API_PORT,
-  /** Empty set means "allow all" outside production, "deny all" in production — see
-   * findOrCreateGoogleUser (routes/auth.ts), the only place this gates account creation. */
+  /** Empty set means "auto-comp everyone" outside production, "auto-comp no one" in
+   * production — see shouldAutoComp (routes/auth.ts). Never gates account creation itself. */
   allowedEmails,
   /** Empty means "no break-glass configured" — reconcileAdminEmails then does nothing but
    * warn. Never used for authorization at request time; admin is still read off the DB row
    * by lib/adminAuth.ts, so an env var alone can't authenticate anyone. */
   adminEmails,
+  /** AI_MONTHLY_COST_LIMIT_CENTS converted to the micro-dollar unit ai_usage.estimatedCostMicros
+   * is stored in, so lib/aiCost.ts never has to convert at read time. */
+  aiMonthlyCostLimitMicros: data.AI_MONTHLY_COST_LIMIT_CENTS * 10_000,
 };

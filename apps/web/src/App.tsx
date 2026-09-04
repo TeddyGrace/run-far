@@ -7,8 +7,10 @@ import { VerifyEmail } from "./pages/VerifyEmail.js";
 import { ForgotPassword } from "./pages/ForgotPassword.js";
 import { ResetPassword } from "./pages/ResetPassword.js";
 import { Privacy } from "./pages/Privacy.js";
+import { Terms } from "./pages/Terms.js";
+import { Refund } from "./pages/Refund.js";
 import { Home } from "./pages/Home.js";
-import { PendingApproval } from "./pages/PendingApproval.js";
+import { Subscribe } from "./pages/Subscribe.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { Calendar } from "./pages/Calendar.js";
 import { Build } from "./pages/Build.js";
@@ -26,8 +28,8 @@ function HomeRoute() {
   if (isLoading || !user) {
     return <Home />;
   }
-  if (!user.approved) {
-    return <PendingApproval />;
+  if (!user.entitlement.active) {
+    return <Subscribe />;
   }
   return (
     <Layout>
@@ -47,6 +49,8 @@ export function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/refunds" element={<Refund />} />
         <Route
           path="/*"
           element={

@@ -1,19 +1,24 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { env } from "../env.js";
-import { invitedEmails, accessRequests, users } from "../db/schema.js";
+import { invitedEmails, accessRequests, users, aiUsage } from "../db/schema.js";
 import { requireAdminUserId } from "../lib/adminAuth.js";
+import { logger } from "../lib/logger.js";
+import { isStripeConfigured, stripeClient } from "../integrations/stripe/client.js";
+import { applyStripeSubscription } from "../integrations/stripe/entitlement.js";
 import { sendSystemMail } from "../lib/systemMail.js";
 import { accessApprovedEmail, inviteEmail } from "../lib/emailTemplates.js";
-import { logger } from "../lib/logger.js";
 
 const addInviteSchema = z.object({
   email: z.string().email(),
   note: z.string().trim().max(500).optional(),
 });
 const idParamSchema = z.object({ id: z.string().uuid() });
+const compRequestSchema = z.object({
+  note: z.string().trim().max(500).optional(),
+});
 
 /**
  * Loads the target of a destructive account action, refusing it outright when that account is
@@ -66,9 +71,22 @@ async function approveExistingUser(
     .onConflictDoUpdate({ target: invitedEmails.email, set: { invitedBy: adminId } });
   await db.update(accessRequests).set({ status: "invited" }).where(eq(accessRequests.email, email));
 
+  // approvedAt no longer gates access (see lib/entitlement.ts / activeUserGuard) — an invite
+  // now grants entitlement directly, as a comp, so this stays the working "give this person
+  // free access" action rather than becoming a no-op once open signup ships.
   const [flipped] = await db
     .update(users)
-    .set({ approvedAt: new Date(), approvedBy: adminId })
+    .set({
+      approvedAt: new Date(),
+      approvedBy: adminId,
+      entitlementSource: "comp",
+      entitlementStatus: "active",
+      // Cleared, not left as-is: a comp is open-ended, and a stale expiry left over from a
+      // lapsed Stripe subscription would make resolveEntitlement treat this comp as expired.
+      entitlementExpiresAt: null,
+      compedAt: new Date(),
+      compedBy: adminId,
+    })
     .where(and(eq(users.email, email), isNull(users.approvedAt)))
     .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
 
@@ -165,13 +183,29 @@ export async function adminRoutes(app: FastifyInstance) {
   // account that already exists — revoking a real account happens here instead. Disabling is
   // reversible and keeps their data; deleting is not, and cascades to everything they own.
   //
-  // "Needs review" in the backoffice is just this same list filtered to !approvedAt &&
-  // !disabledAt — accessRequests.requestCount/lastRequestedAt are joined in so the backoffice
-  // can show sign-in attempt history inline instead of as a separate, actionable queue.
+  // Entitlement and month-to-date AI cost are joined in so the backoffice can show, per row,
+  // whether someone has access and what they're costing — the two things that decide whether
+  // to comp, un-comp, or investigate an account.
 
   app.get("/api/admin/users", async (request, reply) => {
     const userId = await requireAdminUserId(request, reply);
     if (!userId) return;
+
+    const startOfMonth = new Date();
+    startOfMonth.setUTCDate(1);
+    startOfMonth.setUTCHours(0, 0, 0, 0);
+    // Aggregated separately and left-joined rather than grouping the whole query by every
+    // users column — keeps this a simple one-row-per-user list even as ai_usage grows.
+    const usageThisMonth = db
+      .select({
+        userId: aiUsage.userId,
+        spentMicros: sql<number>`sum(${aiUsage.estimatedCostMicros})::integer`.as("spent_micros"),
+      })
+      .from(aiUsage)
+      .where(gte(aiUsage.createdAt, startOfMonth))
+      .groupBy(aiUsage.userId)
+      .as("usage_this_month");
+
     return db
       .select({
         id: users.id,
@@ -182,11 +216,15 @@ export async function adminRoutes(app: FastifyInstance) {
         emailVerifiedAt: users.emailVerifiedAt,
         signupSource: users.signupSource,
         createdAt: users.createdAt,
-        requestCount: accessRequests.requestCount,
-        lastRequestedAt: accessRequests.lastRequestedAt,
+        entitlementSource: users.entitlementSource,
+        entitlementStatus: users.entitlementStatus,
+        entitlementExpiresAt: users.entitlementExpiresAt,
+        compedAt: users.compedAt,
+        compNote: users.compNote,
+        aiUsageThisMonthMicros: sql<number>`coalesce(${usageThisMonth.spentMicros}, 0)::integer`,
       })
       .from(users)
-      .leftJoin(accessRequests, eq(accessRequests.email, users.email))
+      .leftJoin(usageThisMonth, eq(usageThisMonth.userId, users.id))
       .orderBy(desc(users.createdAt));
   });
 
@@ -255,9 +293,21 @@ export async function adminRoutes(app: FastifyInstance) {
     }
     if (!(await loadDestructibleUser(id, reply))) return;
 
+    const [target] = await db.select({ entitlementSource: users.entitlementSource }).from(users).where(eq(users.id, id));
+    // Only undo what approve/invite granted (a comp) — never touch a real Stripe subscription
+    // this action didn't create. A paying user with a stray null approvedAt (they never went
+    // through the invite flow) keeps their access.
+    const wasComped = target?.entitlementSource === "comp";
+
     const [updated] = await db
       .update(users)
-      .set({ approvedAt: null, approvedBy: null })
+      .set({
+        approvedAt: null,
+        approvedBy: null,
+        ...(wasComped
+          ? { entitlementSource: null, entitlementStatus: "none" as const, compedAt: null, compedBy: null }
+          : {}),
+      })
       .where(eq(users.id, id))
       .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
     if (!updated) {
@@ -265,6 +315,103 @@ export async function adminRoutes(app: FastifyInstance) {
       return;
     }
     return updated;
+  });
+
+  // --- Comps ---
+  //
+  // The direct "grant this specific account free access" switch — independent of the
+  // invite/approve flow above (which is really "let this email sign up and start comped").
+  // Use this on an account that already exists, invited or not, self-signed-up or not, even
+  // one with a live Stripe subscription (comp still wins — see lib/entitlement.ts).
+
+  app.post("/api/admin/users/:id/comp", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    const body = compRequestSchema.parse(request.body ?? {});
+    if (!(await loadDestructibleUser(id, reply))) return;
+
+    const [updated] = await db
+      .update(users)
+      .set({
+        entitlementSource: "comp",
+        entitlementStatus: "active",
+        // See approveExistingUser above — a comp granted to someone whose Stripe subscription
+        // already lapsed has to clear that old expiry, or resolveEntitlement reads the comp as
+        // already expired and the athlete stays paywalled despite this returning 200.
+        entitlementExpiresAt: null,
+        compedAt: new Date(),
+        compedBy: userId,
+        compNote: body.note ?? null,
+      })
+      .where(eq(users.id, id))
+      .returning({
+        id: users.id,
+        email: users.email,
+        entitlementSource: users.entitlementSource,
+        entitlementStatus: users.entitlementStatus,
+        compedAt: users.compedAt,
+        compNote: users.compNote,
+      });
+    if (!updated) {
+      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+      return;
+    }
+    return updated;
+  });
+
+  // Clears a comp only — a user with an active Stripe subscription keeps it; this just stops
+  // the free-access override, same as unapprove above but reachable regardless of how the
+  // comp was granted (invite flow or this endpoint).
+  app.delete("/api/admin/users/:id/comp", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    if (!(await loadDestructibleUser(id, reply))) return;
+
+    const [updated] = await db
+      .update(users)
+      .set({
+        entitlementSource: null,
+        entitlementStatus: "none",
+        compedAt: null,
+        compedBy: null,
+        compNote: null,
+      })
+      .where(and(eq(users.id, id), eq(users.entitlementSource, "comp")))
+      .returning({
+        id: users.id,
+        email: users.email,
+        entitlementSource: users.entitlementSource,
+        stripeSubscriptionId: users.stripeSubscriptionId,
+      });
+    if (!updated) {
+      reply.status(404).send({
+        error: { message: "User not found, or not currently comped", code: "NOT_FOUND" },
+      });
+      return;
+    }
+
+    // A comped athlete who also subscribed had their Stripe status recorded but not applied
+    // (integrations/stripe/entitlement.ts refuses to overwrite a comp). Clearing the comp is
+    // the moment that subscription should take over — without this re-sync they'd sit at
+    // "none", paywalled while paying, until Stripe's next webhook at renewal.
+    if (updated.stripeSubscriptionId && isStripeConfigured()) {
+      try {
+        const subscription = await stripeClient().subscriptions.retrieve(updated.stripeSubscriptionId);
+        await applyStripeSubscription(subscription, new Date());
+      } catch (err) {
+        logger.warn({ err, userId: id }, "failed to re-sync stripe subscription after un-comp");
+      }
+    }
+
+    const [after] = await db
+      .select({ id: users.id, email: users.email, entitlementSource: users.entitlementSource })
+      .from(users)
+      .where(eq(users.id, id));
+    return after ?? { id: updated.id, email: updated.email, entitlementSource: updated.entitlementSource };
   });
 
   // Escape hatch for when the verification email couldn't be sent (see systemMail.ts /

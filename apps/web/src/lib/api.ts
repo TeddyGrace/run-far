@@ -8,6 +8,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Registered by AuthProvider on mount so this module (plain, outside React) can trigger an
+ * immediate refetch of the current user when any request comes back 402 — e.g. a subscription
+ * lapsed mid-session, or a comp was revoked. Without this the UI would only notice on the next
+ * 30s poll (see lib/auth.tsx's refetchInterval); with it, the paywall shows up right away.
+ */
+let onPaymentRequired: (() => void) | null = null;
+export function setPaymentRequiredHandler(handler: (() => void) | null): void {
+  onPaymentRequired = handler;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     credentials: "include",
@@ -15,6 +26,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
+    if (res.status === 402) onPaymentRequired?.();
     const body = await res.json().catch(() => null);
     throw new ApiError(body?.error?.message ?? res.statusText, res.status, body?.error?.code);
   }
@@ -77,7 +89,8 @@ export const api = {
     request<T>(path, { method: "POST", body: body != null ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PATCH", body: body != null ? JSON.stringify(body) : undefined }),
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  delete: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "DELETE", ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
   upload: <T>(path: string, formData: FormData) =>
     request<T>(path, { method: "POST", body: formData, headers: undefined }),
   stream,

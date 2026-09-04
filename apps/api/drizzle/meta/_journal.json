@@ -169,6 +169,20 @@
       "when": 1788465310377,
       "tag": "0023_wide_sandman",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788482925119,
+      "tag": "0024_add_entitlement_and_ai_usage",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788483773668,
+      "tag": "0025_add_entitlement_synced_at",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import {
   setPasswordSchema,
@@ -11,7 +11,7 @@ import {
   resetPasswordSchema,
 } from "@run-far/shared";
 import { db } from "../db/client.js";
-import { users, invitedEmails, accessRequests } from "../db/schema.js";
+import { users, invitedEmails } from "../db/schema.js";
 import { hashPassword, verifyPassword, verifyAgainstDummyHash, isLegacyHash } from "../lib/auth.js";
 import { normalizeEmail } from "../lib/email.js";
 import { issueAuthToken, consumeAuthToken } from "../lib/authTokens.js";
@@ -22,6 +22,7 @@ import {
   passwordResetEmail,
 } from "../lib/emailTemplates.js";
 import { setSessionCookie, clearSessionCookie, requireUserId } from "../lib/session.js";
+import { resolveEntitlement } from "../lib/entitlement.js";
 import { cookieOpts } from "../lib/cookies.js";
 import {
   buildGoogleLoginAuthorizeUrl,
@@ -47,7 +48,12 @@ class AccountDisabledError extends Error {
   }
 }
 
-async function isEmailAllowedToSignUp(email: string): Promise<boolean> {
+/** Whether `email` should be auto-comped (full free access) the moment it signs up — the
+ * DB-backed invite allowlist, or the ALLOWED_EMAILS env var. Signup itself is never gated
+ * (see routes/auth.ts signup/findOrCreateGoogleUser below): everyone can create an account,
+ * they just land on the paywall (lib/entitlement.ts) until they subscribe or are comped —
+ * this only decides who skips that paywall on day one. */
+async function shouldAutoComp(email: string): Promise<boolean> {
   const normalized = normalizeEmail(email);
   const [invited] = await db
     .select({ id: invitedEmails.id })
@@ -55,31 +61,10 @@ async function isEmailAllowedToSignUp(email: string): Promise<boolean> {
     .where(eq(invitedEmails.email, normalized));
   if (invited) return true;
 
-  // Back-compat: the ALLOWED_EMAILS env var still works alongside the DB-backed allowlist.
   if (env.allowedEmails.size > 0) return env.allowedEmails.has(normalized);
-  // No allowlist configured: fail closed in production, open in dev so a fresh checkout
-  // still works without env setup.
+  // No allowlist configured: auto-comp in dev so a fresh checkout can exercise paid features
+  // without env setup; in production this just means nobody gets a free ride by default.
   return env.NODE_ENV !== "production";
-}
-
-/** Logs a signup/sign-in from an email not on the allowlist, so the backoffice can surface
- * it as a pending signup to approve or deny — used for both Google and password accounts
- * now that account creation itself is no longer gated by the allowlist. */
-async function recordAccessRequest(email: string): Promise<void> {
-  const normalized = normalizeEmail(email);
-  await db
-    .insert(accessRequests)
-    .values({ email: normalized })
-    .onConflictDoUpdate({
-      target: accessRequests.email,
-      set: {
-        lastRequestedAt: new Date(),
-        requestCount: sql`${accessRequests.requestCount} + 1`,
-        // A returning applicant should resurface in the review queue even if a prior request
-        // was invited/dismissed — status isn't a permanent verdict, just "where things stand".
-        status: "pending",
-      },
-    });
 }
 
 async function findOrCreateGoogleUser(identity: {
@@ -112,8 +97,7 @@ async function findOrCreateGoogleUser(identity: {
     return linked;
   }
 
-  const allowed = await isEmailAllowedToSignUp(email);
-  if (!allowed) await recordAccessRequest(email);
+  const autoComp = await shouldAutoComp(email);
 
   const [created] = await db
     .insert(users)
@@ -122,7 +106,12 @@ async function findOrCreateGoogleUser(identity: {
       googleSub: identity.sub,
       passwordHash: null,
       emailVerifiedAt: new Date(), // Google already asserts email_verified on the ID token
-      approvedAt: allowed ? new Date() : null,
+      // approvedAt no longer gates anything (see lib/entitlement.ts) — every new account gets
+      // it set, kept only for the deprecated `approved` field on /api/auth/me.
+      approvedAt: new Date(),
+      ...(autoComp
+        ? { entitlementSource: "comp" as const, entitlementStatus: "active" as const, compedAt: new Date() }
+        : {}),
       signupSource: "google",
     })
     .returning();
@@ -167,10 +156,10 @@ export async function authRoutes(app: FastifyInstance) {
         return { ok: true };
       }
 
-      // Invited (allowlisted) emails are auto-approved on signup regardless of method, matching
+      // Invited (allowlisted) emails are auto-comped on signup regardless of method, matching
       // the Google path in findOrCreateGoogleUser — an admin invite shouldn't need a second
-      // manual approval just because the person chose a password.
-      const allowed = await isEmailAllowedToSignUp(email);
+      // manual step just because the person chose a password.
+      const autoComp = await shouldAutoComp(email);
 
       const [created] = await db
         .insert(users)
@@ -178,16 +167,16 @@ export async function authRoutes(app: FastifyInstance) {
           email,
           passwordHash: await hashPassword(body.password),
           emailVerifiedAt: null,
-          approvedAt: allowed ? new Date() : null,
+          // approvedAt no longer gates anything (see lib/entitlement.ts) — every new account
+          // gets it set, kept only for the deprecated `approved` field on /api/auth/me.
+          approvedAt: new Date(),
+          ...(autoComp
+            ? { entitlementSource: "comp" as const, entitlementStatus: "active" as const, compedAt: new Date() }
+            : {}),
           signupSource: "password",
         })
         .returning();
       if (!created) throw new Error("failed to create user");
-
-      // Only surface a pending signup in the backoffice when it actually needs approval.
-      // Recorded here (not just from verify-email) so it's visible even if the verification
-      // email below never sends.
-      if (!allowed) await recordAccessRequest(email);
 
       const token = await issueAuthToken(created.id, "email_verification");
       let mailSent = true;
@@ -227,8 +216,6 @@ export async function authRoutes(app: FastifyInstance) {
       reply.status(403).send({ error: { message: "Account disabled", code: "ACCOUNT_DISABLED" } });
       return;
     }
-
-    if (!user.approvedAt) await recordAccessRequest(user.email);
 
     setSessionCookie(reply, user.id);
     return { id: user.id, email: user.email };
@@ -406,9 +393,9 @@ export async function authRoutes(app: FastifyInstance) {
       const user = await findOrCreateGoogleUser(identity);
       setSessionCookie(reply, user.id);
 
-      if (!user.approvedAt) {
-        // Don't hold Google refresh tokens or spin up a calendar for an account nobody's
-        // approved yet — the pending screen offers to reconnect Google once they are.
+      if (!resolveEntitlement(user).active) {
+        // Don't hold Google refresh tokens or spin up a calendar for an account with no
+        // active entitlement — the paywall offers to reconnect Google once they subscribe.
         reply.redirect(`${env.WEB_ORIGIN}/`);
         return;
       }
@@ -507,7 +494,10 @@ export async function authRoutes(app: FastifyInstance) {
       timezone: user.timezone,
       role: user.role,
       needsTutorial: user.tutorialCompletedAt == null,
+      // Deprecated in favor of `entitlement.active` — kept for one release so the web client
+      // can be updated independently of this route shipping.
       approved: user.approvedAt != null,
+      entitlement: resolveEntitlement(user),
       emailVerified: user.emailVerifiedAt != null,
       hasPassword: user.passwordHash != null,
     };

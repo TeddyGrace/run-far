@@ -22,6 +22,7 @@ export async function settingsRoutes(app: FastifyInstance) {
 
     const [user] = await db
       .select({
+        role: users.role,
         assistantModel: users.assistantModel,
         planModel: users.planModel,
         locationLat: users.locationLat,
@@ -37,10 +38,13 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
 
     return {
-      assistantModel: user.assistantModel,
-      planModel: user.planModel,
+      // A non-admin's stored override, if one predates the admin-only restriction below, is
+      // never surfaced or honored (see integrations/anthropic/{assistantChat,planChat}.ts).
+      assistantModel: user.role === "admin" ? user.assistantModel : null,
+      planModel: user.role === "admin" ? user.planModel : null,
       defaultAssistantModel: env.ANTHROPIC_MODEL,
       defaultPlanModel: env.ANTHROPIC_MODEL,
+      canChooseModel: user.role === "admin",
       locationLat: user.locationLat,
       locationLon: user.locationLon,
       locationUpdatedAt: user.locationUpdatedAt?.toISOString() ?? null,
@@ -57,36 +61,53 @@ export async function settingsRoutes(app: FastifyInstance) {
       reply.status(400).send({ error: { message: "Invalid timezone", code: "INVALID_TIMEZONE" } });
       return;
     }
+
+    const [actor] = await db.select({ role: users.role }).from(users).where(eq(users.id, userId));
+    const isAdmin = actor?.role === "admin";
+    // Model choice drives which Anthropic model gets billed per request (see
+    // integrations/anthropic/{assistantChat,planChat}.ts) — restricting who can set it is a
+    // cost control, not a preference, so a non-admin's assistantModel/planModel fields (if
+    // sent at all) are silently dropped rather than 403ing the whole request.
+    if (!isAdmin && ("assistantModel" in body || "planModel" in body)) {
+      delete body.assistantModel;
+      delete body.planModel;
+    }
+
     const settingLocation = "locationLat" in body || "locationLon" in body;
-    const [updated] = await db
-      .update(users)
-      .set({
-        ...("assistantModel" in body ? { assistantModel: body.assistantModel ?? null } : {}),
-        ...("planModel" in body ? { planModel: body.planModel ?? null } : {}),
-        ...("locationLat" in body ? { locationLat: body.locationLat ?? null } : {}),
-        ...("locationLon" in body ? { locationLon: body.locationLon ?? null } : {}),
-        ...(settingLocation ? { locationUpdatedAt: body.locationLat != null ? new Date() : null } : {}),
-        ...("timezone" in body ? { timezone: body.timezone ?? null } : {}),
-      })
-      .where(eq(users.id, userId))
-      .returning({
-        assistantModel: users.assistantModel,
-        planModel: users.planModel,
-        locationLat: users.locationLat,
-        locationLon: users.locationLon,
-        locationUpdatedAt: users.locationUpdatedAt,
-        timezone: users.timezone,
-      });
+    const returning = {
+      assistantModel: users.assistantModel,
+      planModel: users.planModel,
+      locationLat: users.locationLat,
+      locationLon: users.locationLon,
+      locationUpdatedAt: users.locationUpdatedAt,
+      timezone: users.timezone,
+    };
+    const fields = {
+      ...(isAdmin && "assistantModel" in body ? { assistantModel: body.assistantModel ?? null } : {}),
+      ...(isAdmin && "planModel" in body ? { planModel: body.planModel ?? null } : {}),
+      ...("locationLat" in body ? { locationLat: body.locationLat ?? null } : {}),
+      ...("locationLon" in body ? { locationLon: body.locationLon ?? null } : {}),
+      ...(settingLocation ? { locationUpdatedAt: body.locationLat != null ? new Date() : null } : {}),
+      ...("timezone" in body ? { timezone: body.timezone ?? null } : {}),
+    };
+    // A non-admin sending only assistantModel/planModel leaves `fields` empty once those are
+    // stripped above — .update().set({}) would otherwise throw, so that case is just a no-op
+    // read of the current row instead of a write.
+    const [updated] =
+      Object.keys(fields).length > 0
+        ? await db.update(users).set(fields).where(eq(users.id, userId)).returning(returning)
+        : await db.select(returning).from(users).where(eq(users.id, userId));
     if (!updated) {
       reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
       return;
     }
 
     return {
-      assistantModel: updated.assistantModel,
-      planModel: updated.planModel,
+      assistantModel: isAdmin ? updated.assistantModel : null,
+      planModel: isAdmin ? updated.planModel : null,
       defaultAssistantModel: env.ANTHROPIC_MODEL,
       defaultPlanModel: env.ANTHROPIC_MODEL,
+      canChooseModel: isAdmin,
       locationLat: updated.locationLat,
       locationLon: updated.locationLon,
       locationUpdatedAt: updated.locationUpdatedAt?.toISOString() ?? null,

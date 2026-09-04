@@ -34,3 +34,16 @@ export function requireUserId(request: FastifyRequest, reply: FastifyReply): str
   }
   return result.value;
 }
+
+/**
+ * Best-effort user id for a rate-limit keyGenerator, which runs before route handlers and
+ * can't send its own 401 the way requireUserId does — an invalid/missing cookie just falls
+ * back to the request's IP, same as @fastify/rate-limit's own default, so an unauthenticated
+ * caller is still rate-limited (by IP) rather than exempted.
+ */
+export function rateLimitKey(request: FastifyRequest): string {
+  const raw = request.cookies[SESSION_COOKIE];
+  if (!raw) return request.ip;
+  const result = request.unsignCookie(raw);
+  return result.valid && result.value ? result.value : request.ip;
+}

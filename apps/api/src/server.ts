@@ -22,8 +22,11 @@ import { weatherRoutes } from "./routes/weather.js";
 import { assistantRoutes } from "./routes/assistant.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { adminRoutes } from "./routes/admin.js";
+import { billingRoutes } from "./routes/billing.js";
+import { accountRoutes } from "./routes/account.js";
 import { whoopWebhookRoutes } from "./integrations/whoop/webhooks.js";
 import { googleWebhookRoutes } from "./integrations/google/webhooks.js";
+import { stripeWebhookRoutes } from "./integrations/stripe/webhooks.js";
 import { startWhoopNightlySync } from "./integrations/whoop/nightlySync.js";
 import { startGoogleChannelRenewalJob } from "./integrations/google/channelRenewal.js";
 import { runMigrations } from "./db/migrate.js";
@@ -120,6 +123,9 @@ export async function buildServer() {
   await app.register(assistantRoutes);
   await app.register(settingsRoutes);
   await app.register(adminRoutes);
+  await app.register(billingRoutes);
+  await app.register(accountRoutes);
+  await app.register(stripeWebhookRoutes);
 
   // Production: serve the Vite SPA(s) from the same origin so `/api` cookie auth just works.
   // The backoffice SPA is scoped to its own host via a Fastify/find-my-way host constraint

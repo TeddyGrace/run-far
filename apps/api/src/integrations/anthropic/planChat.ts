@@ -16,6 +16,7 @@ import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { offsetStringForZone, shiftRunsToLocalTime } from "../../lib/zonedTime.js";
 import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
+import { AiUsageAccumulator } from "../../lib/aiCost.js";
 import { withImperialRunFields } from "../../lib/units.js";
 
 const MAX_TOOL_ITERATIONS = 8;
@@ -343,10 +344,13 @@ export async function runPlanChatTurn(params: {
   const bounds: ToolBounds = {};
 
   const [user] = await db
-    .select({ planModel: users.planModel })
+    .select({ role: users.role, planModel: users.planModel })
     .from(users)
     .where(eq(users.id, params.userId));
-  const model = user?.planModel || env.ANTHROPIC_MODEL;
+  // The picker in Settings is admin-only (see routes/settings.ts) — a non-admin's stored
+  // override, if one predates that restriction, is simply ignored rather than honored.
+  const model = (user?.role === "admin" && user.planModel) || env.ANTHROPIC_MODEL;
+  const usage = new AiUsageAccumulator();
 
   const conversation: Anthropic.MessageParam[] = params.messages.map((m) => ({
     role: m.role,
@@ -365,6 +369,7 @@ export async function runPlanChatTurn(params: {
       tools: TOOLS,
       messages: conversation,
     });
+    usage.add(response.usage);
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     let turnText = "";
@@ -450,6 +455,8 @@ export async function runPlanChatTurn(params: {
     assistantMessage = "Tell me more about your goal, timeline, and how many days you can train.";
   }
 
+  await usage.flush({ userId: params.userId, surface: "plan_builder", model });
+
   return { assistantMessage, draftToken, draft };
 }
 
@@ -479,10 +486,13 @@ export async function runPlanChatTurnStream(params: {
   const bounds: ToolBounds = {};
 
   const [user] = await db
-    .select({ planModel: users.planModel })
+    .select({ role: users.role, planModel: users.planModel })
     .from(users)
     .where(eq(users.id, params.userId));
-  const model = user?.planModel || env.ANTHROPIC_MODEL;
+  // The picker in Settings is admin-only (see routes/settings.ts) — a non-admin's stored
+  // override, if one predates that restriction, is simply ignored rather than honored.
+  const model = (user?.role === "admin" && user.planModel) || env.ANTHROPIC_MODEL;
+  const usage = new AiUsageAccumulator();
 
   const conversation: Anthropic.MessageParam[] = params.messages.map((m) => ({
     role: m.role,
@@ -513,6 +523,7 @@ export async function runPlanChatTurnStream(params: {
     });
 
     const response = await stream.finalMessage();
+    usage.add(response.usage);
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     let turnText = "";
@@ -598,6 +609,8 @@ export async function runPlanChatTurnStream(params: {
   if (!assistantMessage) {
     assistantMessage = "Tell me more about your goal, timeline, and how many days you can train.";
   }
+
+  await usage.flush({ userId: params.userId, surface: "plan_builder", model });
 
   return { assistantMessage, draftToken, draft };
 }

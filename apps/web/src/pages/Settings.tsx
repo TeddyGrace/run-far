@@ -3,7 +3,15 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ConnectionStatus, UserSettings } from "@run-far/shared";
 import { AI_MODEL_OPTIONS } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
-import { useAuth, useLogout } from "../lib/auth.js";
+import { useAuth, useLogout, type Entitlement } from "../lib/auth.js";
+
+interface BillingStatus {
+  entitlement: Entitlement;
+  hasStripeCustomer: boolean;
+  stripeConfigured: boolean;
+  aiUsageThisMonthMicros: number;
+  aiMonthlyLimitMicros: number;
+}
 
 function ConnectionCard({
   title,
@@ -121,6 +129,10 @@ function AiModelsCard() {
   });
 
   const settings = settingsQuery.data;
+
+  // The server also refuses a non-admin's PATCH of these fields — this just keeps the picker
+  // itself from rendering for an account that could never use it.
+  if (!settingsQuery.isLoading && !settings?.canChooseModel) return null;
 
   return (
     <div className="rounded-xl border border-border bg-surface-1 p-5">
@@ -290,6 +302,168 @@ function AccountCard() {
   );
 }
 
+const ENTITLEMENT_LABELS: Record<Entitlement["status"], string> = {
+  trialing: "Trial",
+  active: "Active",
+  past_due: "Payment past due",
+  canceled: "Canceled",
+  none: "No subscription",
+};
+
+function formatUsd(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+function BillingCard() {
+  const statusQuery = useQuery<BillingStatus>({
+    queryKey: ["billing", "status"],
+    queryFn: () => api.get<BillingStatus>("/billing/status"),
+  });
+
+  const openPortal = useMutation({
+    mutationFn: () => api.post<{ url: string }>("/billing/portal"),
+    onSuccess: ({ url }) => {
+      window.location.href = url;
+    },
+  });
+
+  const status = statusQuery.data;
+  if (statusQuery.isLoading || !status) {
+    return (
+      <div className="rounded-xl border border-border bg-surface-1 p-5">
+        <h3 className="font-display font-semibold text-ink-primary">Billing</h3>
+        <p className="mt-4 text-sm text-ink-muted">Loading…</p>
+      </div>
+    );
+  }
+
+  const { entitlement } = status;
+  const isComped = entitlement.source === "comp";
+
+  return (
+    <div className="rounded-xl border border-border bg-surface-1 p-5">
+      <h3 className="font-display font-semibold text-ink-primary">Billing</h3>
+      <div className="mt-3 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm text-ink-primary">
+            {isComped ? "Comped — full access, no charge" : ENTITLEMENT_LABELS[entitlement.status]}
+          </p>
+          {entitlement.expiresAt && !isComped && (
+            <p className="mt-0.5 text-xs text-ink-muted">
+              {entitlement.status === "trialing" ? "Trial ends" : "Renews"}{" "}
+              {new Date(entitlement.expiresAt).toLocaleDateString()}
+            </p>
+          )}
+        </div>
+        {status.hasStripeCustomer && (
+          <button
+            onClick={() => openPortal.mutate()}
+            disabled={openPortal.isPending}
+            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+          >
+            {openPortal.isPending ? "Opening…" : "Manage billing"}
+          </button>
+        )}
+      </div>
+      {openPortal.isError && (
+        <p className="mt-2 text-xs text-zone-red">
+          {openPortal.error instanceof ApiError ? openPortal.error.message : "Couldn't open billing portal"}
+        </p>
+      )}
+      <div className="mt-4 border-t border-border pt-3">
+        <p className="text-xs text-ink-muted">
+          AI usage this month: {formatUsd(status.aiUsageThisMonthMicros)} of{" "}
+          {formatUsd(status.aiMonthlyLimitMicros)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function DangerZoneCard() {
+  const { user } = useAuth();
+  const logout = useLogout();
+  const [confirming, setConfirming] = useState(false);
+  // The server requires a second proof of identity on DELETE /api/account (see
+  // routes/account.ts) — the account password, or for Google-only accounts with no password
+  // to re-enter, the athlete's own email address typed out.
+  const needsPassword = user?.hasPassword ?? false;
+  const [challenge, setChallenge] = useState("");
+  const deleteAccount = useMutation({
+    mutationFn: () =>
+      api.delete("/account", needsPassword ? { password: challenge } : { confirmEmail: challenge }),
+    onSuccess: async () => {
+      await logout();
+      window.location.href = "/";
+    },
+  });
+
+  return (
+    <div className="rounded-xl border border-zone-red/30 bg-surface-1 p-5">
+      <h3 className="font-display font-semibold text-ink-primary">Danger zone</h3>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <a
+          href="/api/account/export"
+          className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
+        >
+          Export my data
+        </a>
+        {!confirming ? (
+          <button
+            onClick={() => setConfirming(true)}
+            className="rounded-md border border-zone-red/40 px-3 py-1.5 text-sm text-zone-red hover:bg-zone-red/10"
+          >
+            Delete my account
+          </button>
+        ) : (
+          <form
+            className="flex w-full flex-wrap items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              deleteAccount.mutate();
+            }}
+          >
+            <span className="w-full text-sm text-ink-secondary">
+              This permanently deletes your data and cancels any subscription. It can&rsquo;t be undone.{" "}
+              {needsPassword ? "Enter your password to confirm." : `Type ${user?.email ?? "your email"} to confirm.`}
+            </span>
+            <input
+              type={needsPassword ? "password" : "email"}
+              autoComplete={needsPassword ? "current-password" : "off"}
+              value={challenge}
+              onChange={(e) => setChallenge(e.target.value)}
+              placeholder={needsPassword ? "Your password" : "Your email address"}
+              className="min-w-0 flex-1 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm text-ink-primary"
+            />
+            <button
+              type="submit"
+              disabled={deleteAccount.isPending || challenge.trim() === ""}
+              className="rounded-md bg-zone-red px-3 py-1.5 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+            >
+              {deleteAccount.isPending ? "Deleting…" : "Yes, delete"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+                setChallenge("");
+              }}
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+      </div>
+      {deleteAccount.isError && (
+        <p className="mt-2 text-xs text-zone-red">
+          {deleteAccount.error instanceof ApiError ? deleteAccount.error.message : "Couldn't delete account"}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function EmailSignInCard() {
   const { user } = useAuth();
   const [email, setEmail] = useState(user?.email ?? "");
@@ -448,6 +622,7 @@ export function Settings() {
     <div className="max-w-2xl space-y-4">
       <h1 className="mb-2 font-display text-xl font-semibold text-ink-primary">Settings</h1>
       <AccountCard />
+      <BillingCard />
       <ConnectionCard
         title="Whoop"
         description="Recovery, HRV, sleep, and workout data driving today's recommendation. Until Whoop webhooks are hosted live, use Sync now to pull the last 90 days."
@@ -482,6 +657,7 @@ export function Settings() {
       <EmailSignInCard />
       <LocationCard />
       <AiModelsCard />
+      <DangerZoneCard />
     </div>
   );
 }

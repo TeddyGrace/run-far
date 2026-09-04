@@ -54,7 +54,7 @@ export function Signup() {
                 link.
               </p>
               <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
-                Once verified, an admin will approve access before you can sign in.
+                Once verified, sign in and subscribe to get started.
               </p>
             </>
           ) : (
@@ -63,15 +63,15 @@ export function Signup() {
                 Your account was created, but we couldn't send a verification email right now.
               </p>
               <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
-                Contact an admin to get your email verified and access approved.
+                Contact support to get your email verified.
               </p>
             </>
           )
         ) : (
           <>
             <p className="mb-8 text-sm leading-relaxed text-ink-secondary">
-              Sign up with an email and password. You'll verify your email, then an admin
-              approves access before you can sign in.
+              Sign up with an email and password. You'll verify your email, then subscribe to
+              get started.
             </p>
             <form onSubmit={onSubmit} className="space-y-4">
               <div>

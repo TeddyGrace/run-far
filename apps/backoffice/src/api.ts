@@ -16,8 +16,12 @@ export type AdminUser = {
   emailVerifiedAt: string | null;
   signupSource: "google" | "password";
   createdAt: string;
-  requestCount: number | null;
-  lastRequestedAt: string | null;
+  entitlementSource: "comp" | "stripe" | "apple" | null;
+  entitlementStatus: "trialing" | "active" | "past_due" | "canceled" | "none";
+  entitlementExpiresAt: string | null;
+  compedAt: string | null;
+  compNote: string | null;
+  aiUsageThisMonthMicros: number;
 };
 
 export type MailStatus = {
@@ -69,6 +73,13 @@ export const api = {
   verifyUserEmail: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/verify-email`, { method: "POST" }),
   deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
+  compUser: (id: string, note?: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/comp`, {
+      method: "POST",
+      body: JSON.stringify({ note: note || undefined }),
+    }),
+  uncompUser: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/comp`, { method: "DELETE" }),
 };
 
 export { ApiError };

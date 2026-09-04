@@ -14,15 +14,15 @@ export function Privacy() {
         <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight text-ink-primary">
           Privacy policy
         </h1>
-        <p className="mb-10 text-sm text-ink-muted">Last updated September 1, 2026</p>
+        <p className="mb-10 text-sm text-ink-muted">Last updated September 3, 2026</p>
 
         <div className="space-y-8 text-sm leading-relaxed text-ink-secondary">
           <section>
             <h2 className="mb-2 font-display text-lg font-semibold text-ink-primary">What run-far is</h2>
             <p>
-              run-far is a personal, invite-only training dashboard for running — recovery tracking,
-              plan building, and calendar sync. It&apos;s built and operated by a single developer, not
-              a company, and access is limited to people who&apos;ve been individually invited.
+              run-far is a personal training dashboard for running — recovery tracking, plan building,
+              and calendar sync, available by subscription. It&apos;s built and operated by a single
+              developer, not a company.
             </p>
           </section>
 
@@ -59,6 +59,12 @@ export function Privacy() {
               <li>
                 <span className="font-medium text-ink-primary">Account data.</span> Email address, a
                 hashed password (if you set one), and timezone.
+              </li>
+              <li>
+                <span className="font-medium text-ink-primary">Stripe (payments).</span> If you
+                subscribe, Stripe processes and stores your payment details — we never see or store
+                your card number. We keep your subscription status and Stripe&apos;s customer and
+                subscription identifiers so the app knows what you&apos;re entitled to.
               </li>
             </ul>
           </section>
@@ -111,8 +117,8 @@ export function Privacy() {
             <h2 className="mb-2 font-display text-lg font-semibold text-ink-primary">Data sharing</h2>
             <p>
               We don&apos;t sell or share your data. It&apos;s only sent to the service providers
-              listed above (Google, Whoop, Anthropic), and only as needed to provide the app&apos;s
-              features.
+              listed above (Google, Whoop, Anthropic, Stripe), and only as needed to provide the
+              app&apos;s features.
             </p>
           </section>
 
@@ -146,14 +152,17 @@ export function Privacy() {
               Access, deletion, and contact
             </h2>
             <p>
-              To ask a question, request your data, revoke access, or delete your account, email{" "}
+              You can export your data and delete your account yourself at any time from Settings →
+              Danger zone — deleting your account also cancels any subscription and revokes run-far&apos;s
+              Google and Whoop access. For anything else — a question, a request for your data, or help
+              with an account — email{" "}
               <a
                 href={`mailto:${CONTACT_EMAIL}`}
                 className="text-ink-primary underline-offset-4 hover:underline"
               >
                 {CONTACT_EMAIL}
               </a>
-              . You can also revoke run-far&apos;s access to your Google account at any time from{" "}
+              . You can also revoke run-far&apos;s access to your Google account directly from{" "}
               <a
                 href="https://myaccount.google.com/permissions"
                 target="_blank"
@@ -167,12 +176,24 @@ export function Privacy() {
           </section>
         </div>
 
-        <p className="mt-10 text-sm">
+        <p className="mt-10 flex gap-4 text-sm">
           <Link
             to="/login"
             className="text-ink-secondary underline-offset-4 transition-colors hover:text-ink-primary hover:underline"
           >
             Back to sign in
+          </Link>
+          <Link
+            to="/terms"
+            className="text-ink-secondary underline-offset-4 transition-colors hover:text-ink-primary hover:underline"
+          >
+            Terms of service
+          </Link>
+          <Link
+            to="/refunds"
+            className="text-ink-secondary underline-offset-4 transition-colors hover:text-ink-primary hover:underline"
+          >
+            Refund policy
           </Link>
         </p>
       </div>

@@ -1,8 +1,15 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation } from "react-router-dom";
-import { api } from "./api.js";
-import { PendingApproval } from "../pages/PendingApproval.js";
+import { api, setPaymentRequiredHandler } from "./api.js";
+import { Subscribe } from "../pages/Subscribe.js";
+
+export interface Entitlement {
+  active: boolean;
+  source: "comp" | "stripe" | "apple" | null;
+  status: "trialing" | "active" | "past_due" | "canceled" | "none";
+  expiresAt: string | null;
+}
 
 export interface CurrentUser {
   id: string;
@@ -10,7 +17,9 @@ export interface CurrentUser {
   timezone: string | null;
   role: "admin" | "user";
   needsTutorial: boolean;
+  /** @deprecated use entitlement.active */
   approved: boolean;
+  entitlement: Entitlement;
   emailVerified: boolean;
   hasPassword: boolean;
 }
@@ -23,14 +32,27 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<CurrentUser>({
     queryKey: ["auth", "me"],
     queryFn: () => api.get<CurrentUser>("/auth/me"),
     retry: false,
-    // A pending athlete's PendingApproval screen has no other way to learn they've been
-    // approved — poll gently so it lands within half a minute without a manual reload.
-    refetchInterval: (query) => (query.state.data && !query.state.data.approved ? 30_000 : false),
+    // An unentitled athlete's paywall has no other way to learn a Checkout/webhook or a
+    // backoffice comp landed — poll gently so it clears within half a minute without a
+    // manual reload. setPaymentRequiredHandler below covers the opposite direction (access
+    // lapsing mid-session) immediately rather than waiting on this poll.
+    refetchInterval: (query) => (query.state.data && !query.state.data.entitlement.active ? 30_000 : false),
   });
+
+  // Any 402 from any API call (see lib/api.ts) means the session's entitlement just lapsed —
+  // refetch immediately so the paywall replaces the current screen right away instead of on
+  // the next 30s poll.
+  useEffect(() => {
+    setPaymentRequiredHandler(() => {
+      void queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+    });
+    return () => setPaymentRequiredHandler(null);
+  }, [queryClient]);
 
   // Captures the browser's IANA zone on first login and whenever it drifts (e.g. travel) —
   // the only source for this, since the server has no other way to know it. Fires at most
@@ -78,8 +100,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  if (!user.approved) {
-    return <PendingApproval />;
+  if (!user.entitlement.active) {
+    return <Subscribe />;
   }
   return <>{children}</>;
 }

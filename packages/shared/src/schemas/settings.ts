@@ -20,6 +20,9 @@ export const userSettingsSchema = z.object({
   planModel: z.string().nullable(),
   defaultAssistantModel: z.string(),
   defaultPlanModel: z.string(),
+  // Gates whether the web client renders the model picker at all — the server also refuses a
+  // non-admin's PATCH of these fields, so this is a UI convenience, not the enforcement point.
+  canChooseModel: z.boolean(),
   locationLat: z.number().nullable(),
   locationLon: z.number().nullable(),
   locationUpdatedAt: z.string().nullable(),

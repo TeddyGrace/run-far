@@ -53,6 +53,17 @@ export const authTokenPurposeEnum = pgEnum("auth_token_purpose", [
   "email_verification",
   "password_reset",
 ]);
+export const entitlementSourceEnum = pgEnum("entitlement_source", ["comp", "stripe", "apple"]);
+// "none" is the default for a brand-new account — distinct from "canceled" (had access, lost
+// it) so the backoffice and analytics can tell a never-subscribed user from a churned one.
+export const entitlementStatusEnum = pgEnum("entitlement_status", [
+  "trialing",
+  "active",
+  "past_due",
+  "canceled",
+  "none",
+]);
+export const aiSurfaceEnum = pgEnum("ai_surface", ["plan_builder", "assistant"]);
 
 // --- Core ---
 
@@ -102,6 +113,35 @@ export const users = pgTable(
     // Null means the new-account tutorial overlay hasn't been completed/skipped yet. Existing
     // accounts are backfilled to non-null at migration time so only new signups see it.
     tutorialCompletedAt: timestamp("tutorial_completed_at", { withTimezone: true }),
+    // --- Entitlement (billing) ---
+    // Resolved by lib/entitlement.ts, which is the only place that should read these columns
+    // to decide access — see activeUserGuard. Null source means the account has never had
+    // access (a brand-new signup pre-Stripe). "comp" beats everything else and never expires
+    // unless compExpiresAt is set, which is what makes the backoffice comp toggle unconditional
+    // regardless of what Stripe thinks is going on for that customer.
+    entitlementSource: entitlementSourceEnum("entitlement_source"),
+    entitlementStatus: entitlementStatusEnum("entitlement_status").notNull().default("none"),
+    // Null means "doesn't expire" (comps with no compExpiresAt); for Stripe-sourced access this
+    // mirrors the subscription's current_period_end / trial_end, kept in sync by the Stripe
+    // webhook handler only — see integrations/stripe/webhooks.ts.
+    entitlementExpiresAt: timestamp("entitlement_expires_at", { withTimezone: true }),
+    // Set only when entitlementSource = "comp", by POST /api/admin/users/:id/comp. Mirrors the
+    // approvedAt/approvedBy/compNote pattern used for admin-attributed account actions.
+    compedAt: timestamp("comped_at", { withTimezone: true }),
+    compedBy: uuid("comped_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    compNote: text("comp_note"),
+    // Null until the user has started a Stripe Checkout session at least once. Stable once set
+    // — see integrations/stripe/webhooks.ts, the only writer.
+    stripeCustomerId: text("stripe_customer_id"),
+    // Null until the trial/subscription actually starts (Checkout completes). Reused across
+    // plan changes (monthly <-> annual) since Stripe treats that as an update, not a new sub.
+    stripeSubscriptionId: text("stripe_subscription_id"),
+    // The Stripe event `created` timestamp of the last webhook that actually wrote the
+    // entitlement columns above — see integrations/stripe/webhooks.ts. Stripe can deliver
+    // events out of order (e.g. a retried older `subscription.updated` after a newer one
+    // already landed); comparing against this before writing is what stops a stale event
+    // from clobbering newer state. Unrelated to `createdAt` on this row.
+    entitlementSyncedAt: timestamp("entitlement_synced_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -110,6 +150,8 @@ export const users = pgTable(
     // catches a case-variant collision (e.g. "Foo@x.com" vs "foo@x.com") that would
     // otherwise slip past the plain unique(email) constraint above.
     uniqueIndex("users_email_lower_idx").on(sql`lower(${t.email})`),
+    uniqueIndex("users_stripe_customer_id_idx").on(t.stripeCustomerId),
+    uniqueIndex("users_stripe_subscription_id_idx").on(t.stripeSubscriptionId),
   ],
 );
 
@@ -517,3 +559,36 @@ export const authTokens = pgTable(
   },
   (t) => [index("auth_tokens_user_purpose_idx").on(t.userId, t.purpose)],
 );
+
+// One row per completed conversation turn (i.e. once per user-facing AI route call, after the
+// tool-use loop finishes) — not one row per Anthropic API call, since a single turn can involve
+// several tool-use round trips. estimatedCostMicros is computed at write time from lib/aiCost.ts
+// so a later price-table change doesn't retroactively rewrite historical spend.
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    surface: aiSurfaceEnum("surface").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull(),
+    // Integer micro-dollars (1,000,000 = $1) — avoids float rounding on money.
+    estimatedCostMicros: integer("estimated_cost_micros").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("ai_usage_user_created_idx").on(t.userId, t.createdAt)],
+);
+
+// Idempotency ledger for the Stripe webhook (integrations/stripe/webhooks.ts). Stripe retries
+// delivery and can also send events out of order, so every handler inserts the event id here
+// before acting; a unique-violation on insert means "already processed" and the handler no-ops.
+export const processedWebhookEvents = pgTable("processed_webhook_events", {
+  id: text("id").primaryKey(), // the provider's event id, e.g. Stripe's evt_...
+  provider: text("provider").notNull(), // "stripe" today; free-text so a future provider needs no migration
+  processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow(),
+});

@@ -15,6 +15,13 @@ const NAV_ITEMS = [
 
 // The week grid needs far more horizontal room than the reading-width pages.
 const WIDE_ROUTES = ["/calendar"];
+const TRIAL_BANNER_WINDOW_DAYS = 3;
+
+function trialDaysLeft(expiresAt: string | null): number | null {
+  if (!expiresAt) return null;
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  return Math.ceil(ms / (24 * 60 * 60 * 1000));
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -23,6 +30,10 @@ export function Layout({ children }: { children: ReactNode }) {
   const containerWidth = WIDE_ROUTES.some((route) => pathname.startsWith(route))
     ? "max-w-[1600px]"
     : "max-w-5xl";
+
+  const daysLeft =
+    user?.entitlement.status === "trialing" ? trialDaysLeft(user.entitlement.expiresAt) : null;
+  const showTrialBanner = daysLeft != null && daysLeft >= 0 && daysLeft <= TRIAL_BANNER_WINDOW_DAYS;
 
   return (
     <div className="min-h-screen bg-surface-0">
@@ -57,6 +68,16 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
         </div>
       </header>
+      {showTrialBanner && (
+        <div className="border-b border-accent/30 bg-accent/10 px-6 py-2 text-center text-sm text-ink-primary">
+          {daysLeft === 0
+            ? "Your trial ends today."
+            : `Your trial ends in ${daysLeft} day${daysLeft === 1 ? "" : "s"}.`}{" "}
+          <NavLink to="/settings" className="underline-offset-4 hover:underline">
+            Manage billing
+          </NavLink>
+        </div>
+      )}
       <main className={clsx("mx-auto px-6 py-8", containerWidth)}>{children}</main>
       <AssistantChat />
       {user?.needsTutorial && <OnboardingTutorial />}

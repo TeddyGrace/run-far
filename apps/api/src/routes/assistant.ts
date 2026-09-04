@@ -17,6 +17,7 @@ import {
 import { loadProposal, deleteProposal } from "../integrations/anthropic/proposalStore.js";
 import { applyScheduleChanges } from "../assistant/scheduleChanges.js";
 import { logger } from "../lib/logger.js";
+import { assertWithinAiQuota, AiQuotaExceededError, aiRouteRateLimit } from "../lib/aiCost.js";
 
 const MAX_HISTORY_MESSAGES = 40;
 
@@ -151,7 +152,10 @@ export async function assistantRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.post("/api/assistant/sessions/:id/chat", async (request, reply) => {
+  app.post(
+    "/api/assistant/sessions/:id/chat",
+    { config: { rateLimit: aiRouteRateLimit } },
+    async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
     const { id } = request.params as { id: string };
@@ -161,6 +165,17 @@ export async function assistantRoutes(app: FastifyInstance) {
         error: { message: "Anthropic is not configured. Set ANTHROPIC_API_KEY in .env.", code: "AI_NOT_CONFIGURED" },
       });
       return;
+    }
+    try {
+      await assertWithinAiQuota(userId);
+    } catch (err) {
+      if (err instanceof AiQuotaExceededError) {
+        reply.status(429).send({
+          error: { message: "Monthly AI usage limit reached — check back next month.", code: "AI_QUOTA_EXCEEDED" },
+        });
+        return;
+      }
+      throw err;
     }
 
     const [session] = await db
@@ -224,9 +239,13 @@ export async function assistantRoutes(app: FastifyInstance) {
       proposal: turn.proposal,
       proposalToken: turn.proposalToken,
     };
-  });
+    },
+  );
 
-  app.post("/api/assistant/sessions/:id/chat/stream", async (request, reply) => {
+  app.post(
+    "/api/assistant/sessions/:id/chat/stream",
+    { config: { rateLimit: aiRouteRateLimit } },
+    async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
     const { id } = request.params as { id: string };
@@ -236,6 +255,19 @@ export async function assistantRoutes(app: FastifyInstance) {
         error: { message: "Anthropic is not configured. Set ANTHROPIC_API_KEY in .env.", code: "AI_NOT_CONFIGURED" },
       });
       return;
+    }
+    // Checked before hijacking the socket so a quota-exceeded response is a normal JSON 429,
+    // not an SSE frame the client would have to special-case.
+    try {
+      await assertWithinAiQuota(userId);
+    } catch (err) {
+      if (err instanceof AiQuotaExceededError) {
+        reply.status(429).send({
+          error: { message: "Monthly AI usage limit reached — check back next month.", code: "AI_QUOTA_EXCEEDED" },
+        });
+        return;
+      }
+      throw err;
     }
 
     const [session] = await db
@@ -324,7 +356,8 @@ export async function assistantRoutes(app: FastifyInstance) {
     } finally {
       raw.end();
     }
-  });
+    },
+  );
 
   app.post("/api/assistant/apply", async (request, reply) => {
     const userId = requireUserId(request, reply);

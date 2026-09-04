@@ -54,28 +54,11 @@ describe("POST /api/auth/signup with the mail transport down", () => {
     }
   });
 
-  it("records an access request so the signup is visible in the backoffice without the email", async () => {
-    const app = await buildServer();
-    try {
-      await app.inject({
-        method: "POST",
-        url: "/api/auth/signup",
-        payload: { email: createdEmail, password: "a-fine-password-10" },
-      });
-
-      const [request] = await db.select().from(accessRequests).where(eq(accessRequests.email, createdEmail));
-      expect(request).toBeDefined();
-      expect(request?.status).toBe("pending");
-    } finally {
-      await app.close();
-    }
-  });
-
-  it("auto-approves a password signup when the email is already invited", async () => {
+  it("auto-comps a password signup when the email is already invited", async () => {
     const app = await buildServer();
     try {
       // Invited (allowlisted) up front — an admin invite should carry through to a password
-      // signup, not leave the account waiting for a second manual approval.
+      // signup as full access, not leave the account waiting for a second manual step.
       await db.insert(invitedEmails).values({ email: createdEmail });
 
       const res = await app.inject({
@@ -86,12 +69,31 @@ describe("POST /api/auth/signup with the mail transport down", () => {
 
       expect(res.statusCode).toBe(200);
       const [user] = await db.select().from(users).where(eq(users.email, createdEmail));
-      expect(user?.approvedAt).not.toBeNull();
-      // No pending access request is recorded for an already-approved signup.
-      const [request] = await db.select().from(accessRequests).where(eq(accessRequests.email, createdEmail));
-      expect(request).toBeUndefined();
+      expect(user?.entitlementSource).toBe("comp");
+      expect(user?.entitlementStatus).toBe("active");
     } finally {
       await db.delete(invitedEmails).where(eq(invitedEmails.email, createdEmail));
+      await app.close();
+    }
+  });
+
+  it("does not auto-comp a password signup when the email was never invited", async () => {
+    const app = await buildServer();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/signup",
+        payload: { email: createdEmail, password: "a-fine-password-10" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      // Signup still succeeds — it's just not comped, so the account lands on the paywall
+      // until it subscribes or an admin comps it (see lib/entitlement.ts).
+      const [user] = await db.select().from(users).where(eq(users.email, createdEmail));
+      expect(user).toBeDefined();
+      expect(user?.entitlementSource).toBeNull();
+      expect(user?.entitlementStatus).toBe("none");
+    } finally {
       await app.close();
     }
   });

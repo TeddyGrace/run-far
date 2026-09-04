@@ -138,9 +138,6 @@ function NeedsReview() {
                   </p>
                   <p className="text-xs text-ink-muted">
                     joined {new Date(u.createdAt).toLocaleDateString()}
-                    {u.requestCount && u.requestCount > 1
-                      ? ` · ${u.requestCount} sign-in attempts, last ${new Date(u.lastRequestedAt!).toLocaleString()}`
-                      : ""}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-2">
@@ -178,17 +175,53 @@ function NeedsReview() {
   );
 }
 
+function formatUsd(micros: number): string {
+  return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+const ENTITLEMENT_LABELS: Record<AdminUser["entitlementStatus"], string> = {
+  trialing: "Trial",
+  active: "Active",
+  past_due: "Past due",
+  canceled: "Canceled",
+  none: "None",
+};
+
+function EntitlementBadge({ user }: { user: AdminUser }) {
+  if (user.entitlementSource === "comp") {
+    return (
+      <span className="ml-2 rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
+        comped
+      </span>
+    );
+  }
+  if (user.entitlementSource === "stripe" || user.entitlementSource === "apple") {
+    return (
+      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-secondary">
+        {ENTITLEMENT_LABELS[user.entitlementStatus]}
+      </span>
+    );
+  }
+  return (
+    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-muted">
+      no subscription
+    </span>
+  );
+}
+
 function Accounts() {
   const { data: accounts, isLoading, error } = useUsers();
   const unapprove = useUserAction(api.unapproveUser);
   const disable = useUserAction(api.disableUser);
   const enable = useUserAction(api.enableUser);
+  const comp = useUserAction((id: string) => api.compUser(id));
+  const uncomp = useUserAction(api.uncompUser);
   const del = useUserAction(async (id: string) => {
     await api.deleteUser(id);
     return {} as AdminUser;
   });
 
-  const activeMutation = [unapprove, disable, enable, del].find((m) => m.isPending);
+  const activeMutation = [unapprove, disable, enable, comp, uncomp, del].find((m) => m.isPending);
   const activeId = activeMutation?.variables as string | undefined;
 
   const remove = (u: AdminUser) => {
@@ -240,10 +273,15 @@ function Accounts() {
                           </span>
                         )
                       )}
+                      {u.role !== "admin" && <EntitlementBadge user={u} />}
                     </p>
                     <p className="text-xs text-ink-muted">
                       joined {new Date(u.createdAt).toLocaleDateString()} · {u.signupSource}
                       {u.disabledAt && ` · ${denied ? "denied" : "disabled"} ${new Date(u.disabledAt).toLocaleDateString()}`}
+                      {u.role !== "admin" && u.aiUsageThisMonthMicros > 0 && (
+                        <> · AI this month: {formatUsd(u.aiUsageThisMonthMicros)}</>
+                      )}
+                      {u.compNote && ` · comp note: ${u.compNote}`}
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-2">
@@ -254,10 +292,29 @@ function Accounts() {
                     {u.role === "admin" && (
                       <span className="self-center text-xs text-ink-muted">protected account</span>
                     )}
+                    {u.role !== "admin" &&
+                      (u.entitlementSource === "comp" ? (
+                        <button
+                          onClick={() => uncomp.mutate(u.id)}
+                          disabled={busy}
+                          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                        >
+                          {uncomp.isPending && busy ? "Un-comping…" : "Un-comp"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => comp.mutate(u.id)}
+                          disabled={busy}
+                          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+                        >
+                          {comp.isPending && busy ? "Comping…" : "Comp"}
+                        </button>
+                      ))}
                     {u.role !== "admin" && u.approvedAt && (
                       <button
                         onClick={() => unapprove.mutate(u.id)}
                         disabled={busy}
+                        title="Legacy from the invite-approval flow — clears an invite-granted comp without affecting Stripe or a comp granted from the button above"
                         className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
                       >
                         {unapprove.isPending && busy ? "Unapproving…" : "Unapprove"}

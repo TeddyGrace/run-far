@@ -13,6 +13,7 @@ import { newUploadToken, saveUpload, loadUpload } from "../integrations/training
 import { db } from "../db/client.js";
 import { trainingPlans, plannedRuns } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
+import { assertWithinAiQuota, AiQuotaExceededError, aiRouteRateLimit } from "../lib/aiCost.js";
 import { activatePlan, archivePlan, resyncPlanToGoogle, unarchivePlan } from "../plans/lifecycle.js";
 import {
   isAnthropicConfigured,
@@ -152,7 +153,10 @@ export async function planRoutes(app: FastifyInstance) {
     return { ok: true, planId: id };
   });
 
-  app.post("/api/plans/ai/chat", async (request, reply) => {
+  app.post(
+    "/api/plans/ai/chat",
+    { config: { rateLimit: aiRouteRateLimit } },
+    async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
 
@@ -164,6 +168,17 @@ export async function planRoutes(app: FastifyInstance) {
         },
       });
       return;
+    }
+    try {
+      await assertWithinAiQuota(userId);
+    } catch (err) {
+      if (err instanceof AiQuotaExceededError) {
+        reply.status(429).send({
+          error: { message: "Monthly AI usage limit reached — check back next month.", code: "AI_QUOTA_EXCEEDED" },
+        });
+        return;
+      }
+      throw err;
     }
 
     const body = planAiChatRequestSchema.parse(request.body);
@@ -178,9 +193,13 @@ export async function planRoutes(app: FastifyInstance) {
         },
       });
     }
-  });
+    },
+  );
 
-  app.post("/api/plans/ai/chat/stream", async (request, reply) => {
+  app.post(
+    "/api/plans/ai/chat/stream",
+    { config: { rateLimit: aiRouteRateLimit } },
+    async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
 
@@ -192,6 +211,19 @@ export async function planRoutes(app: FastifyInstance) {
         },
       });
       return;
+    }
+    // Checked before hijacking the socket so a quota-exceeded response is a normal JSON 429,
+    // not an SSE frame the client would have to special-case.
+    try {
+      await assertWithinAiQuota(userId);
+    } catch (err) {
+      if (err instanceof AiQuotaExceededError) {
+        reply.status(429).send({
+          error: { message: "Monthly AI usage limit reached — check back next month.", code: "AI_QUOTA_EXCEEDED" },
+        });
+        return;
+      }
+      throw err;
     }
 
     const body = planAiChatRequestSchema.parse(request.body);
@@ -225,7 +257,8 @@ export async function planRoutes(app: FastifyInstance) {
     } finally {
       raw.end();
     }
-  });
+    },
+  );
 
   app.post("/api/plans/ai/commit", async (request, reply) => {
     const userId = requireUserId(request, reply);
