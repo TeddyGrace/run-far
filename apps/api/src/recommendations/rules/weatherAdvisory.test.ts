@@ -74,6 +74,7 @@ function makeContext(overrides: Partial<RuleContext> = {}): RuleContext {
     busyPeriods: [],
     weatherForecast: [],
     timeZone: "America/New_York",
+    now: new Date("2026-08-12T12:00:00Z"),
     ...overrides,
   };
 }

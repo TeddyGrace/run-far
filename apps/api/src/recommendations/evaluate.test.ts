@@ -2,10 +2,11 @@ import { describe, it, expect } from "vitest";
 import { evaluate } from "./evaluate.js";
 import type { RuleContext, PlannedRunRow } from "./types.js";
 import type { RecoverySnapshot } from "@run-far/shared";
+import type { DailyForecast } from "../integrations/weather/weatherClient.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 
 const baseSnapshot: RecoverySnapshot = {
-  date: "2026-08-11",
+  date: "2026-08-12",
   recoveryScore: 70,
   hrvRmssdMs: 60,
   hrvBaselineMs: 60,
@@ -56,14 +57,24 @@ function makeContext(overrides: Partial<RuleContext> = {}): RuleContext {
     busyPeriods: [],
     weatherForecast: [],
     timeZone: "America/New_York",
+    // 08:00 America/New_York on Aug 12 — the local day makeRun() schedules onto by default,
+    // so the recovery-driven rules (which now only touch *today's* run) see one.
+    now: new Date("2026-08-12T12:00:00Z"),
     ...overrides,
   };
+}
+
+/** evaluate() returns a ranked array; these tests were written against the primary/secondary
+ * split the dashboard renders, which is just index 0 and the rest. */
+function evaluated(ctx: RuleContext) {
+  const fired = evaluate(ctx);
+  return { primary: fired[0] ?? null, secondary: fired.slice(1), all: fired };
 }
 
 describe("red-recovery-hard-session", () => {
   it("downgrades a hard session when recovery is red and next run is hard", () => {
     const run = makeRun({ runType: "tempo" });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({
         snapshot: { ...baseSnapshot, recoveryScore: 25 },
         upcoming: [run],
@@ -79,7 +90,7 @@ describe("red-recovery-hard-session", () => {
 
   it("does not fire when recovery is red but next run is already easy", () => {
     const run = makeRun({ runType: "easy" });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, recoveryScore: 25 }, upcoming: [run] }),
     );
     expect(result.primary?.ruleId).not.toBe("red-recovery-hard-session");
@@ -87,7 +98,7 @@ describe("red-recovery-hard-session", () => {
 
   it("does not fire when recovery score is null", () => {
     const run = makeRun({ runType: "tempo" });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, recoveryScore: null }, upcoming: [run] }),
     );
     expect(result.primary?.ruleId).not.toBe("red-recovery-hard-session");
@@ -97,7 +108,7 @@ describe("red-recovery-hard-session", () => {
 describe("yellow-recovery-hard-session", () => {
   it("trims volume by the configured percentage in the yellow zone", () => {
     const run = makeRun({ runType: "long", durationMin: 100, distanceM: 20000 });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, recoveryScore: 50 }, upcoming: [run] }),
     );
     expect(result.primary?.ruleId).toBe("yellow-recovery-hard-session");
@@ -110,7 +121,7 @@ describe("yellow-recovery-hard-session", () => {
 
   it("does not fire in the red zone (red rule takes priority)", () => {
     const run = makeRun({ runType: "tempo" });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, recoveryScore: 20 }, upcoming: [run] }),
     );
     expect(result.primary?.ruleId).toBe("red-recovery-hard-session");
@@ -119,7 +130,7 @@ describe("yellow-recovery-hard-session", () => {
 
 describe("hrv-suppressed", () => {
   it("fires when HRV has been suppressed for the minimum consecutive days", () => {
-    const result = evaluate(
+    const result = evaluated(
       makeContext({
         snapshot: {
           ...baseSnapshot,
@@ -135,7 +146,7 @@ describe("hrv-suppressed", () => {
   });
 
   it("does not fire with only a single suppressed day", () => {
-    const result = evaluate(
+    const result = evaluated(
       makeContext({
         snapshot: {
           ...baseSnapshot,
@@ -153,7 +164,7 @@ describe("hrv-suppressed", () => {
 describe("sleep-debt", () => {
   it("shifts the next hard session a day later when debt exceeds the threshold", () => {
     const run = makeRun({ runType: "interval", scheduledAt: new Date("2026-08-12T14:00:00Z") });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, sleepDebtMinToday: 200 }, upcoming: [run] }),
     );
     expect(result.primary?.ruleId).toBe("sleep-debt");
@@ -167,9 +178,36 @@ describe("sleep-debt", () => {
     ]);
   });
 
+  it("goes advisory instead of double-booking when the days ahead are all taken", () => {
+    const run = makeRun({ runType: "interval", scheduledAt: new Date("2026-08-12T14:00:00Z") });
+    const blockers = [13, 14, 15].map((d) =>
+      makeRun({ runType: "easy", scheduledAt: new Date(`2026-08-${d}T14:00:00Z`) }),
+    );
+    const result = evaluated(
+      makeContext({
+        snapshot: { ...baseSnapshot, sleepDebtMinToday: 200 },
+        upcoming: [run, ...blockers],
+      }),
+    );
+    expect(result.all.find((r) => r.ruleId === "sleep-debt")?.proposedChanges).toEqual([]);
+  });
+
+  it("skips to the first free day rather than landing on an occupied one", () => {
+    const run = makeRun({ runType: "interval", scheduledAt: new Date("2026-08-12T14:00:00Z") });
+    const occupied = makeRun({ runType: "easy", scheduledAt: new Date("2026-08-13T14:00:00Z") });
+    const result = evaluated(
+      makeContext({
+        snapshot: { ...baseSnapshot, sleepDebtMinToday: 200 },
+        upcoming: [run, occupied],
+      }),
+    );
+    const change = result.all.find((r) => r.ruleId === "sleep-debt")?.proposedChanges[0];
+    expect(dateYmdInZone(new Date(change?.to as string), "America/New_York")).toBe("2026-08-14");
+  });
+
   it("does not fire below the debt threshold", () => {
     const run = makeRun({ runType: "interval" });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, sleepDebtMinToday: 50 }, upcoming: [run] }),
     );
     expect(result.primary).toBeNull();
@@ -178,23 +216,25 @@ describe("sleep-debt", () => {
 
 describe("acwr-spike", () => {
   it("fires as an info-level note when ACWR exceeds the spike threshold", () => {
-    const result = evaluate(makeContext({ snapshot: { ...baseSnapshot, acwr: 1.8 } }));
+    const result = evaluated(makeContext({ snapshot: { ...baseSnapshot, acwr: 1.8 } }));
     expect(result.primary?.ruleId).toBe("acwr-spike");
     expect(result.primary?.severity).toBe("info");
     expect(result.primary?.proposedChanges).toEqual([]);
   });
 
   it("does not fire below the threshold", () => {
-    const result = evaluate(makeContext({ snapshot: { ...baseSnapshot, acwr: 1.4 } }));
+    const result = evaluated(makeContext({ snapshot: { ...baseSnapshot, acwr: 1.4 } }));
     expect(result.primary).toBeNull();
   });
 });
 
 describe("green-recovery-easy-day", () => {
-  it("suggests pulling a later hard run forward when recovery is high and today is easy", () => {
-    const today = makeRun({ runType: "easy", scheduledAt: new Date("2026-08-11T14:00:00Z") });
+  it("swaps today's easy run with a later hard one when recovery is high", () => {
+    // Both halves of the swap must be proposed. Writing only the hard run's new time (the
+    // original behaviour) left today's easy run at the same instant, stacking two runs.
+    const today = makeRun({ runType: "easy", scheduledAt: new Date("2026-08-12T14:00:00Z") });
     const laterHard = makeRun({ runType: "tempo", scheduledAt: new Date("2026-08-14T14:00:00Z") });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({
         snapshot: { ...baseSnapshot, recoveryScore: 90 },
         upcoming: [today, laterHard],
@@ -208,12 +248,18 @@ describe("green-recovery-easy-day", () => {
         from: laterHard.scheduledAt.toISOString(),
         to: today.scheduledAt.toISOString(),
       },
+      {
+        plannedRunId: today.id,
+        field: "scheduledAt",
+        from: today.scheduledAt.toISOString(),
+        to: laterHard.scheduledAt.toISOString(),
+      },
     ]);
   });
 
   it("does not fire when today is already a hard day", () => {
     const today = makeRun({ runType: "tempo" });
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ snapshot: { ...baseSnapshot, recoveryScore: 90 }, upcoming: [today] }),
     );
     expect(result.primary?.ruleId).not.toBe("green-recovery-easy-day");
@@ -227,7 +273,7 @@ describe("calendar-conflict", () => {
       durationMin: 60,
     });
     const busy = { start: new Date("2026-08-12T14:00:00Z"), end: new Date("2026-08-12T15:00:00Z") };
-    const result = evaluate(makeContext({ upcoming: [run], busyPeriods: [busy] }));
+    const result = evaluated(makeContext({ upcoming: [run], busyPeriods: [busy] }));
     expect(result.primary?.ruleId).toBe("calendar-conflict");
     expect(result.primary?.proposedChanges[0]?.plannedRunId).toBe(run.id);
     expect(result.primary?.proposedChanges[0]?.field).toBe("scheduledAt");
@@ -236,7 +282,7 @@ describe("calendar-conflict", () => {
   it("does not fire when there is no overlap", () => {
     const run = makeRun({ scheduledAt: new Date("2026-08-12T14:00:00Z"), durationMin: 60 });
     const busy = { start: new Date("2026-08-12T16:00:00Z"), end: new Date("2026-08-12T17:00:00Z") };
-    const result = evaluate(makeContext({ upcoming: [run], busyPeriods: [busy] }));
+    const result = evaluated(makeContext({ upcoming: [run], busyPeriods: [busy] }));
     expect(result.primary).toBeNull();
   });
 
@@ -246,7 +292,7 @@ describe("calendar-conflict", () => {
     const clean = makeRun({ scheduledAt: new Date("2026-08-13T14:00:00Z"), durationMin: 60 });
     const busyA = { start: new Date("2026-08-12T14:00:00Z"), end: new Date("2026-08-12T15:00:00Z") };
     const busyB = { start: new Date("2026-08-14T14:00:00Z"), end: new Date("2026-08-14T15:00:00Z") };
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ upcoming: [runA, clean, runB], busyPeriods: [busyA, busyB] }),
     );
     expect(result.primary?.ruleId).toBe("calendar-conflict");
@@ -260,7 +306,7 @@ describe("calendar-conflict", () => {
     // time slot, so it should never be treated as a scheduling conflict.
     const rest = makeRun({ runType: "rest", scheduledAt: new Date("2026-08-22T22:00:00Z"), durationMin: 30 });
     const busy = { start: new Date("2026-08-22T00:00:00Z"), end: new Date("2026-08-23T00:00:00Z") };
-    const result = evaluate(makeContext({ upcoming: [rest], busyPeriods: [busy] }));
+    const result = evaluated(makeContext({ upcoming: [rest], busyPeriods: [busy] }));
     expect(result.primary?.ruleId).not.toBe("calendar-conflict");
   });
 
@@ -272,7 +318,7 @@ describe("calendar-conflict", () => {
     // should return null instead.
     const run = makeRun({ runType: "easy", scheduledAt: new Date("2026-08-22T14:00:00Z"), durationMin: 60 });
     const fullWindowBusy = { start: new Date("2026-08-22T08:00:00Z"), end: new Date("2026-08-23T02:00:00Z") };
-    const result = evaluate(makeContext({ upcoming: [run], busyPeriods: [fullWindowBusy] }));
+    const result = evaluated(makeContext({ upcoming: [run], busyPeriods: [fullWindowBusy] }));
     expect(result.primary?.ruleId).not.toBe("calendar-conflict");
   });
 
@@ -282,7 +328,7 @@ describe("calendar-conflict", () => {
     // i.e. between 09:00Z and 01:00Z the next day — not 5am-9pm UTC.
     const run = makeRun({ scheduledAt: new Date("2026-08-12T14:00:00Z"), durationMin: 60 });
     const busy = { start: new Date("2026-08-12T14:00:00Z"), end: new Date("2026-08-12T23:00:00Z") };
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ upcoming: [run], busyPeriods: [busy], timeZone: "America/New_York" }),
     );
     const to = result.primary?.proposedChanges[0]?.to as string;
@@ -299,7 +345,7 @@ describe("calendar-conflict", () => {
     // on Aug 12 local time, not Aug 13.
     const run = makeRun({ scheduledAt: new Date("2026-08-13T00:00:00Z"), durationMin: 30 });
     const busy = { start: new Date("2026-08-13T00:00:00Z"), end: new Date("2026-08-13T00:30:00Z") };
-    const result = evaluate(
+    const result = evaluated(
       makeContext({ upcoming: [run], busyPeriods: [busy], timeZone: "America/New_York" }),
     );
     const to = result.primary?.proposedChanges[0]?.to as string;
@@ -312,7 +358,7 @@ describe("evaluate priority ordering", () => {
   it("ranks red above yellow and surfaces info rules as secondary", () => {
     const run = makeRun({ runType: "tempo", scheduledAt: new Date("2026-08-12T14:00:00Z") });
     const busy = { start: new Date("2026-08-12T14:00:00Z"), end: new Date("2026-08-12T15:00:00Z") };
-    const result = evaluate(
+    const result = evaluated(
       makeContext({
         snapshot: { ...baseSnapshot, recoveryScore: 25, acwr: 1.8 },
         upcoming: [run],
@@ -325,10 +371,74 @@ describe("evaluate priority ordering", () => {
     );
   });
 
-  it("returns no primary when nothing fires", () => {
+  it("returns an empty array when nothing fires", () => {
     const run = makeRun({ runType: "easy" });
-    const result = evaluate(makeContext({ upcoming: [run] }));
+    const result = evaluated(makeContext({ upcoming: [run] }));
+    expect(result.all).toEqual([]);
     expect(result.primary).toBeNull();
-    expect(result.secondary).toEqual([]);
+  });
+
+  it("puts an actionable rule ahead of an advisory one at the same severity", () => {
+    // weatherAdvisory reports a Severe NWS alert as "red" but proposes no change. Ranking on
+    // severity alone let that dead-end card headline the dashboard over a red-recovery
+    // override that actually wants to change today's session.
+    const run = makeRun({ runType: "tempo", scheduledAt: new Date("2026-08-12T14:00:00Z") });
+    const result = evaluated(
+      makeContext({
+        snapshot: { ...baseSnapshot, recoveryScore: 25 },
+        upcoming: [run],
+        weatherForecast: [
+          {
+            date: "2026-08-12",
+            highTempF: 70,
+            lowTempF: 55,
+            shortForecast: "Storms",
+            precipProbabilityPct: 20,
+            windSpeed: null,
+            windDirection: null,
+            iconUrl: null,
+            iconCode: null,
+            hourly: [],
+            segments: [],
+            alerts: [
+              {
+                event: "Severe Thunderstorm Warning",
+                severity: "Severe",
+                headline: "Severe thunderstorms",
+                effective: "2026-08-12T13:00:00Z",
+                expires: "2026-08-12T18:00:00Z",
+              },
+            ],
+          } as unknown as DailyForecast,
+        ],
+      }),
+    );
+    expect(result.primary?.ruleId).toBe("red-recovery-hard-session");
+    expect(result.secondary.map((r) => r.ruleId)).toContain("weather-advisory");
+  });
+});
+
+describe("today-only targeting", () => {
+  it("does not touch tomorrow's session with today's recovery score", () => {
+    // Recovery, sleep debt and HRV are statements about today. The old nextRun() took the
+    // earliest run anywhere in the 10-day lookahead, so a rest day today let this morning's
+    // red recovery score downgrade a session days out.
+    const tomorrow = makeRun({ runType: "tempo", scheduledAt: new Date("2026-08-13T14:00:00Z") });
+    const result = evaluated(
+      makeContext({
+        snapshot: { ...baseSnapshot, recoveryScore: 25, sleepDebtMinToday: 200 },
+        upcoming: [tomorrow],
+      }),
+    );
+    expect(result.all.map((r) => r.ruleId)).not.toContain("red-recovery-hard-session");
+    expect(result.all.map((r) => r.ruleId)).not.toContain("sleep-debt");
+  });
+
+  it("still fires against a session later today", () => {
+    const laterToday = makeRun({ runType: "tempo", scheduledAt: new Date("2026-08-12T22:00:00Z") });
+    const result = evaluated(
+      makeContext({ snapshot: { ...baseSnapshot, recoveryScore: 25 }, upcoming: [laterToday] }),
+    );
+    expect(result.primary?.ruleId).toBe("red-recovery-hard-session");
   });
 });

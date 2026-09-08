@@ -1,6 +1,6 @@
 import { RECOMMENDATION_CONFIG } from "../config.js";
 import type { Rule } from "../types.js";
-import { nextRun, isHardRun } from "./shared.js";
+import { todaysRun, isHardRun } from "./shared.js";
 
 /**
  * HRV has been more than N SDs below baseline for at least `minConsecutiveDays`. This can
@@ -9,7 +9,7 @@ import { nextRun, isHardRun } from "./shared.js";
  * the consecutive-day count (computed by the snapshot builder, which has the history this
  * rule doesn't) is what actually gates the rule.
  */
-export const hrvSuppressed: Rule = ({ snapshot, upcoming }) => {
+export const hrvSuppressed: Rule = ({ snapshot, upcoming, timeZone, now }) => {
   const { hrvRmssdMs, hrvBaselineMs, hrvBaselineSd, hrvSuppressedConsecutiveDays } = snapshot;
   if (hrvRmssdMs == null || hrvBaselineMs == null || hrvBaselineSd == null || hrvBaselineSd === 0) {
     return null;
@@ -17,7 +17,7 @@ export const hrvSuppressed: Rule = ({ snapshot, upcoming }) => {
   if (hrvSuppressedConsecutiveDays < RECOMMENDATION_CONFIG.hrv.minConsecutiveDays) return null;
   const sdBelow = (hrvBaselineMs - hrvRmssdMs) / hrvBaselineSd;
 
-  const run = nextRun(upcoming);
+  const run = todaysRun(upcoming, timeZone, now);
   const runNote = isHardRun(run) && run ? ` The planned ${run.runType} session is a candidate to ease back.` : "";
 
   return {

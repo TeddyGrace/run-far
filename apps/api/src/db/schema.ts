@@ -431,6 +431,10 @@ export const recommendations = pgTable(
     inputSnapshot: jsonb("input_snapshot").notNull(),
     proposedChanges: jsonb("proposed_changes").notNull().default([]),
     status: recommendationStatusEnum("status").notNull().default("pending"),
+    // Priority order decided by the rules engine (0 = the primary card). Persisted rather than
+    // re-derived at read time so the ranking evaluate() computes — severity, then actionable
+    // before advisory, then declared rule order — is what the dashboard actually renders.
+    rank: integer("rank").notNull().default(0),
     // Content hash of {ruleId, summary, reason, proposedChanges} — deliberately excludes
     // `date` so a dismissal survives the day rolling over. Lets generateRecommendations tell
     // "this is the same conflict the athlete already dismissed" apart from "this is a new
@@ -442,12 +446,17 @@ export const recommendations = pgTable(
   (t) => [
     index("recommendations_user_date_idx").on(t.userId, t.date),
     index("recommendations_user_fingerprint_idx").on(t.userId, t.fingerprint, t.status),
-    // At most one *pending* row per (user, day, rule) — makes the regenerate-on-ingestion
-    // path (webhooks, dashboard reads, nightly safety net) idempotent under real concurrency
+    // At most one *pending* row per (user, rule) — makes the regenerate-on-ingestion path
+    // (webhooks, dashboard reads, nightly safety net) idempotent under real concurrency
     // instead of relying on a non-atomic delete-then-insert. Resolved rows (accepted/dismissed)
-    // are excluded so history can keep multiple rows per rule per day.
+    // are excluded so history can keep multiple rows per rule.
+    //
+    // `date` is deliberately NOT part of this index: with it, every new day minted a second
+    // pending row for the same rule while the retraction sweep only ever looked at today's
+    // date, so live cards piled up across days and proposed edits to runs already in the past.
+    // The column stays for display and audit.
     uniqueIndex("recommendations_pending_unique_idx")
-      .on(t.userId, t.date, t.ruleId)
+      .on(t.userId, t.ruleId)
       .where(sql`${t.status} = 'pending'`),
   ],
 );

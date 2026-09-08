@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { recommendations } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
@@ -19,7 +19,10 @@ export async function recommendationRoutes(app: FastifyInstance) {
       .select()
       .from(recommendations)
       .where(and(eq(recommendations.userId, userId), eq(recommendations.status, "pending")))
-      .orderBy(desc(recommendations.createdAt));
+      // `rank` is the priority order the rules engine decided (0 = primary). Ordering by
+      // createdAt alone, as this used to, returned the engine's ordering reversed — the
+      // lowest-severity note ended up as the dashboard's headline card.
+      .orderBy(asc(recommendations.rank), desc(recommendations.createdAt));
   });
 
   app.post("/api/recommendations/:id/accept", async (request, reply) => {
@@ -41,7 +44,24 @@ export async function recommendationRoutes(app: FastifyInstance) {
     }
 
     const changes = z.array(proposedChangeSchema).parse(rec.proposedChanges);
-    await applyProposedChanges(userId, changes);
+    const { applied, skipped } = await applyProposedChanges(userId, changes);
+
+    // Every change was against a run that has since moved on — the card is describing a plan
+    // that no longer exists, so resolve it without pretending anything was applied. The next
+    // regeneration will mint a fresh card against the run's current state.
+    if (applied.length === 0 && skipped.length > 0) {
+      await db
+        .update(recommendations)
+        .set({ status: "dismissed", appliedAt: new Date() })
+        .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
+      reply.status(409).send({
+        error: {
+          message: "This suggestion is out of date — the run has changed since it was generated.",
+          code: "STALE_RECOMMENDATION",
+        },
+      });
+      return;
+    }
 
     await db
       .update(recommendations)

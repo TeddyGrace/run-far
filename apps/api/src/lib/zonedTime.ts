@@ -97,3 +97,18 @@ export function shiftRunsToLocalTime<T extends { scheduledAt: string }>(
     return { ...run, scheduledAt: zonedLocalToIso(day, localTime, timeZone) };
   });
 }
+
+/**
+ * Shift an instant by `n` calendar days in `timeZone`, preserving the athlete's wall-clock
+ * time of day. Adding 24h * n in UTC would move the local clock by an hour across a DST
+ * boundary — a 7am run becoming a 6am or 8am one — so the shift is done on the local
+ * calendar date and re-anchored through `zonedLocalToIso`.
+ */
+export function addLocalDays(instant: Date, n: number, timeZone: string): Date {
+  const p = partsInZone(instant, timeZone);
+  const shifted = new Date(Date.UTC(p.year, p.month - 1, p.day));
+  shifted.setUTCDate(shifted.getUTCDate() + n);
+  const ymd = shifted.toISOString().slice(0, 10);
+  const hm = `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+  return new Date(zonedLocalToIso(ymd, hm, timeZone));
+}
