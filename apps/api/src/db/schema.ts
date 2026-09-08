@@ -84,13 +84,14 @@ export const users = pgTable(
     // backoffice — the irreversible option is deleting the row outright.
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
     // Null until the emailed verification link is used (or, for Google sign-ins, Google's
-    // own email_verified assertion). Gates nothing by itself — approvedAt is the real gate —
-    // but login rejects an unverified password account so an unowned email can't sit in the
-    // approval queue.
+    // own email_verified assertion). Gates nothing by itself — entitlement is the real gate
+    // (lib/entitlement.ts) — but login rejects an unverified password account so an unowned
+    // email can't hold one.
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
-    // Null means pending admin approval — see lib/activeUser.ts, which blocks all /api
-    // access until this is set. Existing rows are backfilled to createdAt by migration
-    // 0021 so no pre-existing user is locked out by this column's introduction.
+    // Legacy. Once the gate for all /api access; now set unconditionally on every signup and
+    // read by nothing but the deprecated `approved` field on /api/auth/me and the admin
+    // self-heal in lib/adminBootstrap.ts. Access is decided by lib/entitlement.ts. Safe to
+    // drop once no client reads `approved`.
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     approvedBy: uuid("approved_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
     // How the account was created — surfaced in the backoffice, not used for authorization.
@@ -526,12 +527,10 @@ export const invitedEmails = pgTable("invited_emails", {
   invitedAt: timestamp("invited_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// One row per email that has attempted a sign-up/sign-in without being on the invite
-// allowlist — upserted by recordAccessRequest (routes/auth.ts). Not an actionable queue on
-// its own: the backoffice joins this into the users list (GET /api/admin/users) to show
-// attempt counts inline on the pending account, since every uninvited signup already creates
-// a `users` row with approvedAt null. `status` here is just a log of what happened to the
-// email, not a gate — approving/denying always acts on the users row.
+// Legacy, from when the invite allowlist gated account creation: one row per email that had
+// attempted a sign-up without being on it. Signup is open now, so nothing writes new rows —
+// the only remaining reads clear a deleted account's row (routes/admin.ts, routes/account.ts)
+// so historical rows can't outlive the person. Safe to drop in a later cleanup.
 export const accessRequests = pgTable("access_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull().unique(),

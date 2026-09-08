@@ -12,7 +12,6 @@ export type AdminUser = {
   email: string;
   role: "user" | "admin";
   disabledAt: string | null;
-  approvedAt: string | null;
   emailVerifiedAt: string | null;
   signupSource: "google" | "password";
   createdAt: string;
@@ -65,14 +64,10 @@ export const api = {
     request<AdminUser>(`/api/admin/users/${id}/disable`, { method: "POST" }),
   enableUser: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/enable`, { method: "POST" }),
-  approveUser: (id: string) =>
-    request<AdminUser>(`/api/admin/users/${id}/approve`, { method: "POST" }),
-  denyUser: (id: string) => request<AdminUser>(`/api/admin/users/${id}/deny`, { method: "POST" }),
-  unapproveUser: (id: string) =>
-    request<AdminUser>(`/api/admin/users/${id}/unapprove`, { method: "POST" }),
   verifyUserEmail: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/verify-email`, { method: "POST" }),
   deleteUser: (id: string) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
+  /** "Free access" in the UI — grants the comp entitlement that outranks Stripe entirely. */
   compUser: (id: string, note?: string) =>
     request<AdminUser>(`/api/admin/users/${id}/comp`, {
       method: "POST",

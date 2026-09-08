@@ -23,7 +23,7 @@ const compRequestSchema = z.object({
 /**
  * Loads the target of a destructive account action, refusing it outright when that account is
  * an admin. `role` is granted only by data migration (drizzle/0018_handy_maddog.sql) and by no
- * app route, so an admin that gets deleted — or locked out via disable/unapprove — can't be
+ * app route, so an admin that gets deleted — or locked out via disable — can't be
  * replaced from inside the app, permanently orphaning the backoffice. The SELF_TARGET checks
  * don't cover this: they only stop an admin acting on their own row, not on another admin's.
  * Sends 404/403 and returns undefined on failure — callers should `if (!target) return;`.
@@ -40,7 +40,7 @@ async function loadDestructibleUser(id: string, reply: FastifyReply) {
   if (target.role === "admin") {
     reply.status(403).send({
       error: {
-        message: "Admin accounts can't be deleted, disabled, or unapproved",
+        message: "Admin accounts can't be deleted, disabled, or have access revoked",
         code: "ADMIN_TARGET",
       },
     });
@@ -50,52 +50,50 @@ async function loadDestructibleUser(id: string, reply: FastifyReply) {
 }
 
 /**
- * Approves whatever account exists for `email`, idempotently, and keeps the invite/access-request
- * surfaces in sync. Every approval path (invite creation, the users list) funnels through here so
- * the behaviour — and the single "you're approved" email — is identical no matter where the admin
- * clicked.
+ * Grants free access (a comp) to whatever account exists for `email`, idempotently, and adds
+ * the email to the invite allowlist. Both invite surfaces funnel through here so the
+ * behaviour — and the single "you're in" email — is identical however the admin got here.
  *
- * The `isNull(approvedAt)` guard is the idempotency key: re-approving an already-approved account
- * flips nothing and sends no second email. Returns the row it actually flipped, or undefined when
- * there was no account, or it was already approved.
+ * The `isNull(compedAt)` guard is the idempotency key: re-inviting an already-comped account
+ * grants nothing again and sends no second email. The three outcomes are distinguished so the
+ * caller knows which mail to send — only a genuinely new email gets the signup invitation.
  */
-async function approveExistingUser(
-  email: string,
-  adminId: string,
-): Promise<{ id: string; email: string; approvedAt: Date | null } | undefined> {
-  // Always ensure the email is invited (allowlisted) and drops off the access-requests review
-  // queue, even when there's no account yet — this is what makes a future signup auto-approve.
+type InviteOutcome = "granted" | "already-had-access" | "no-account";
+
+async function grantInviteComp(email: string, adminId: string): Promise<InviteOutcome> {
+  // Allowlist the email even when there's no account yet — that is what makes a future signup
+  // start out with free access (see shouldAutoComp in routes/auth.ts). Signup itself is open
+  // to everyone; the allowlist only decides who skips the paywall.
   await db
     .insert(invitedEmails)
     .values({ email, invitedBy: adminId })
     .onConflictDoUpdate({ target: invitedEmails.email, set: { invitedBy: adminId } });
-  await db.update(accessRequests).set({ status: "invited" }).where(eq(accessRequests.email, email));
 
-  // approvedAt no longer gates access (see lib/entitlement.ts / activeUserGuard) — an invite
-  // now grants entitlement directly, as a comp, so this stays the working "give this person
-  // free access" action rather than becoming a no-op once open signup ships.
-  const [flipped] = await db
+  const [granted] = await db
     .update(users)
     .set({
-      approvedAt: new Date(),
-      approvedBy: adminId,
       entitlementSource: "comp",
       entitlementStatus: "active",
-      // Cleared, not left as-is: a comp is open-ended, and a stale expiry left over from a
-      // lapsed Stripe subscription would make resolveEntitlement treat this comp as expired.
+      // Cleared, not left as-is: free access is open-ended, and a stale expiry left over from
+      // a lapsed Stripe subscription would make resolveEntitlement treat this comp as expired.
       entitlementExpiresAt: null,
       compedAt: new Date(),
       compedBy: adminId,
     })
-    .where(and(eq(users.email, email), isNull(users.approvedAt)))
-    .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
+    .where(and(eq(users.email, email), isNull(users.compedAt)))
+    .returning({ id: users.id, email: users.email });
 
-  if (flipped) {
-    sendSystemMail({ to: flipped.email, ...accessApprovedEmail() }).catch((err) =>
-      logger.error({ err, userId: flipped.id }, "failed to send access-approved email"),
+  if (granted) {
+    sendSystemMail({ to: granted.email, ...accessApprovedEmail() }).catch((err) =>
+      logger.error({ err, userId: granted.id }, "failed to send free-access email"),
     );
+    return "granted";
   }
-  return flipped;
+
+  // No grant happened, for one of two very different reasons: either there is nobody to grant
+  // to yet, or they already have free access. Only the first should get a signup invitation.
+  const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email));
+  return existing ? "already-had-access" : "no-account";
 }
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -121,7 +119,8 @@ export async function adminRoutes(app: FastifyInstance) {
     const userId = await requireAdminUserId(request, reply);
     if (!userId) return;
     // hasAccount lets the backoffice hide invites that already turned into an account — the
-    // invite list's job is "who may sign up", not a permanent log of who was ever approved.
+    // list's job is "who is still waiting to sign up", not a log of everyone ever granted
+    // free access.
     const rows = await db
       .select({
         id: invitedEmails.id,
@@ -153,13 +152,11 @@ export async function adminRoutes(app: FastifyInstance) {
       })
       .returning();
 
-    // Auto-approve any account already waiting for this email, and drop them off the
-    // access-requests review queue. Exactly one email goes out per invite: if an existing
-    // pending account was just approved, approveExistingUser already sent the "you're
-    // approved" mail; otherwise (no account yet, or already approved) send the invitation
-    // with a signup link.
-    const approved = await approveExistingUser(email, userId);
-    if (!approved) {
+    // At most one email goes out per invite. A brand-new email gets the invitation with a
+    // signup link; an account that was just granted free access already got the "you're in"
+    // mail from grantInviteComp; and re-inviting someone who already has access gets nothing,
+    // rather than a signup link for the account they're already using.
+    if ((await grantInviteComp(email, userId)) === "no-account") {
       sendSystemMail({ to: email, ...inviteEmail() }).catch((err) =>
         logger.error({ err, email }, "failed to send invite email"),
       );
@@ -179,9 +176,10 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // --- Accounts ---
   //
-  // The invite list only gates account CREATION, so removing an invite does nothing to an
-  // account that already exists — revoking a real account happens here instead. Disabling is
-  // reversible and keeps their data; deleting is not, and cascades to everything they own.
+  // The invite list only decides who starts out with free access, so removing an invite does
+  // nothing to an account that already exists — revoking real access happens here instead.
+  // Disabling is reversible and keeps their data; deleting is not, and cascades to everything
+  // they own.
   //
   // Entitlement and month-to-date AI cost are joined in so the backoffice can show, per row,
   // whether someone has access and what they're costing — the two things that decide whether
@@ -212,7 +210,6 @@ export async function adminRoutes(app: FastifyInstance) {
         email: users.email,
         role: users.role,
         disabledAt: users.disabledAt,
-        approvedAt: users.approvedAt,
         emailVerifiedAt: users.emailVerifiedAt,
         signupSource: users.signupSource,
         createdAt: users.createdAt,
@@ -228,101 +225,12 @@ export async function adminRoutes(app: FastifyInstance) {
       .orderBy(desc(users.createdAt));
   });
 
-  app.post("/api/admin/users/:id/approve", async (request, reply) => {
-    const userId = await requireAdminUserId(request, reply);
-    if (!userId) return;
-
-    const { id } = idParamSchema.parse(request.params);
-    const [target] = await db
-      .select({ id: users.id, email: users.email, approvedAt: users.approvedAt })
-      .from(users)
-      .where(eq(users.id, id));
-    if (!target) {
-      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
-      return;
-    }
-
-    // Idempotent: approveExistingUser only flips a pending row and only emails when it does, so
-    // approving an already-approved account (a double click) is a no-op that returns the current
-    // row without re-sending the approval email.
-    const flipped = await approveExistingUser(target.email, userId);
-    return { id: target.id, email: target.email, approvedAt: flipped?.approvedAt ?? target.approvedAt };
-  });
-
-  // Denies a pending signup: disables the account (so it can't sign in) without ever approving
-  // it, drops it off the review queue (dismissed on the access-requests log, invite removed so
-  // it isn't silently re-allowlisted), while keeping the row itself around under Accounts.
-  app.post("/api/admin/users/:id/deny", async (request, reply) => {
-    const userId = await requireAdminUserId(request, reply);
-    if (!userId) return;
-
-    const { id } = idParamSchema.parse(request.params);
-    if (id === userId) {
-      reply.status(400).send({
-        error: { message: "You can't deny your own account", code: "SELF_TARGET" },
-      });
-      return;
-    }
-    const target = await loadDestructibleUser(id, reply);
-    if (!target) return;
-
-    const [updated] = await db
-      .update(users)
-      .set({ disabledAt: new Date() })
-      .where(eq(users.id, id))
-      .returning({ id: users.id, email: users.email, disabledAt: users.disabledAt, approvedAt: users.approvedAt });
-    if (!updated) {
-      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
-      return;
-    }
-    await db.update(accessRequests).set({ status: "dismissed" }).where(eq(accessRequests.email, target.email));
-    await db.delete(invitedEmails).where(eq(invitedEmails.email, target.email));
-    return updated;
-  });
-
-  app.post("/api/admin/users/:id/unapprove", async (request, reply) => {
-    const userId = await requireAdminUserId(request, reply);
-    if (!userId) return;
-
-    const { id } = idParamSchema.parse(request.params);
-    if (id === userId) {
-      reply.status(400).send({
-        error: { message: "You can't unapprove your own account", code: "SELF_TARGET" },
-      });
-      return;
-    }
-    if (!(await loadDestructibleUser(id, reply))) return;
-
-    const [target] = await db.select({ entitlementSource: users.entitlementSource }).from(users).where(eq(users.id, id));
-    // Only undo what approve/invite granted (a comp) — never touch a real Stripe subscription
-    // this action didn't create. A paying user with a stray null approvedAt (they never went
-    // through the invite flow) keeps their access.
-    const wasComped = target?.entitlementSource === "comp";
-
-    const [updated] = await db
-      .update(users)
-      .set({
-        approvedAt: null,
-        approvedBy: null,
-        ...(wasComped
-          ? { entitlementSource: null, entitlementStatus: "none" as const, compedAt: null, compedBy: null }
-          : {}),
-      })
-      .where(eq(users.id, id))
-      .returning({ id: users.id, email: users.email, approvedAt: users.approvedAt });
-    if (!updated) {
-      reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
-      return;
-    }
-    return updated;
-  });
-
   // --- Comps ---
   //
-  // The direct "grant this specific account free access" switch — independent of the
-  // invite/approve flow above (which is really "let this email sign up and start comped").
-  // Use this on an account that already exists, invited or not, self-signed-up or not, even
-  // one with a live Stripe subscription (comp still wins — see lib/entitlement.ts).
+  // The direct "grant this specific account free access" switch — the same grant the invite
+  // flow above applies at signup, but reachable for any account that already exists: invited
+  // or not, self-signed-up or not, even one with a live Stripe subscription (comp still wins —
+  // see lib/entitlement.ts).
 
   app.post("/api/admin/users/:id/comp", async (request, reply) => {
     const userId = await requireAdminUserId(request, reply);
@@ -337,7 +245,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .set({
         entitlementSource: "comp",
         entitlementStatus: "active",
-        // See approveExistingUser above — a comp granted to someone whose Stripe subscription
+        // See grantInviteComp above — free access granted to someone whose Stripe subscription
         // already lapsed has to clear that old expiry, or resolveEntitlement reads the comp as
         // already expired and the athlete stays paywalled despite this returning 200.
         entitlementExpiresAt: null,
@@ -362,8 +270,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   // Clears a comp only — a user with an active Stripe subscription keeps it; this just stops
-  // the free-access override, same as unapprove above but reachable regardless of how the
-  // comp was granted (invite flow or this endpoint).
+  // the free-access override, however it was granted (invite flow or this endpoint).
   app.delete("/api/admin/users/:id/comp", async (request, reply) => {
     const userId = await requireAdminUserId(request, reply);
     if (!userId) return;

@@ -32,18 +32,15 @@ describe("destructive admin actions against an admin account", () => {
         {
           email: `acting-admin-${stamp}@run-far.local`,
           role: "admin" as const,
-          approvedAt: new Date(),
           emailVerifiedAt: new Date(),
         },
         {
           email: `other-admin-${stamp}@run-far.local`,
           role: "admin" as const,
-          approvedAt: new Date(),
           emailVerifiedAt: new Date(),
         },
         {
           email: `plain-user-${stamp}@run-far.local`,
-          approvedAt: new Date(),
           emailVerifiedAt: new Date(),
         },
       ])
@@ -103,16 +100,16 @@ describe("destructive admin actions against an admin account", () => {
     }
   });
 
-  it("refuses to unapprove another admin", async () => {
+  // resolveEntitlement grants an admin access on role alone, so revoking free access can't
+  // actually lock one out — but it would still clear their entitlement columns out from under
+  // them, so the same ADMIN_TARGET guard applies.
+  it("refuses to revoke free access from another admin", async () => {
     const app = await buildServer();
     try {
-      const res = await asActingAdmin(app, "POST", `/api/admin/users/${otherAdminId}/unapprove`);
+      const res = await asActingAdmin(app, "DELETE", `/api/admin/users/${otherAdminId}/comp`);
 
       expect(res.statusCode).toBe(403);
       expect(res.json().error.code).toBe("ADMIN_TARGET");
-
-      const [row] = await db.select().from(users).where(inArray(users.id, [otherAdminId]));
-      expect(row?.approvedAt).not.toBeNull();
     } finally {
       await app.close();
     }

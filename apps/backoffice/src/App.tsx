@@ -42,12 +42,9 @@ function Dashboard() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-10">
       <p className="mb-1 font-mono text-[11px] tracking-[0.22em] text-accent">run-far backoffice</p>
-      <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Invites &amp; access</h1>
+      <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Accounts &amp; access</h1>
       <MailStatusBanner />
-      <NeedsReview />
-      <div className="mt-10">
-        <Accounts />
-      </div>
+      <Accounts />
       <div className="mt-10">
         <Invites />
       </div>
@@ -68,20 +65,19 @@ function MailStatusBanner() {
       <p className="text-sm font-medium text-danger">System email is down</p>
       <p className="mt-1 text-xs text-ink-secondary">
         RESEND_API_KEY isn't set. Signup, verification, and password-reset emails aren't
-        sending — set it to restore them. Affected signups are still visible in Needs review
-        below and can be verified manually.
+        sending — set it to restore them. Anyone stuck without their verification mail shows as
+        unverified below and can be marked verified by hand.
       </p>
     </div>
   );
 }
 
-/** Shared by NeedsReview and Accounts so both sections read the same cached list and never
- * disagree after a mutation — see the plan's react-query section. */
+/** One cached list behind every account row, so nothing disagrees after a mutation. */
 function useUsers() {
   return useQuery<AdminUser[]>({ queryKey: ["admin", "users"], queryFn: api.listUsers });
 }
 
-/** Every mutation here touches both users and invited_emails (approveExistingUser upserts the
+/** Some mutations touch both users and invited_emails (deleting an account clears its
  * invite), so both caches are invalidated together on settle. */
 function useUserAction(fn: (id: string) => Promise<AdminUser>) {
   const queryClient = useQueryClient();
@@ -92,87 +88,6 @@ function useUserAction(fn: (id: string) => Promise<AdminUser>) {
       queryClient.invalidateQueries({ queryKey: ["admin", "invites"] });
     },
   });
-}
-
-function NeedsReview() {
-  const { data: accounts, isLoading, error } = useUsers();
-  const approve = useUserAction(api.approveUser);
-  const deny = useUserAction(api.denyUser);
-  const verifyEmail = useUserAction(api.verifyUserEmail);
-
-  const pending = (accounts ?? []).filter((u) => !u.approvedAt && !u.disabledAt);
-  const activeMutation = [approve, deny, verifyEmail].find((m) => m.isPending);
-  const activeId = activeMutation?.variables as string | undefined;
-
-  return (
-    <section>
-      <h2 className="mb-1 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
-        Needs review
-      </h2>
-      <p className="mb-3 text-xs text-ink-muted">
-        New signups that aren't on the invite allowlist. Approve to let them in, Deny to block
-        the account (it stays visible under Accounts).
-      </p>
-      {error && <p className="mb-3 text-sm text-danger">{errorMessage(error)}</p>}
-      {isLoading ? (
-        <p className="text-sm text-ink-muted">Loading…</p>
-      ) : pending.length === 0 ? (
-        <p className="text-sm text-ink-muted">Nothing waiting on review.</p>
-      ) : (
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {pending.map((u) => {
-            const busy = activeId === u.id;
-            return (
-              <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-ink-primary">
-                    {u.email}
-                    <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-ink-secondary">
-                      {u.signupSource}
-                    </span>
-                    {!u.emailVerifiedAt && (
-                      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
-                        unverified
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-xs text-ink-muted">
-                    joined {new Date(u.createdAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  {!u.emailVerifiedAt && (
-                    <button
-                      onClick={() => verifyEmail.mutate(u.id)}
-                      disabled={busy}
-                      title="Mark verified without the emailed link — use when system email is down"
-                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
-                    >
-                      Mark verified
-                    </button>
-                  )}
-                  <button
-                    onClick={() => approve.mutate(u.id)}
-                    disabled={busy}
-                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
-                  >
-                    {approve.isPending && busy ? "Approving…" : "Approve"}
-                  </button>
-                  <button
-                    onClick={() => deny.mutate(u.id)}
-                    disabled={busy}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger disabled:opacity-50"
-                  >
-                    {deny.isPending && busy ? "Denying…" : "Deny"}
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </section>
-  );
 }
 
 function formatUsd(micros: number): string {
@@ -191,7 +106,7 @@ function EntitlementBadge({ user }: { user: AdminUser }) {
   if (user.entitlementSource === "comp") {
     return (
       <span className="ml-2 rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
-        comped
+        free access
       </span>
     );
   }
@@ -211,17 +126,17 @@ function EntitlementBadge({ user }: { user: AdminUser }) {
 
 function Accounts() {
   const { data: accounts, isLoading, error } = useUsers();
-  const unapprove = useUserAction(api.unapproveUser);
   const disable = useUserAction(api.disableUser);
   const enable = useUserAction(api.enableUser);
   const comp = useUserAction((id: string) => api.compUser(id));
   const uncomp = useUserAction(api.uncompUser);
+  const verifyEmail = useUserAction(api.verifyUserEmail);
   const del = useUserAction(async (id: string) => {
     await api.deleteUser(id);
     return {} as AdminUser;
   });
 
-  const activeMutation = [unapprove, disable, enable, comp, uncomp, del].find((m) => m.isPending);
+  const activeMutation = [disable, enable, comp, uncomp, verifyEmail, del].find((m) => m.isPending);
   const activeId = activeMutation?.variables as string | undefined;
 
   const remove = (u: AdminUser) => {
@@ -239,118 +154,118 @@ function Accounts() {
         Accounts
       </h2>
       <p className="mb-3 text-xs text-ink-muted">
-        Everyone approved or denied so far. Removing an invite under Invites below only blocks
-        new signups — revoke existing access here.
+        Everyone who has signed up. Anyone can create an account; what they get is decided by
+        the badge — a subscription, free access, or the paywall.
       </p>
       {error && <p className="mb-3 text-sm text-danger">{errorMessage(error)}</p>}
       {isLoading ? (
         <p className="text-sm text-ink-muted">Loading…</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
-          {(accounts ?? [])
-            .filter((u) => u.approvedAt || u.disabledAt)
-            .map((u) => {
-              const busy = activeId === u.id;
-              const denied = u.disabledAt && !u.approvedAt;
-              return (
-                <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink-primary">
-                      {u.email}
-                      {u.role === "admin" && (
-                        <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
-                          admin
-                        </span>
-                      )}
-                      {denied ? (
-                        <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
-                          denied
-                        </span>
-                      ) : (
-                        u.disabledAt && (
-                          <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
-                            disabled
-                          </span>
-                        )
-                      )}
-                      {u.role !== "admin" && <EntitlementBadge user={u} />}
-                    </p>
-                    <p className="text-xs text-ink-muted">
-                      joined {new Date(u.createdAt).toLocaleDateString()} · {u.signupSource}
-                      {u.disabledAt && ` · ${denied ? "denied" : "disabled"} ${new Date(u.disabledAt).toLocaleDateString()}`}
-                      {u.role !== "admin" && u.aiUsageThisMonthMicros > 0 && (
-                        <> · AI this month: {formatUsd(u.aiUsageThisMonthMicros)}</>
-                      )}
-                      {u.compNote && ` · comp note: ${u.compNote}`}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    {/* The admin row is deliberately actionless: the role is only ever granted
-                        by data migration, so deleting or locking out the last admin orphans
-                        this backoffice for good. The API refuses all four anyway
-                        (ADMIN_TARGET). */}
+          {(accounts ?? []).map((u) => {
+            const busy = activeId === u.id;
+            return (
+              <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-ink-primary">
+                    {u.email}
                     {u.role === "admin" && (
-                      <span className="self-center text-xs text-ink-muted">protected account</span>
+                      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-accent">
+                        admin
+                      </span>
                     )}
-                    {u.role !== "admin" &&
-                      (u.entitlementSource === "comp" ? (
-                        <button
-                          onClick={() => uncomp.mutate(u.id)}
-                          disabled={busy}
-                          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
-                        >
-                          {uncomp.isPending && busy ? "Un-comping…" : "Un-comp"}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => comp.mutate(u.id)}
-                          disabled={busy}
-                          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
-                        >
-                          {comp.isPending && busy ? "Comping…" : "Comp"}
-                        </button>
-                      ))}
-                    {u.role !== "admin" && u.approvedAt && (
+                    {u.disabledAt && (
+                      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                        disabled
+                      </span>
+                    )}
+                    {!u.emailVerifiedAt && (
+                      <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-danger">
+                        unverified
+                      </span>
+                    )}
+                    {u.role !== "admin" && <EntitlementBadge user={u} />}
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    joined {new Date(u.createdAt).toLocaleDateString()} · {u.signupSource}
+                    {u.disabledAt && ` · disabled ${new Date(u.disabledAt).toLocaleDateString()}`}
+                    {u.role !== "admin" && u.aiUsageThisMonthMicros > 0 && (
+                      <> · AI this month: {formatUsd(u.aiUsageThisMonthMicros)}</>
+                    )}
+                    {u.compNote && ` · note: ${u.compNote}`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  {/* Only ever reachable while system email is down (see MailStatusBanner) —
+                      otherwise the user clicks the link in their own verification mail. */}
+                  {!u.emailVerifiedAt && (
+                    <button
+                      onClick={() => verifyEmail.mutate(u.id)}
+                      disabled={busy}
+                      title="Mark verified without the emailed link — use when system email is down"
+                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                    >
+                      {verifyEmail.isPending && busy ? "Verifying…" : "Mark verified"}
+                    </button>
+                  )}
+                  {/* The admin row is deliberately actionless: the role is only ever granted
+                      by data migration, so deleting or locking out the last admin orphans
+                      this backoffice for good. The API refuses all of them anyway
+                      (ADMIN_TARGET). */}
+                  {u.role === "admin" && (
+                    <span className="self-center text-xs text-ink-muted">protected account</span>
+                  )}
+                  {u.role !== "admin" &&
+                    (u.entitlementSource === "comp" ? (
                       <button
-                        onClick={() => unapprove.mutate(u.id)}
+                        onClick={() => uncomp.mutate(u.id)}
                         disabled={busy}
-                        title="Legacy from the invite-approval flow — clears an invite-granted comp without affecting Stripe or a comp granted from the button above"
+                        title="Drop this account back to whatever their subscription says — usually the paywall"
                         className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
                       >
-                        {unapprove.isPending && busy ? "Unapproving…" : "Unapprove"}
+                        {uncomp.isPending && busy ? "Revoking…" : "Revoke free access"}
                       </button>
-                    )}
-                    {u.role !== "admin" &&
-                      (u.disabledAt ? (
-                        <button
-                          onClick={() => enable.mutate(u.id)}
-                          disabled={busy}
-                          className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
-                        >
-                          {enable.isPending && busy ? "Enabling…" : "Enable"}
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => disable.mutate(u.id)}
-                          disabled={busy}
-                          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
-                        >
-                          {disable.isPending && busy ? "Disabling…" : "Disable"}
-                        </button>
-                      ))}
-                    {u.role !== "admin" && (
+                    ) : (
                       <button
-                        onClick={() => remove(u)}
+                        onClick={() => comp.mutate(u.id)}
                         disabled={busy}
-                        className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger disabled:opacity-50"
+                        title="Give this account every paid feature for free, indefinitely, without a subscription"
+                        className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
                       >
-                        {del.isPending && busy ? "Deleting…" : "Delete"}
+                        {comp.isPending && busy ? "Granting…" : "Free access"}
                       </button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
+                    ))}
+                  {u.role !== "admin" &&
+                    (u.disabledAt ? (
+                      <button
+                        onClick={() => enable.mutate(u.id)}
+                        disabled={busy}
+                        className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
+                      >
+                        {enable.isPending && busy ? "Enabling…" : "Enable"}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => disable.mutate(u.id)}
+                        disabled={busy}
+                        className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary disabled:opacity-50"
+                      >
+                        {disable.isPending && busy ? "Disabling…" : "Disable"}
+                      </button>
+                    ))}
+                  {u.role !== "admin" && (
+                    <button
+                      onClick={() => remove(u)}
+                      disabled={busy}
+                      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-ink-secondary hover:text-danger disabled:opacity-50"
+                    >
+                      {del.isPending && busy ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
@@ -399,11 +314,12 @@ function Invites() {
   return (
     <section>
       <h2 className="mb-1 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
-        Invites
+        Free-access invites
       </h2>
       <p className="mb-3 text-xs text-ink-muted">
-        Who may create a new account. Once an invite turns into an account it moves to Needs
-        review or Accounts above and drops off this list.
+        Signup is open to anyone — an invite just means this email skips the paywall. Adding one
+        emails an invitation, or grants free access straight away if the account already exists.
+        Once it turns into an account it moves to Accounts above and drops off this list.
       </p>
 
       <form onSubmit={submit} className="mb-4 flex flex-wrap gap-2">
@@ -437,7 +353,7 @@ function Invites() {
       {isLoading ? (
         <p className="text-sm text-ink-muted">Loading…</p>
       ) : pending.length === 0 ? (
-        <p className="text-sm text-ink-muted">No pending invites.</p>
+        <p className="text-sm text-ink-muted">No invites waiting on a signup.</p>
       ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
           {pending.map((inv) => (
