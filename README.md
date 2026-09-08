@@ -60,6 +60,26 @@ today's recovery doesn't match what the plan expects.
   regeneration.
   → [`apps/api/src/db/schema.ts`](apps/api/src/db/schema.ts),
   [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **Pluggable recommendation sources with a shadow mode** — the rules engine
+  is one implementation of a `RecommendationSource` interface, so a
+  machine-learned model can later run beside it, instead of it, or silently
+  against it. Every card is persisted with the source that produced it, next
+  to the input snapshot it was generated from and the athlete's eventual
+  accept/dismiss — a features → action → outcome record a candidate model can
+  be scored on before it is ever shown to anyone. Rendered sources are
+  arbitrated together so at most one card can touch a given run; shadow
+  sources are arbitrated alone, which is what makes them structurally unable
+  to change what the athlete sees. Rules win ties at `red` severity, so the
+  deterministic recovery override stays authoritative regardless of model
+  output.
+  → [`apps/api/src/recommendations/sources/`](apps/api/src/recommendations/sources/),
+  [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **Runtime switches, not redeploys** — whether athletes see model-sourced
+  recommendations is a backoffice toggle with a global default and per-account
+  overrides, resolved in one place. The model runs and is scored either way;
+  the switch gates rendering only.
+  → [`apps/api/src/lib/modelRendering.ts`](apps/api/src/lib/modelRendering.ts),
+  [`apps/backoffice/src/App.tsx`](apps/backoffice/src/App.tsx)
 - **Timezone-correct scheduling** — wall-clock math (open-slot search,
   day-boundary detection) goes through small DST-safe conversion helpers
   built on `Intl.DateTimeFormat` rather than a heavyweight date library.
@@ -144,6 +164,18 @@ Coverage as of this writing:
 - Rule arbitration (`recommendations/arbitrate.test.ts`) — when several rules
   want to change the same run, one card owns it and the rest are folded into
   its reason; advisory rules pass through untouched.
+- Recommendation sources (`recommendations/sources/sources.test.ts`) — the
+  rules adapter matches `evaluate()` exactly, a model source that throws or
+  hangs fails open to no output rather than an empty dashboard, and the rules
+  source is deliberately *not* caught so a broken engine can't read as "no
+  recommendations today".
+- Source isolation (`recommendations/service.sources.test.ts`) — a shadow card
+  cannot claim a run or edit a rendered card's reason, shadow rows survive the
+  dashboard reads that regenerate only the rules engine, and two sources
+  emitting the same rule id get a row each instead of clobbering one another.
+- Shadow unreachability (`routes/recommendations.sources.test.ts`) — shadow
+  rows are absent from the pending list and 404 on both accept and dismiss, so
+  an engine that is switched off can never edit a real session.
 - Stale-proposal detection (`recommendations/staleness.test.ts`) — a proposed
   change whose run has been edited since the card was generated is skipped
   rather than overwriting the athlete's edit.

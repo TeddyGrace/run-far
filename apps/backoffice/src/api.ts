@@ -20,7 +20,17 @@ export type AdminUser = {
   entitlementExpiresAt: string | null;
   compedAt: string | null;
   compNote: string | null;
+  /** Per-account override for whether model-sourced recommendations are rendered.
+   * Null means inherit AppSettings.modelRenderedDefault. */
+  modelRenderedOverride: boolean | null;
   aiUsageThisMonthMicros: number;
+};
+
+export type AppSettings = {
+  /** Default for whether athletes see model-sourced recommendations. The model still runs and is
+   * still scored in shadow when this is false — it gates rendering only. */
+  modelRenderedDefault: boolean;
+  updatedAt: string;
 };
 
 export type MailStatus = {
@@ -75,6 +85,21 @@ export const api = {
     }),
   uncompUser: (id: string) =>
     request<AdminUser>(`/api/admin/users/${id}/comp`, { method: "DELETE" }),
+  getSettings: () => request<AppSettings>("/api/admin/settings"),
+  updateSettings: (patch: { modelRenderedDefault: boolean }) =>
+    request<AppSettings>("/api/admin/settings", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  /** Pins one account on or off regardless of the global default. */
+  setUserModelRendering: (id: string, rendered: boolean) =>
+    request<AdminUser>(`/api/admin/users/${id}/model-rendering`, {
+      method: "POST",
+      body: JSON.stringify({ rendered }),
+    }),
+  /** Returns the account to the global default. */
+  clearUserModelRendering: (id: string) =>
+    request<AdminUser>(`/api/admin/users/${id}/model-rendering`, { method: "DELETE" }),
 };
 
 export { ApiError };

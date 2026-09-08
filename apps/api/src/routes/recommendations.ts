@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { recommendations } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { generateRecommendationsSafe, applyProposedChanges } from "../recommendations/service.js";
 import { proposedChangeSchema } from "@run-far/shared";
+import { renderedSourceIdsFor } from "../lib/modelRendering.js";
 import { z } from "zod";
 
 export async function recommendationRoutes(app: FastifyInstance) {
@@ -15,10 +16,19 @@ export async function recommendationRoutes(app: FastifyInstance) {
     // Best-effort: a Google API hiccup should surface cached recommendations, not a 500.
     await generateRecommendationsSafe(userId);
 
+    // Shadow-source rows are persisted for scoring but never shown. Filtering here (rather than
+    // not writing them) is what lets a candidate model be evaluated against real accept/dismiss
+    // behavior while it is still switched off.
     return db
       .select()
       .from(recommendations)
-      .where(and(eq(recommendations.userId, userId), eq(recommendations.status, "pending")))
+      .where(
+        and(
+          eq(recommendations.userId, userId),
+          eq(recommendations.status, "pending"),
+          inArray(recommendations.source, await renderedSourceIdsFor(userId)),
+        ),
+      )
       // `rank` is the priority order the rules engine decided (0 = primary). Ordering by
       // createdAt alone, as this used to, returned the engine's ordering reversed — the
       // lowest-severity note ended up as the dashboard's headline card.
@@ -35,6 +45,13 @@ export async function recommendationRoutes(app: FastifyInstance) {
       .from(recommendations)
       .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
     if (!rec) {
+      reply.status(404).send({ error: { message: "Recommendation not found", code: "NOT_FOUND" } });
+      return;
+    }
+    // A shadow row is not part of this athlete's plan — it records what a source *would* have
+    // suggested. Applying one would let an engine that is switched off edit real sessions, so it
+    // is indistinguishable from a nonexistent card here, not merely hidden from the list.
+    if (!(await renderedSourceIdsFor(userId)).includes(rec.source)) {
       reply.status(404).send({ error: { message: "Recommendation not found", code: "NOT_FOUND" } });
       return;
     }
@@ -81,10 +98,21 @@ export async function recommendationRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     const [rec] = await db
-      .select({ id: recommendations.id, status: recommendations.status })
+      .select({
+        id: recommendations.id,
+        status: recommendations.status,
+        source: recommendations.source,
+      })
       .from(recommendations)
       .where(and(eq(recommendations.id, id), eq(recommendations.userId, userId)));
     if (!rec) {
+      reply.status(404).send({ error: { message: "Recommendation not found", code: "NOT_FOUND" } });
+      return;
+    }
+    // See the accept handler — a shadow row is not addressable, in either direction. Dismissing
+    // one would also corrupt its own scoring record by writing an athlete verdict on a card the
+    // athlete was never shown.
+    if (!(await renderedSourceIdsFor(userId)).includes(rec.source)) {
       reply.status(404).send({ error: { message: "Recommendation not found", code: "NOT_FOUND" } });
       return;
     }

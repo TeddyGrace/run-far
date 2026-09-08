@@ -29,6 +29,12 @@ export const RECOMMENDATION_CONFIG = {
     // conflicting with the same run, months later) could never surface again.
     windowDays: 14,
   },
+  sources: {
+    // Budget for one non-rules source (see sources/index.ts gather()). A model scoring call that
+    // blows through this is treated as a failure and yields no outputs, so a slow service can't
+    // hold up a dashboard read. Applies per source, not to the whole gather.
+    timeoutMs: 2000,
+  },
   cycleLoad: {
     // Fallback only, used when a cycle has no kilojoule reading (kilojoule is a real
     // linear measure and is always preferred when present). WHOOP doesn't publish the

@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError, type AdminUser, type InvitedEmail, type MailStatus } from "./api.js";
+import {
+  api,
+  ApiError,
+  type AdminUser,
+  type AppSettings,
+  type InvitedEmail,
+  type MailStatus,
+} from "./api.js";
 
 const WEB_LOGIN_URL = "https://run-far.cc/login";
 
@@ -44,6 +51,7 @@ function Dashboard() {
       <p className="mb-1 font-mono text-[11px] tracking-[0.22em] text-accent">run-far backoffice</p>
       <h1 className="mb-8 font-display text-2xl font-semibold text-ink-primary">Accounts &amp; access</h1>
       <MailStatusBanner />
+      <RecommendationEngine />
       <Accounts />
       <div className="mt-10">
         <Invites />
@@ -69,6 +77,72 @@ function MailStatusBanner() {
         unverified below and can be marked verified by hand.
       </p>
     </div>
+  );
+}
+
+/**
+ * The global switch for whether athletes see model-sourced recommendations.
+ *
+ * Worth being precise about in the copy, because the obvious reading is wrong: this does not
+ * start or stop the model. The model source runs on every ingestion event either way and its
+ * output is persisted and scored against real accept/dismiss behavior — that record is what a
+ * candidate model gets evaluated on. All this switch decides is whether athletes see any of it.
+ */
+function RecommendationEngine() {
+  const queryClient = useQueryClient();
+  const { data: settings, isLoading } = useQuery<AppSettings>({
+    queryKey: ["admin", "settings"],
+    queryFn: api.getSettings,
+  });
+  const update = useMutation({
+    mutationFn: api.updateSettings,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin", "settings"] }),
+  });
+
+  const on = settings?.modelRenderedDefault ?? false;
+
+  return (
+    <section className="mb-10">
+      <h2 className="mb-1 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
+        Recommendation engine
+      </h2>
+      <p className="mb-3 text-xs text-ink-muted">
+        The rules engine always runs. The model runs and is scored against real accept and dismiss
+        rates either way — this only decides whether athletes see its suggestions. Individual
+        accounts can override the default below.
+      </p>
+      {update.error && <p className="mb-3 text-sm text-danger">{errorMessage(update.error)}</p>}
+      <div className="flex items-center justify-between gap-4 rounded-md border border-border px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-ink-primary">
+            Model suggestions
+            <span
+              className={`ml-2 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+                on ? "bg-accent/15 text-accent" : "bg-surface-2 text-ink-muted"
+              }`}
+            >
+              {isLoading ? "…" : on ? "shown" : "shadow only"}
+            </span>
+          </p>
+          <p className="text-xs text-ink-muted">
+            {on
+              ? "Model cards are shown to athletes and arbitrated against rules cards."
+              : "Model cards are recorded for scoring but never shown."}
+          </p>
+        </div>
+        <button
+          onClick={() => update.mutate({ modelRenderedDefault: !on })}
+          disabled={isLoading || update.isPending}
+          className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50 ${
+            on
+              ? "border border-border text-ink-secondary hover:text-ink-primary"
+              : "bg-accent text-surface-0 hover:opacity-90"
+          }`}
+        >
+          {update.isPending ? "Saving…" : on ? "Switch off" : "Switch on"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -124,20 +198,75 @@ function EntitlementBadge({ user }: { user: AdminUser }) {
   );
 }
 
+/**
+ * Three-state per-account control over model-sourced recommendations: inherit the global default,
+ * or pin on/off. Inherit is a genuinely distinct state rather than a synonym for off — an account
+ * left on inherit follows the global switch when it is flipped, which is what makes a staged
+ * rollout possible without revisiting every row.
+ */
+function ModelRenderingControl({
+  user,
+  busy,
+  onChange,
+}: {
+  user: AdminUser;
+  busy: boolean;
+  onChange: (rendered: boolean | null) => void;
+}) {
+  const options: Array<{ value: boolean | null; label: string; title: string }> = [
+    { value: null, label: "Inherit", title: "Follow the global default above" },
+    { value: true, label: "On", title: "Always show model suggestions to this account" },
+    { value: false, label: "Off", title: "Never show model suggestions to this account" },
+  ];
+
+  return (
+    <div
+      className="flex self-center overflow-hidden rounded-md border border-border"
+      title="Whether this athlete sees model-sourced recommendations"
+    >
+      {options.map((opt) => {
+        const selected = user.modelRenderedOverride === opt.value;
+        return (
+          <button
+            key={String(opt.value)}
+            onClick={() => onChange(opt.value)}
+            disabled={busy || selected}
+            title={opt.title}
+            className={`px-2 py-1.5 text-[11px] font-medium disabled:opacity-100 ${
+              selected
+                ? "bg-accent text-surface-0"
+                : "text-ink-muted hover:text-ink-primary disabled:opacity-50"
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Accounts() {
+  const queryClient = useQueryClient();
   const { data: accounts, isLoading, error } = useUsers();
   const disable = useUserAction(api.disableUser);
   const enable = useUserAction(api.enableUser);
   const comp = useUserAction((id: string) => api.compUser(id));
   const uncomp = useUserAction(api.uncompUser);
   const verifyEmail = useUserAction(api.verifyUserEmail);
+  const setModel = useMutation({
+    mutationFn: ({ id, rendered }: { id: string; rendered: boolean | null }) =>
+      rendered === null ? api.clearUserModelRendering(id) : api.setUserModelRendering(id, rendered),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin", "users"] }),
+  });
   const del = useUserAction(async (id: string) => {
     await api.deleteUser(id);
     return {} as AdminUser;
   });
 
   const activeMutation = [disable, enable, comp, uncomp, verifyEmail, del].find((m) => m.isPending);
-  const activeId = activeMutation?.variables as string | undefined;
+  // setModel is kept out of the list above because its variables are an object, not a bare id.
+  const activeId = (activeMutation?.variables as string | undefined) ?? setModel.variables?.id;
 
   const remove = (u: AdminUser) => {
     const ok = window.confirm(
@@ -207,6 +336,13 @@ function Accounts() {
                     >
                       {verifyEmail.isPending && busy ? "Verifying…" : "Mark verified"}
                     </button>
+                  )}
+                  {u.role !== "admin" && (
+                    <ModelRenderingControl
+                      user={u}
+                      busy={busy}
+                      onChange={(rendered) => setModel.mutate({ id: u.id, rendered })}
+                    />
                   )}
                   {/* The admin row is deliberately actionless: the role is only ever granted
                       by data migration, so deleting or locking out the last admin orphans

@@ -3,13 +3,14 @@ import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { env } from "../env.js";
-import { invitedEmails, accessRequests, users, aiUsage } from "../db/schema.js";
+import { invitedEmails, accessRequests, users, aiUsage, appSettings } from "../db/schema.js";
 import { requireAdminUserId } from "../lib/adminAuth.js";
 import { logger } from "../lib/logger.js";
 import { isStripeConfigured, stripeClient } from "../integrations/stripe/client.js";
 import { applyStripeSubscription } from "../integrations/stripe/entitlement.js";
 import { sendSystemMail } from "../lib/systemMail.js";
 import { accessApprovedEmail, inviteEmail } from "../lib/emailTemplates.js";
+import { APP_SETTINGS_ID, loadAppSettings } from "../lib/modelRendering.js";
 
 const addInviteSchema = z.object({
   email: z.string().email(),
@@ -18,6 +19,14 @@ const addInviteSchema = z.object({
 const idParamSchema = z.object({ id: z.string().uuid() });
 const compRequestSchema = z.object({
   note: z.string().trim().max(500).optional(),
+});
+const appSettingsPatchSchema = z.object({
+  modelRenderedDefault: z.boolean(),
+});
+const modelRenderingSchema = z.object({
+  // Explicitly boolean: clearing an override back to "inherit" is DELETE, not a null here, so
+  // that "off" and "not set" stay distinguishable at the API boundary too.
+  rendered: z.boolean(),
 });
 
 /**
@@ -218,6 +227,7 @@ export async function adminRoutes(app: FastifyInstance) {
         entitlementExpiresAt: users.entitlementExpiresAt,
         compedAt: users.compedAt,
         compNote: users.compNote,
+        modelRenderedOverride: users.modelRenderedOverride,
         aiUsageThisMonthMicros: sql<number>`coalesce(${usageThisMonth.spentMicros}, 0)::integer`,
       })
       .from(users)
@@ -406,4 +416,92 @@ export async function adminRoutes(app: FastifyInstance) {
     await db.delete(users).where(eq(users.id, id));
     reply.status(204).send();
   });
+
+  // --- Recommendation engine ---
+  //
+  // Which recommendation sources athletes actually see. The model source runs and is scored in
+  // shadow on every ingestion event regardless of these switches — they gate *rendering* only,
+  // which is what makes it safe to evaluate a candidate model on live data before showing it to
+  // anyone. See lib/modelRendering.ts for how the global default and per-account overrides
+  // resolve, and recommendations/sources/ for what a source is.
+
+  app.get("/api/admin/settings", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+    return loadAppSettings();
+  });
+
+  app.patch("/api/admin/settings", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const body = appSettingsPatchSchema.parse(request.body ?? {});
+    // Upsert rather than update: the migration seeds the singleton row, but a database restored
+    // or created by some other path shouldn't leave this endpoint silently writing nothing.
+    const [row] = await db
+      .insert(appSettings)
+      .values({
+        id: APP_SETTINGS_ID,
+        modelRenderedDefault: body.modelRenderedDefault,
+        updatedBy: userId,
+      })
+      .onConflictDoUpdate({
+        target: appSettings.id,
+        set: {
+          modelRenderedDefault: body.modelRenderedDefault,
+          updatedAt: new Date(),
+          updatedBy: userId,
+        },
+      })
+      .returning({
+        modelRenderedDefault: appSettings.modelRenderedDefault,
+        updatedAt: appSettings.updatedAt,
+      });
+    logger.info(
+      { adminId: userId, modelRenderedDefault: body.modelRenderedDefault },
+      "app settings updated",
+    );
+    return row;
+  });
+
+  /** Pins one account on or off, overriding the global default in either direction. */
+  app.post("/api/admin/users/:id/model-rendering", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    const body = modelRenderingSchema.parse(request.body ?? {});
+    return updateModelRenderingOverride(id, body.rendered, reply);
+  });
+
+  /** Clears the override, returning the account to the global default. */
+  app.delete("/api/admin/users/:id/model-rendering", async (request, reply) => {
+    const userId = await requireAdminUserId(request, reply);
+    if (!userId) return;
+
+    const { id } = idParamSchema.parse(request.params);
+    return updateModelRenderingOverride(id, null, reply);
+  });
+}
+
+/** Shared by the set/clear endpoints above — null means "inherit the global default". */
+async function updateModelRenderingOverride(
+  id: string,
+  value: boolean | null,
+  reply: FastifyReply,
+) {
+  const [updated] = await db
+    .update(users)
+    .set({ modelRenderedOverride: value })
+    .where(eq(users.id, id))
+    .returning({
+      id: users.id,
+      email: users.email,
+      modelRenderedOverride: users.modelRenderedOverride,
+    });
+  if (!updated) {
+    reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
+    return;
+  }
+  return updated;
 }

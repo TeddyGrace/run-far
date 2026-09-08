@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { evaluate } from "./evaluate.js";
-import type { RuleContext, PlannedRunRow } from "./types.js";
+import { evaluate, rankOutputs } from "./evaluate.js";
+import type { RuleContext, PlannedRunRow, RuleOutput } from "./types.js";
+import type { RecommendationSource } from "./sources/types.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import type { DailyForecast } from "../integrations/weather/weatherClient.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
@@ -440,5 +441,61 @@ describe("today-only targeting", () => {
       makeContext({ snapshot: { ...baseSnapshot, recoveryScore: 25 }, upcoming: [laterToday] }),
     );
     expect(result.primary?.ruleId).toBe("red-recovery-hard-session");
+  });
+});
+
+describe("rankOutputs across sources", () => {
+  const src = (id: string): RecommendationSource => ({ id, version: null, generate: async () => [] });
+  const out = (overrides: Partial<RuleOutput> & Pick<RuleOutput, "ruleId">): RuleOutput => ({
+    severity: "yellow",
+    summary: `${overrides.ruleId} summary`,
+    reason: `${overrides.ruleId} reason.`,
+    proposedChanges: [],
+    ...overrides,
+  });
+  const change = { plannedRunId: "run-1", field: "scheduledAt", from: "a", to: "b" };
+
+  it("keeps the red rules card first even when only the model proposes a change", () => {
+    // The safety floor. Without it, actionable-before-advisory would hand the headline to the
+    // model on exactly the day the deterministic recovery override matters most.
+    const ranked = rankOutputs([
+      { source: src("rules"), output: out({ ruleId: "red-recovery-hard-session", severity: "red" }) },
+      {
+        source: src("model"),
+        output: out({ ruleId: "model-taper", severity: "red", proposedChanges: [change] }),
+      },
+    ]);
+
+    expect(ranked.map((r) => r.output.ruleId)).toEqual(["red-recovery-hard-session", "model-taper"]);
+  });
+
+  it("applies the floor only at red — lower severities rank on their own merits", () => {
+    const ranked = rankOutputs([
+      { source: src("rules"), output: out({ ruleId: "acwr-spike", severity: "yellow" }) },
+      {
+        source: src("model"),
+        output: out({ ruleId: "model-trim", severity: "yellow", proposedChanges: [change] }),
+      },
+    ]);
+
+    expect(ranked.map((r) => r.output.ruleId)).toEqual(["model-trim", "acwr-spike"]);
+  });
+
+  it("still ranks severity above everything, source included", () => {
+    const ranked = rankOutputs([
+      { source: src("rules"), output: out({ ruleId: "green-recovery", severity: "info" }) },
+      { source: src("model"), output: out({ ruleId: "model-red", severity: "red" }) },
+    ]);
+
+    expect(ranked.map((r) => r.output.ruleId)).toEqual(["model-red", "green-recovery"]);
+  });
+
+  it("falls through to input order for a genuine tie", () => {
+    const ranked = rankOutputs([
+      { source: src("rules"), output: out({ ruleId: "first", severity: "info" }) },
+      { source: src("rules"), output: out({ ruleId: "second", severity: "info" }) },
+    ]);
+
+    expect(ranked.map((r) => r.output.ruleId)).toEqual(["first", "second"]);
   });
 });

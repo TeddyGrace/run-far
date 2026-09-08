@@ -74,6 +74,12 @@ export const recommendationSchema = z.object({
   reason: z.string(),
   inputSnapshot: recoverySnapshotSchema,
   proposedChanges: z.array(proposedChangeSchema),
+  // Which engine produced the card — "rules" for the deterministic engine, a model source id
+  // otherwise. Defaulted rather than required so rows persisted before the column existed still
+  // parse, same convention as the snapshot fields above.
+  source: z.string().default("rules"),
+  // Version of the producing model; null/absent for deterministic sources.
+  modelVersion: z.string().nullable().optional(),
   status: recommendationStatusSchema,
   appliedAt: z.string().nullable(),
   createdAt: z.string(),

@@ -96,7 +96,7 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
       // itself is upserted against a per-(user,date,rule) unique index, so even if both
       // webhooks race each other here, they can't produce duplicate rows or duplicate emails.
       await syncSingleResource(userId, "recovery", id);
-      await generateRecommendationsSafe(userId, { notify: true });
+      await generateRecommendationsSafe(userId, { notify: true, ingestion: true });
       return;
     case "recovery.deleted":
       await db
@@ -106,7 +106,7 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
     case "sleep.updated":
       // Morning sleep sync is the primary cue to refresh today's recommendation.
       await syncSingleResource(userId, "sleep", id);
-      await generateRecommendationsSafe(userId, { notify: true });
+      await generateRecommendationsSafe(userId, { notify: true, ingestion: true });
       return;
     case "sleep.deleted":
       await db
