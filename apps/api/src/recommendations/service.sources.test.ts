@@ -57,6 +57,8 @@ async function rows() {
       modelVersion: recommendations.modelVersion,
       reason: recommendations.reason,
       rank: recommendations.rank,
+      status: recommendations.status,
+      appliedAt: recommendations.appliedAt,
     })
     .from(recommendations)
     .where(eq(recommendations.userId, userId))
@@ -178,9 +180,19 @@ describe("model switched on", () => {
     modelOutputs.current = [];
     await generateRecommendations(userId);
 
+    // Retraction expires rather than deletes, so the model's row is still here — it is just no
+    // longer pending. What must not happen is the rules row being swept along with it.
     const persisted = await rows();
-    expect(persisted).toHaveLength(1);
-    expect(persisted[0]?.source).toBe("rules");
+    expect(persisted).toHaveLength(2);
+
+    const pending = persisted.filter((r) => r.status === "pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.source).toBe("rules");
+
+    const retracted = persisted.filter((r) => r.source === "model");
+    expect(retracted).toHaveLength(1);
+    expect(retracted[0]?.status).toBe("expired");
+    expect(retracted[0]?.appliedAt).toBeInstanceOf(Date);
   });
 });
 

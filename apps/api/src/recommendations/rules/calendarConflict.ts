@@ -3,10 +3,7 @@ import type { BusyPeriod } from "../types.js";
 import type { PlannedRunRow } from "../types.js";
 import type { ProposedChange } from "@run-far/shared";
 import { dateYmdInZone, zonedLocalToIso } from "../../lib/zonedTime.js";
-
-function overlaps(runStart: Date, runEnd: Date, busy: BusyPeriod): boolean {
-  return runStart < busy.end && runEnd > busy.start;
-}
+import { overlaps } from "./shared.js";
 
 /** Finds the nearest slot (the run's own local calendar day, checked at 30-min increments
  * from 5am-9pm athlete-local time) that doesn't overlap any busy period and has room for the

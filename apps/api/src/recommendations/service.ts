@@ -18,6 +18,7 @@ import { env } from "../env.js";
 import { RECOMMENDATION_CONFIG } from "./config.js";
 import type { ProposedChange, RecoverySnapshot } from "@run-far/shared";
 import { isChangeStale } from "./changeStaleness.js";
+import { buildTrainingContext } from "./trainingContext.js";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 import { maybeSendRecoveryDigest } from "../email/recoveryDigest.js";
 
@@ -77,8 +78,12 @@ async function persistGroup(args: {
   now: Date;
   sourceIds: string[];
   cards: AttributedOutput[];
+  /** The same context the sources were gathered against — the planned runs and calendar busy
+   * periods the engine actually held. Passed in so each row can persist the slice of it the
+   * card depended on; busy periods in particular exist nowhere else once the request ends. */
+  ctx: Pick<RuleContext, "upcoming" | "busyPeriods">;
 }): Promise<{ ids: string[]; fired: RuleOutput[] }> {
-  const { userId, snapshot, now, sourceIds, cards } = args;
+  const { userId, snapshot, now, sourceIds, cards, ctx } = args;
   if (sourceIds.length === 0) return { ids: [], fired: [] };
 
   // Suppress content the athlete has already resolved (dismissed or accepted) — otherwise every
@@ -136,6 +141,9 @@ async function persistGroup(args: {
       reason: card.reason,
       inputSnapshot: snapshot,
       proposedChanges: card.proposedChanges,
+      // Recomputed on supersede as well as insert: an upsert rewrites the card's content, and
+      // a decision context describing the *previous* content would be worse than none.
+      decisionContext: buildTrainingContext(card, ctx),
       rank,
       fingerprint,
     };
@@ -160,15 +168,27 @@ async function persistGroup(args: {
 
   // Retract any pending row for a rule that no longer fires — otherwise a resolved situation
   // (conflict rescheduled away, recovery back in range) leaves a stale card on screen forever,
-  // since nothing else ever deletes a pending row. Deliberately NOT scoped to today's date:
+  // since nothing else ever resolves a pending row. Deliberately NOT scoped to today's date:
   // scoping it there was what let yesterday's cards survive, still proposing edits to runs
   // that have since happened.
+  //
+  // Expiring rather than deleting. "Shown it, didn't act, the situation passed" is the most
+  // common outcome a card has and the clearest negative signal available; deleting the row
+  // discarded it on every regeneration, leaving a training set skewed toward the minority of
+  // cards someone clicked. The partial unique index is WHERE status = 'pending', so an expired
+  // row drops straight out of it and a later re-fire inserts a fresh pending row — which is
+  // correct, that is a genuinely new showing rather than a continuation of this one.
+  //
+  // Suppression is unaffected by design: the resolved-fingerprint lookup above filters on
+  // ("dismissed", "accepted") only, so an expired card is free to come back the moment its
+  // rule fires again. That exclusion is load-bearing, not incidental.
   for (const sourceId of sourceIds) {
     const firedRuleIds = surviving
       .filter((f) => f.card.source.id === sourceId)
       .map((f) => f.card.ruleId);
     await db
-      .delete(recommendations)
+      .update(recommendations)
+      .set({ status: "expired", appliedAt: now })
       .where(
         and(
           eq(recommendations.userId, userId),
@@ -295,6 +315,7 @@ export async function generateRecommendations(
     now,
     sourceIds: plan.rendered.map((s) => s.id),
     cards: await arbitrateGroup(plan.rendered, ctx, userId),
+    ctx,
   });
 
   const ids = [...rendered.ids];
@@ -305,6 +326,7 @@ export async function generateRecommendations(
       now,
       sourceIds: [source.id],
       cards: await arbitrateGroup([source], ctx, userId),
+      ctx,
     });
     ids.push(...group.ids);
   }

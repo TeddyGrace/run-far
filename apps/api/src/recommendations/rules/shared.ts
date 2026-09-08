@@ -1,6 +1,14 @@
 import { HARD_RUN_TYPES } from "../config.js";
-import type { PlannedRunRow } from "../types.js";
+import type { BusyPeriod, PlannedRunRow } from "../types.js";
 import { dateYmdInZone } from "../../lib/zonedTime.js";
+
+/** Half-open interval overlap: touching endpoints (a run ending exactly when a meeting starts)
+ * don't count as a conflict. Shared by calendarConflict, which decides whether to fire, and by
+ * trainingContext, which records which busy windows motivated the card it fired — the two must
+ * agree on what "overlaps" means or the record won't match the decision. */
+export function overlaps(runStart: Date, runEnd: Date, busy: BusyPeriod): boolean {
+  return runStart < busy.end && runEnd > busy.start;
+}
 
 /** Every upcoming run on `localDate` (the athlete's local calendar date), earliest first. */
 export function runsOnLocalDate(

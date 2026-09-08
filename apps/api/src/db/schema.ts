@@ -36,10 +36,18 @@ export const recommendationSeverityEnum = pgEnum("recommendation_severity", [
   "yellow",
   "red",
 ]);
+// "expired" and "stale" are terminal statuses that no athlete action produces — they record
+// outcomes that used to leave no trace at all. "expired": the producing rule stopped firing
+// while the card was still pending, so the athlete never resolved it (previously the row was
+// hard-deleted, discarding the most common outcome the engine has). "stale": the athlete tried
+// to accept, but every proposed change had been overtaken by an edit to the run — previously
+// written as "dismissed", which made that column mean two different things.
 export const recommendationStatusEnum = pgEnum("recommendation_status", [
   "pending",
   "accepted",
   "dismissed",
+  "expired",
+  "stale",
 ]);
 export const chatRoleEnum = pgEnum("chat_role", ["user", "assistant"]);
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
@@ -455,6 +463,22 @@ export const recommendations = pgTable(
     // "this is the same conflict the athlete already dismissed" apart from "this is a new
     // one", instead of resurrecting an identical card on every regeneration.
     fingerprint: text("fingerprint").notNull().default(""),
+    // The world outside the athlete's body at decision time: a projection of each planned run
+    // this card proposes changing, plus the calendar windows that conflicted with it. Without
+    // it `proposed_changes` names a run id and nothing more, so a training set can't tell a
+    // 20-mile long run from a 3-mile shakeout, and busy periods (fetched live from Google,
+    // persisted nowhere else) are gone the moment the request ends. Deliberately excludes
+    // calendar event titles — see buildTrainingContext in recommendations/trainingContext.ts.
+    // Nullable: rows written before this column existed have none.
+    decisionContext: jsonb("decision_context"),
+    // When this card was first returned by the GET route — i.e. actually rendered to the
+    // athlete. Null means it was never seen, which is what makes an expired row interpretable:
+    // "never shown" is not a training example, "shown and not acted on" is a real negative.
+    firstShownAt: timestamp("first_shown_at", { withTimezone: true }),
+    // When this row left `pending` — set on all four terminal transitions (accepted, dismissed,
+    // expired, stale), not just the ones the athlete drove. Against created_at it gives
+    // time-to-decision for free. The column name predates that broader meaning; renaming it
+    // isn't worth a migration.
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
