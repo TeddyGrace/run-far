@@ -6,6 +6,7 @@ process.env.SESSION_SECRET ??= "test-session-secret-not-for-prod";
 process.env.ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
 process.env.WHOOP_CLIENT_ID ??= "test-client-id";
 process.env.WHOOP_CLIENT_SECRET ??= "test-client-secret";
+process.env.ATHLETE_TIMEZONE ??= "America/New_York";
 
 // Stub the Whoop sync so the on-read refresh never touches the real API. The implementation is
 // set per-test to simulate what a live re-fetch would upsert.
@@ -16,9 +17,15 @@ const { db } = await import("../db/client.js");
 const { users, sleepRecords } = await import("../db/schema.js");
 const { buildRecoverySnapshot } = await import("./snapshot.js");
 const { and, eq } = await import("drizzle-orm");
+const { dateYmdInZone } = await import("../lib/zonedTime.js");
+
+/** The date rows are bucketed by is the athlete's *local* calendar date (see
+ * getAthleteTimezone), which is not the UTC date for part of every day — so fixtures have to
+ * use the same zone the snapshot resolves "today" in, or they land on the wrong date. */
+const TZ = process.env.ATHLETE_TIMEZONE!;
 
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return dateYmdInZone(d, TZ);
 }
 
 let userId: string;

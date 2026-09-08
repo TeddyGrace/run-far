@@ -6,15 +6,22 @@ process.env.SESSION_SECRET ??= "test-session-secret-not-for-prod";
 process.env.ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString("base64");
 process.env.WHOOP_CLIENT_ID ??= "test-client-id";
 process.env.WHOOP_CLIENT_SECRET ??= "test-client-secret";
+process.env.ATHLETE_TIMEZONE ??= "America/New_York";
 
 const { db } = await import("../db/client.js");
 const { users, cycles, sleepRecords } = await import("../db/schema.js");
 const { buildRecoverySnapshot } = await import("./snapshot.js");
 const { strainToLoad } = await import("../metrics/cycleMetrics.js");
 const { eq } = await import("drizzle-orm");
+const { dateYmdInZone } = await import("../lib/zonedTime.js");
+
+/** The date rows are bucketed by is the athlete's *local* calendar date (see
+ * getAthleteTimezone), which is not the UTC date for part of every day — so fixtures have to
+ * use the same zone the snapshot resolves "today" in, or they land on the wrong date. */
+const TZ = process.env.ATHLETE_TIMEZONE!;
 
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return dateYmdInZone(d, TZ);
 }
 
 let userId: string;
@@ -64,7 +71,7 @@ describe("buildRecoverySnapshot sleep debt (cycle-aware 'today')", () => {
     expect(snapshot.sleepDebtMinToday).toBe(107);
   });
 
-  it("resolves via cycleId even when the main sleep's date doesn't match today's UTC date", async () => {
+  it("resolves via cycleId even when the main sleep's date doesn't match today's date", async () => {
     const yesterdayIso = isoDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
     await db.insert(cycles).values({
       userId,
@@ -80,7 +87,7 @@ describe("buildRecoverySnapshot sleep debt (cycle-aware 'today')", () => {
       whoopSleepId: `sleep-main-${randomUUID()}`,
       cycleId: whoopCycleId,
       nap: false,
-      date: yesterdayIso, // sleep started before UTC midnight, but it's still the current cycle
+      date: yesterdayIso, // sleep started before local midnight, but it's still the current cycle
       sleepDebtMin: 62,
     });
 

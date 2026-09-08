@@ -9,7 +9,10 @@ process.env.WEB_ORIGIN ??= "http://localhost:5174";
 // see lib/mailer.ts. Outside production an unset key just logs the email instead of failing,
 // which wouldn't exercise the degrade-instead-of-500 behavior this suite covers.
 process.env.NODE_ENV = "production";
-delete process.env.RESEND_API_KEY;
+// Blank rather than `delete`: env.ts loads the repo-root .env with dotenv, which fills in any
+// key that is *absent* from process.env — so deleting it here would just be undone on a dev
+// machine that has a real RESEND_API_KEY (and the test would hit the live Resend API).
+process.env.RESEND_API_KEY = "";
 
 const { db } = await import("../db/client.js");
 const { users, accessRequests, invitedEmails } = await import("../db/schema.js");
