@@ -18,6 +18,8 @@ const { db } = await import("../db/client.js");
 const { users, accessRequests, invitedEmails } = await import("../db/schema.js");
 const { buildServer } = await import("../server.js");
 const { eq } = await import("drizzle-orm");
+const { issueAuthToken } = await import("../lib/authTokens.js");
+const { authTokens } = await import("../db/schema.js");
 
 /**
  * Regression coverage for the outage where a password signup 500'd because the mail
@@ -114,6 +116,70 @@ describe("POST /api/auth/signup with the mail transport down", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("POST /api/auth/reset-password/check", () => {
+  let email: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    email = `reset-check-${randomUUID()}@run-far.local`;
+    const [user] = await db.insert(users).values({ email }).returning();
+    userId = user!.id;
+  });
+
+  afterEach(async () => {
+    await db.delete(authTokens).where(eq(authTokens.userId, userId));
+    await db.delete(users).where(eq(users.id, userId));
+  });
+
+  it("reports whose account a live link is for without spending the token", async () => {
+    const app = await buildServer();
+    try {
+      const token = await issueAuthToken(userId, "password_reset");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/reset-password/check",
+        payload: { token },
+      });
+      expect(res.statusCode).toBe(200);
+      // hasPassword false: a Google-only account, so the page can say the reset *adds* a password.
+      expect(res.json()).toEqual({ valid: true, email, hasPassword: false });
+
+      // The check must not consume the token — the actual reset still has to work.
+      const reset = await app.inject({
+        method: "POST",
+        url: "/api/auth/reset-password",
+        payload: { token, password: "a-fine-password-10" },
+      });
+      expect(reset.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports an already-used link as invalid", async () => {
+    const app = await buildServer();
+    try {
+      const token = await issueAuthToken(userId, "password_reset");
+      await app.inject({
+        method: "POST",
+        url: "/api/auth/reset-password",
+        payload: { token, password: "a-fine-password-10" },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/reset-password/check",
+        payload: { token },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ valid: false });
     } finally {
       await app.close();
     }

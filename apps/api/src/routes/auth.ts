@@ -9,12 +9,13 @@ import {
   resendVerificationSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  resetTokenCheckSchema,
 } from "@run-far/shared";
 import { db } from "../db/client.js";
 import { users, invitedEmails } from "../db/schema.js";
 import { hashPassword, verifyPassword, verifyAgainstDummyHash, isLegacyHash } from "../lib/auth.js";
 import { normalizeEmail } from "../lib/email.js";
-import { issueAuthToken, consumeAuthToken } from "../lib/authTokens.js";
+import { issueAuthToken, consumeAuthToken, peekAuthToken } from "../lib/authTokens.js";
 import { sendSystemMail, MailTransportDownError } from "../lib/systemMail.js";
 import {
   verificationEmail,
@@ -267,6 +268,25 @@ export async function authRoutes(app: FastifyInstance) {
     },
   );
 
+  // Lets the reset page render the right thing up front — whose account the link is for,
+  // and whether this will be a change or the first password on a Google-only account —
+  // instead of finding out only after the form is filled in and submitted. Holding the
+  // emailed token is already proof of access to that inbox, so echoing the address back
+  // reveals nothing the recipient doesn't have.
+  app.post(
+    "/api/auth/reset-password/check",
+    { config: { rateLimit: { max: 20, timeWindow: "15 minutes" } } },
+    async (request) => {
+      const body = resetTokenCheckSchema.parse(request.body);
+      const userId = await peekAuthToken(body.token, "password_reset");
+      if (!userId) return { valid: false as const };
+
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || user.disabledAt) return { valid: false as const };
+      return { valid: true as const, email: user.email, hasPassword: user.passwordHash != null };
+    },
+  );
+
   app.post("/api/auth/reset-password", async (request, reply) => {
     const body = resetPasswordSchema.parse(request.body);
     const userId = await consumeAuthToken(body.token, "password_reset");
@@ -313,11 +333,11 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (!user?.passwordHash) {
         await verifyAgainstDummyHash(body.password);
-        reply.status(401).send({ error: { message: "Invalid credentials", code: "INVALID_LOGIN" } });
+        reply.status(401).send({ error: { message: "Invalid email or password", code: "INVALID_LOGIN" } });
         return;
       }
       if (!(await verifyPassword(body.password, user.passwordHash))) {
-        reply.status(401).send({ error: { message: "Invalid credentials", code: "INVALID_LOGIN" } });
+        reply.status(401).send({ error: { message: "Invalid email or password", code: "INVALID_LOGIN" } });
         return;
       }
       // A successful verify against an old scrypt hash is the only chance to upgrade it —

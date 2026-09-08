@@ -39,6 +39,7 @@ export function Login() {
   const [showEmail, setShowEmail] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [unverified, setUnverified] = useState(false);
+  const [invalidLogin, setInvalidLogin] = useState(false);
   const [resent, setResent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
@@ -55,6 +56,7 @@ export function Login() {
     e.preventDefault();
     setError(null);
     setUnverified(false);
+    setInvalidLogin(false);
     setResent(false);
     setSubmitting(true);
     try {
@@ -69,6 +71,12 @@ export function Login() {
         setUnverified(true);
         setError(err.message);
       } else {
+        // Shown identically for a wrong password, an unknown email, and a Google-only account
+        // with no password — the server returns one INVALID_LOGIN for all three on purpose
+        // (see verifyAgainstDummyHash in routes/auth.ts). The Google hint below is static for
+        // that reason: it unsticks the common "I forgot I used Google" case without telling
+        // anyone whether a given address has an account, or how it signs in.
+        setInvalidLogin(err instanceof ApiError && err.code === "INVALID_LOGIN");
         setError(err instanceof ApiError ? err.message : "Something went wrong signing you in");
       }
     } finally {
@@ -181,6 +189,15 @@ export function Login() {
                       </button>
                     </>
                   )}
+                </p>
+              )}
+              {invalidLogin && (
+                <p className="text-sm text-ink-secondary">
+                  If you signed up with Google, use{" "}
+                  <a href="/api/auth/google/start" className="underline underline-offset-4">
+                    Continue with Google
+                  </a>{" "}
+                  instead — it&apos;s the same account.
                 </p>
               )}
               {resent && <p className="text-sm text-ink-secondary">Verification email sent.</p>}

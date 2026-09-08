@@ -48,3 +48,15 @@ export async function consumeAuthToken(
   await db.update(authTokens).set({ usedAt: new Date() }).where(eq(authTokens.id, row.id));
   return row.userId;
 }
+
+/** Checks a token without consuming it, so a page can tell someone their link is dead
+ * *before* they fill in a form. Same validity rules as consumeAuthToken. */
+export async function peekAuthToken(
+  token: string,
+  purpose: "email_verification" | "password_reset",
+): Promise<string | null> {
+  const tokenHash = hashToken(token);
+  const [row] = await db.select().from(authTokens).where(eq(authTokens.tokenHash, tokenHash));
+  if (!row || row.purpose !== purpose || row.usedAt || row.expiresAt < new Date()) return null;
+  return row.userId;
+}
