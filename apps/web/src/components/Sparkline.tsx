@@ -158,9 +158,14 @@ export function Sparkline({
         />
       )}
 
+      {/* Keyed by index, not by date: two Whoop cycles can share one local start date (a
+          cycle is wake-to-wake, so a short or midnight-crossing one lands on a day that
+          already has a cycle). `date` is a chart label, not an identity — see the doc on
+          RecoveryHistoryEntry. Index is the real identity here anyway: the series is
+          positional and never reorders, and xAt(i)/hoverIndex are both index-based. */}
       {points.map((p, i) => (
         <rect
-          key={p.date}
+          key={i}
           x={points.length === 1 ? padL : xAt(i) - plotW / points.length / 2}
           y={padT}
           width={points.length === 1 ? plotW : plotW / points.length}
@@ -206,7 +211,7 @@ export function Sparkline({
         const p = points[i]!;
         return (
           <text
-            key={`tick-${p.date}`}
+            key={`tick-${i}`}
             x={xAt(i)}
             y={height - 2}
             textAnchor={i === 0 ? "start" : i === points.length - 1 ? "end" : "middle"}

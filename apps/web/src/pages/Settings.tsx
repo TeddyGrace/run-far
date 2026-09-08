@@ -1,7 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ConnectionStatus, UserSettings } from "@run-far/shared";
-import { AI_MODEL_OPTIONS } from "@run-far/shared";
+import { AI_MODEL_OPTIONS, MIN_PASSWORD_LENGTH } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
 import { useAuth, useLogout, type Entitlement } from "../lib/auth.js";
 
@@ -464,31 +464,36 @@ function DangerZoneCard() {
   );
 }
 
+// A Google-only account has no password to re-enter, so this card is really two different
+// jobs wearing one title: "add a password so email sign-in works at all" and "change the
+// password you already have". Splitting on hasPassword keeps each one to the fields it
+// actually needs. The account email is shown, never edited — changing an address needs its
+// own verified flow, and quietly rewriting it inside a password form would also break the
+// Google link.
 function EmailSignInCard() {
   const { user } = useAuth();
-  const [email, setEmail] = useState(user?.email ?? "");
+  const queryClient = useQueryClient();
+  const hasPassword = user?.hasPassword ?? false;
   const [currentPassword, setCurrentPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  useEffect(() => {
-    if (user?.email) setEmail((current) => current || user.email);
-  }, [user?.email]);
-
   const setPasswordMutation = useMutation({
     mutationFn: () =>
       api.post<{ id: string; email: string }>("/auth/set-password", {
-        email,
+        email: user?.email,
         password,
-        currentPassword: user?.hasPassword ? currentPassword : undefined,
+        currentPassword: hasPassword ? currentPassword : undefined,
       }),
     onSuccess: () => {
       setSuccess(true);
       setCurrentPassword("");
       setPassword("");
       setConfirmPassword("");
+      // Flips the card into change-password mode without a reload.
+      void queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
     },
   });
 
@@ -496,6 +501,10 @@ function EmailSignInCard() {
     e.preventDefault();
     setFormError(null);
     setSuccess(false);
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setFormError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      return;
+    }
     if (password !== confirmPassword) {
       setFormError("Passwords don't match");
       return;
@@ -507,71 +516,91 @@ function EmailSignInCard() {
     setPasswordMutation.error instanceof ApiError
       ? setPasswordMutation.error.message
       : setPasswordMutation.isError
-        ? "Failed to set password"
+        ? "Something went wrong — try again"
         : null;
+
+  const inputClass =
+    "w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm";
 
   return (
     <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <h3 className="font-display font-semibold text-ink-primary">Email sign-in</h3>
+      <h3 className="font-display font-semibold text-ink-primary">
+        {hasPassword ? "Password" : "Email sign-in"}
+      </h3>
       <p className="mt-1 text-sm text-ink-secondary">
-        Set a password on your account so you can sign in with email instead of Google. This links to
-        the same account — your data doesn't change.
+        {hasPassword ? (
+          <>
+            You can sign in with <span className="text-ink-primary">{user?.email}</span> and a
+            password. Change it here.
+          </>
+        ) : (
+          <>
+            You signed in with Google. Add a password to also sign in with{" "}
+            <span className="text-ink-primary">{user?.email}</span> — same account, same data, and
+            Google keeps working.
+          </>
+        )}
       </p>
       <form onSubmit={onSubmit} className="mt-4 space-y-3">
-        {user?.hasPassword && (
+        {hasPassword && (
           <div>
-            <label htmlFor="settings-current-password" className="mb-1.5 block text-sm text-ink-secondary">
+            <label
+              htmlFor="settings-current-password"
+              className="mb-1.5 block text-sm text-ink-secondary"
+            >
               Current password
             </label>
             <input
               id="settings-current-password"
               type="password"
               required
+              autoComplete="current-password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
+              className={inputClass}
             />
+            <a
+              href="/forgot-password"
+              className="mt-1.5 inline-block text-xs text-ink-secondary underline-offset-4 hover:underline"
+            >
+              Forgot your password?
+            </a>
           </div>
         )}
-        <div>
-          <label htmlFor="settings-email" className="mb-1.5 block text-sm text-ink-secondary">
-            Email
-          </label>
-          <input
-            id="settings-email"
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
-          />
-        </div>
+        {/* Hidden but present so password managers file the new credential under this account. */}
+        <input type="email" name="email" autoComplete="username" value={user?.email ?? ""} readOnly hidden />
         <div>
           <label htmlFor="settings-password" className="mb-1.5 block text-sm text-ink-secondary">
-            Password
+            {hasPassword ? "New password" : "Password"}
           </label>
           <input
             id="settings-password"
             type="password"
             required
-            minLength={8}
+            minLength={MIN_PASSWORD_LENGTH}
+            autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
+            className={inputClass}
           />
+          <p className="mt-1.5 text-xs text-ink-secondary">At least {MIN_PASSWORD_LENGTH} characters.</p>
         </div>
         <div>
-          <label htmlFor="settings-confirm-password" className="mb-1.5 block text-sm text-ink-secondary">
-            Confirm password
+          <label
+            htmlFor="settings-confirm-password"
+            className="mb-1.5 block text-sm text-ink-secondary"
+          >
+            Confirm {hasPassword ? "new " : ""}password
           </label>
           <input
             id="settings-confirm-password"
             type="password"
             required
-            minLength={8}
+            minLength={MIN_PASSWORD_LENGTH}
+            autoComplete="new-password"
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
-            className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm"
+            className={inputClass}
           />
         </div>
         <button
@@ -579,12 +608,22 @@ function EmailSignInCard() {
           disabled={setPasswordMutation.isPending}
           className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
         >
-          {setPasswordMutation.isPending ? "Saving…" : "Save password"}
+          {setPasswordMutation.isPending
+            ? "Saving…"
+            : hasPassword
+              ? "Change password"
+              : "Add password"}
         </button>
       </form>
       {formError && <p className="mt-3 text-sm text-zone-red">{formError}</p>}
       {mutationError && <p className="mt-3 text-sm text-zone-red">{mutationError}</p>}
-      {success && <p className="mt-3 text-sm text-zone-good">Password saved — you can now sign in with email.</p>}
+      {success && (
+        <p className="mt-3 text-sm text-zone-good">
+          {hasPassword
+            ? "Password updated."
+            : `Password added — you can now sign in with ${user?.email}.`}
+        </p>
+      )}
     </div>
   );
 }
