@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMutation } from "@tanstack/react-query";
 import type { PlannedRun, Recommendation, RecoverySnapshot } from "@run-far/shared";
-import { api } from "../lib/api.js";
+import { api, ApiError } from "../lib/api.js";
 import type { RecoveryHistoryEntry } from "../types.js";
 import { RecoveryHero } from "../components/RecoveryHero.js";
 import { RecommendationCard } from "../components/RecommendationCard.js";
@@ -29,6 +30,10 @@ function todayRange() {
 
 export function Dashboard() {
   const queryClient = useQueryClient();
+  // Set when the API rejects an accept because the run has changed since the card was
+  // generated. The card is gone by then (the server resolves it), so the explanation has to
+  // live here rather than on the card itself.
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
   const { from, to } = todayRange();
 
   const history = useQuery<RecoveryHistoryEntry[]>({
@@ -59,7 +64,17 @@ export function Dashboard() {
   const respond = useMutation({
     mutationFn: ({ id, action }: { id: string; action: "accept" | "dismiss" }) =>
       api.post(`/recommendations/${id}/${action}`),
+    onMutate: () => setStaleNotice(null),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["recommendations"] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.code === "STALE_RECOMMENDATION") {
+        setStaleNotice(
+          "That suggestion was out of date — the run had already changed, so nothing was applied. Your own edit is intact.",
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ["recommendations"] });
       queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
@@ -79,6 +94,11 @@ export function Dashboard() {
         <h2 className="mb-3 font-display text-sm font-semibold uppercase tracking-wide text-ink-secondary">
           Today's recommendation
         </h2>
+        {staleNotice && (
+          <p className="mb-3 rounded-xl border border-border bg-surface-1 p-4 text-sm text-ink-secondary">
+            {staleNotice}
+          </p>
+        )}
         {recommendations.isLoading && <p className="text-sm text-ink-muted">Checking recovery against your plan…</p>}
         {!recommendations.isLoading && !primary && (
           <p className="rounded-xl border border-border bg-surface-1 p-5 text-sm text-ink-secondary">

@@ -24,7 +24,9 @@ today's recovery doesn't match what the plan expects.
 - **Recovery-aware scheduling** — reads Whoop recovery, HRV, sleep, and
   strain data and compares it against the active plan; a rules engine
   proposes concrete edits (downgrade a hard session, push a session out a
-  day, pull one forward) rather than just flagging a problem.
+  day, swap it with an easy one) rather than just flagging a problem. Rules
+  are arbitrated down to one card per run, so no two suggestions can propose
+  conflicting edits to the same session.
 - **Two-way Google Calendar sync** — a dedicated "Running" calendar mirrors
   the app's planned runs, with loop-prevention and app-wins conflict
   resolution when both sides changed.
@@ -136,8 +138,17 @@ pnpm typecheck   # all packages
 
 Coverage as of this writing:
 - Rules engine (`recommendations/evaluate.test.ts`) — one fixture per rule,
-  plus severity ordering, timezone-correct scheduling, all-day/rest-run
-  exclusion, and the "nothing fires" case.
+  plus severity ordering, actionable-before-advisory ranking, today-only
+  targeting, timezone-correct scheduling, all-day/rest-run exclusion, and the
+  "nothing fires" case.
+- Rule arbitration (`recommendations/arbitrate.test.ts`) — when several rules
+  want to change the same run, one card owns it and the rest are folded into
+  its reason; advisory rules pass through untouched.
+- Stale-proposal detection (`recommendations/staleness.test.ts`) — a proposed
+  change whose run has been edited since the card was generated is skipped
+  rather than overwriting the athlete's edit.
+- Timezone helpers (`lib/zonedTime.test.ts`) — wall-clock conversion, and
+  `addLocalDays` preserving the athlete's clock time across both DST boundaries.
 - Recommendation fingerprinting (`recommendations/fingerprint.test.ts`) —
   stability across key/array ordering, sensitivity to real content changes.
 - Calendar event filtering (`integrations/google/calendarClient.test.ts`) —

@@ -8,10 +8,11 @@ import { greenRecoveryEasyDay } from "./greenRecoveryEasyDay.js";
 import { calendarConflict } from "./calendarConflict.js";
 import { weatherAdvisory } from "./weatherAdvisory.js";
 
-// Order matters: evaluate() takes the first applicable rule as primary. Red-zone overrides
-// take priority over everything else; purely informational nudges (green day, ACWR) sit
-// at the bottom so they only ever appear as secondary notes when something else also fires,
-// or as the sole (low-stakes) recommendation when nothing more urgent applies.
+// Declared order is evaluate()'s final tiebreaker, applied after severity and after
+// actionable-before-advisory. Red-zone overrides come first; purely informational nudges
+// (green day, ACWR) sit at the bottom so they only ever appear as secondary notes when
+// something else also fires, or as the sole (low-stakes) recommendation when nothing more
+// urgent applies.
 export const ALL_RULES: Rule[] = [
   redRecoveryHardSession,
   yellowRecoveryHardSession,

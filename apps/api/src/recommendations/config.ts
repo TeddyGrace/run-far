@@ -22,6 +22,13 @@ export const RECOMMENDATION_CONFIG = {
   volumeReduction: {
     yellowPct: 0.2, // reduce volume/intensity ~20% on a yellow-zone hard day
   },
+  suppression: {
+    // How long a dismissed/accepted recommendation's content stays suppressed. The fingerprint
+    // deliberately excludes `date` so a dismissal survives the day rolling over — but without a
+    // window that also means a legitimately recurring situation (the same recurring meeting
+    // conflicting with the same run, months later) could never surface again.
+    windowDays: 14,
+  },
   cycleLoad: {
     // Fallback only, used when a cycle has no kilojoule reading (kilojoule is a real
     // linear measure and is always preferred when present). WHOOP doesn't publish the

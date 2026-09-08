@@ -29,6 +29,9 @@ export interface RuleContext {
    * resolved via getAthleteTimezone (falling back to env.ATHLETE_TIMEZONE). Passed in rather
    * than resolved inside a rule, so rules stay pure functions of their input. */
   timeZone: string;
+  /** The instant the engine is evaluating "now" at. Passed in rather than read from the clock
+   * inside a rule, so rules stay pure functions of their input and "today" is fixture-testable. */
+  now: Date;
 }
 
 export interface RuleOutput {
