@@ -98,6 +98,11 @@ export const users = pgTable(
     signupSource: signupSourceEnum("signup_source").notNull().default("google"),
     // Gates the daily recovery/recommendations digest email to at most one per calendar day.
     lastRecoveryEmailDate: date("last_recovery_email_date"),
+    // Throttles the "someone tried a password on your Google-only account" notice (see
+    // routes/auth.ts login). Anyone who knows an address can trigger that email by failing a
+    // login, so it goes out at most once a day per account — enough to tell a stuck owner
+    // why their password isn't working, not enough to mailbomb them.
+    lastPasswordLoginNoticeAt: timestamp("last_password_login_notice_at", { withTimezone: true }),
     // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.
     assistantModel: text("assistant_model"),
     planModel: text("plan_model"),

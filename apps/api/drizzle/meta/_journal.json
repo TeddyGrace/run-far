@@ -183,6 +183,13 @@
       "when": 1788483773668,
       "tag": "0025_add_entitlement_synced_at",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788894133747,
+      "tag": "0026_add_password_login_notice_at",
+      "breakpoints": true
     }
   ]
 }

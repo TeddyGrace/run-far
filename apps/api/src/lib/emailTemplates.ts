@@ -36,6 +36,31 @@ export function alreadyHasAccountEmail(): { subject: string; html: string; text:
   };
 }
 
+/** Sent when someone tries to sign in with a password to an account that has none — i.e. a
+ * Google-only account. The login screen can't say this (it would confirm the address exists
+ * and how it signs in), but the inbox can: only the real owner reads it, and if they weren't
+ * the one typing, it's a heads-up that someone is guessing at their account. Deliberately
+ * carries no reset token — it links to /forgot-password so the owner asks for their own
+ * link, which keeps a stranger's failed login from invalidating a reset the owner already
+ * requested. */
+export function passwordLoginOnGoogleAccountEmail(): { subject: string; html: string; text: string } {
+  const loginUrl = `${env.WEB_ORIGIN}/login`;
+  const resetUrl = `${env.WEB_ORIGIN}/forgot-password`;
+  return {
+    subject: "Trouble signing in to run-far?",
+    html: wrap(
+      `<p>Someone just tried to sign in to run-far with a password for this email, but this
+       account signs in with Google and doesn't have a password.</p>
+       <p>If that was you: <a href="${loginUrl}" style="color:#4fb0a6">Continue with Google</a>
+       on the sign-in page. To use a password as well, you can
+       <a href="${resetUrl}" style="color:#4fb0a6">set one here</a> — same account either way.</p>
+       <p style="color:#666;font-size:13px">If it wasn't you, nothing has changed and no one got
+       in. You don't need to do anything.</p>`,
+    ),
+    text: `Someone just tried to sign in to run-far with a password for this email, but this account signs in with Google and doesn't have a password.\n\nIf that was you, use "Continue with Google": ${loginUrl}\nTo use a password as well, set one here: ${resetUrl}\n\nIf it wasn't you, nothing has changed and no one got in. You don't need to do anything.`,
+  };
+}
+
 export function passwordResetEmail(token: string): { subject: string; html: string; text: string } {
   const url = `${env.WEB_ORIGIN}/reset-password?token=${encodeURIComponent(token)}`;
   return {

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "last_password_login_notice_at" timestamp with time zone;

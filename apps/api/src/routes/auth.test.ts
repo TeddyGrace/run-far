@@ -185,3 +185,75 @@ describe("POST /api/auth/reset-password/check", () => {
     }
   });
 });
+
+describe("POST /api/auth/login against a Google-only account", () => {
+  let email: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    email = `google-only-${randomUUID()}@run-far.local`;
+    const [user] = await db
+      .insert(users)
+      .values({ email, emailVerifiedAt: new Date(), googleSub: `sub-${randomUUID()}` })
+      .returning();
+    userId = user!.id;
+  });
+
+  afterEach(async () => {
+    await db.delete(users).where(eq(users.id, userId));
+  });
+
+  it("answers with the same generic 401 and notifies the owner at most once a day", async () => {
+    const app = await buildServer();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { email, password: "not-the-right-password" },
+      });
+
+      // The response must not hint that this address exists or that it signs in with Google.
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({
+        error: { message: "Invalid email or password", code: "INVALID_LOGIN" },
+      });
+
+      // The notice slot is claimed even though the mail transport is down in this suite —
+      // a dead transport must not leave the throttle open for the next attempt.
+      const [afterFirst] = await db.select().from(users).where(eq(users.id, userId));
+      const firstNotice = afterFirst?.lastPasswordLoginNoticeAt;
+      expect(firstNotice).toBeInstanceOf(Date);
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { email, password: "not-the-right-password" },
+      });
+      expect(second.statusCode).toBe(401);
+
+      const [afterSecond] = await db.select().from(users).where(eq(users.id, userId));
+      expect(afterSecond?.lastPasswordLoginNoticeAt?.getTime()).toBe(firstNotice?.getTime());
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("notifies again once the throttle window has passed", async () => {
+    const app = await buildServer();
+    try {
+      const stale = new Date(Date.now() - 25 * 60 * 60 * 1000);
+      await db.update(users).set({ lastPasswordLoginNoticeAt: stale }).where(eq(users.id, userId));
+
+      await app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { email, password: "not-the-right-password" },
+      });
+
+      const [after] = await db.select().from(users).where(eq(users.id, userId));
+      expect(after?.lastPasswordLoginNoticeAt?.getTime()).toBeGreaterThan(stale.getTime());
+    } finally {
+      await app.close();
+    }
+  });
+});

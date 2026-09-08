@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, or, lt, isNull } from "drizzle-orm";
 import { z } from "zod";
 import {
   setPasswordSchema,
@@ -21,6 +21,7 @@ import {
   verificationEmail,
   alreadyHasAccountEmail,
   passwordResetEmail,
+  passwordLoginOnGoogleAccountEmail,
 } from "../lib/emailTemplates.js";
 import { setSessionCookie, clearSessionCookie, requireUserId } from "../lib/session.js";
 import { resolveEntitlement } from "../lib/entitlement.js";
@@ -333,6 +334,9 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (!user?.passwordHash) {
         await verifyAgainstDummyHash(body.password);
+        // The response stays identical whether or not this address has an account, so the
+        // one place it's safe to explain the real problem is the inbox itself.
+        if (user && !user.disabledAt) await notifyPasswordLoginOnGoogleAccount(user);
         reply.status(401).send({ error: { message: "Invalid email or password", code: "INVALID_LOGIN" } });
         return;
       }
@@ -522,4 +526,34 @@ export async function authRoutes(app: FastifyInstance) {
       hasPassword: user.passwordHash != null,
     };
   });
+}
+
+/** At most one notice per account per day, so a stranger hammering a known address can't turn
+ * a failed login into a mailbomb. Best-effort throughout: a send failure or a transport
+ * outage must never change what /api/auth/login returns, and must never make a failed login
+ * take a different amount of time than it otherwise would. */
+async function notifyPasswordLoginOnGoogleAccount(user: { id: string; email: string; lastPasswordLoginNoticeAt: Date | null }) {
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  if (user.lastPasswordLoginNoticeAt && user.lastPasswordLoginNoticeAt > dayAgo) return;
+
+  // Claim the slot before sending: two simultaneous attempts should produce one email, and a
+  // send that throws still shouldn't earn a retry on the next failed login.
+  const [claimed] = await db
+    .update(users)
+    .set({ lastPasswordLoginNoticeAt: new Date() })
+    .where(
+      and(
+        eq(users.id, user.id),
+        or(isNull(users.lastPasswordLoginNoticeAt), lt(users.lastPasswordLoginNoticeAt, dayAgo)),
+      ),
+    )
+    .returning({ id: users.id });
+  if (!claimed) return;
+
+  try {
+    await sendSystemMail({ to: user.email, ...passwordLoginOnGoogleAccountEmail() });
+  } catch (err) {
+    if (!(err instanceof MailTransportDownError)) throw err;
+    logger.error({ err, userId: user.id }, "could not send password-login-on-Google-account notice: mail transport down");
+  }
 }
