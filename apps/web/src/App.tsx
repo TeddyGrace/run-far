@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { AuthProvider, RequireAuth, useAuth } from "./lib/auth.js";
+import { AuthProvider, RequireAuth, isEntitled, useAuth } from "./lib/auth.js";
 import { Layout } from "./components/Layout.js";
 import { Login } from "./pages/Login.js";
 import { Signup } from "./pages/Signup.js";
@@ -28,7 +28,7 @@ function HomeRoute() {
   if (isLoading || !user) {
     return <Home />;
   }
-  if (!user.entitlement.active) {
+  if (!isEntitled(user)) {
     return <Subscribe />;
   }
   return (

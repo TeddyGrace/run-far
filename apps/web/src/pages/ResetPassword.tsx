@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MIN_PASSWORD_LENGTH } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
+import { refreshCurrentUser } from "../lib/auth.js";
 
 interface TokenCheck {
   valid: boolean;
@@ -16,6 +17,10 @@ export function ResetPassword() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Set the moment the password write returns 200 — from here on the reset has *happened*,
+  // whatever else fails.
+  const [saved, setSaved] = useState(false);
+  const [needsManualContinue, setNeedsManualContinue] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -31,11 +36,22 @@ export function ResetPassword() {
   });
 
   const submit = useMutation({
-    mutationFn: () => api.post("/auth/reset-password", { token, password }),
-    onSuccess: (user) => {
-      queryClient.setQueryData(["auth", "me"], user);
-      void queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      navigate("/", { replace: true });
+    // Typed as the partial it is. This route answers with the account's identity, not the
+    // full /auth/me shape, so it must never be written into the auth cache — doing that is
+    // what used to leave people on a blank page here (see AUTH_ME_KEY in lib/auth.tsx).
+    mutationFn: () => api.post<{ id: string; email: string }>("/auth/reset-password", { token, password }),
+    onSuccess: async () => {
+      setSaved(true);
+      try {
+        // The response already set the session cookie; this loads the real user behind it,
+        // so the app has a complete session before we navigate into it.
+        await refreshCurrentUser(queryClient);
+        navigate("/", { replace: true });
+      } catch {
+        // The password is changed and the token is spent — retrying the form would only fail
+        // with INVALID_TOKEN. Only the follow-up load failed, so say exactly that.
+        setNeedsManualContinue(true);
+      }
     },
   });
 
@@ -70,10 +86,30 @@ export function ResetPassword() {
       <div className="relative w-full max-w-sm animate-[fade-up_0.5s_ease-out]">
         <p className="mb-2 font-mono text-[11px] tracking-[0.22em] text-accent">run-far</p>
         <h1 className="mb-2 font-display text-3xl font-semibold tracking-tight text-ink-primary">
-          {account && !account.hasPassword ? "Choose a password" : "Choose a new password"}
+          {needsManualContinue
+            ? "Password updated"
+            : account && !account.hasPassword
+              ? "Choose a password"
+              : "Choose a new password"}
         </h1>
 
-        {linkDead ? (
+        {needsManualContinue ? (
+          <>
+            <p className="mb-6 text-sm leading-relaxed text-ink-secondary">
+              Your new password is saved. We couldn&apos;t load your account just then —
+              continue and we&apos;ll try again.
+            </p>
+            {/* A plain link, not a router <Link>: the /auth/me query is sitting in an error
+                state and AuthProvider doesn't retry, so an in-app navigation could land on
+                the signed-out landing page. A document load boots the session from scratch. */}
+            <a
+              href="/"
+              className="inline-block rounded-md bg-accent px-3 py-2 font-medium text-surface-0 transition-opacity hover:opacity-90"
+            >
+              Continue
+            </a>
+          </>
+        ) : linkDead ? (
           <p className="mb-8 text-sm leading-relaxed text-zone-red">
             This reset link has expired or has already been used.{" "}
             <Link to="/forgot-password" className="underline-offset-4 hover:underline">
@@ -139,7 +175,7 @@ export function ResetPassword() {
                   className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-ink-primary placeholder:text-ink-muted"
                 />
               </div>
-              {(error ?? submitError) && (
+              {!saved && (error ?? submitError) && (
                 <p className="text-sm text-zone-red" role="alert">
                   {error ?? submitError}
                 </p>
@@ -149,7 +185,7 @@ export function ResetPassword() {
                 disabled={submit.isPending}
                 className="w-full rounded-md bg-accent px-3 py-2 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-50"
               >
-                {submit.isPending ? "Saving…" : "Save password"}
+                {submit.isPending ? (saved ? "Signing you in…" : "Saving…") : "Save password"}
               </button>
             </form>
           </>

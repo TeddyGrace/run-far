@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation } from "react-router-dom";
 import { api, setPaymentRequiredHandler } from "./api.js";
 import { Subscribe } from "../pages/Subscribe.js";
@@ -24,6 +24,38 @@ export interface CurrentUser {
   hasPassword: boolean;
 }
 
+/**
+ * The one cache entry holding the signed-in athlete. Invariant: **only `/auth/me` writes a
+ * user object here.** Every auth mutation route (`/auth/login`, `/auth/verify-email`,
+ * `/auth/reset-password`, `/auth/set-password`) answers with a deliberately partial user —
+ * seeding one of those makes the app render as though the session were fully loaded, with
+ * `entitlement` undefined, which is a blank page rather than an error. Refresh through
+ * `refreshCurrentUser` instead of writing here by hand.
+ */
+export const AUTH_ME_KEY = ["auth", "me"] as const;
+
+export const currentUserQueryOptions = {
+  queryKey: AUTH_ME_KEY,
+  queryFn: () => api.get<CurrentUser>("/auth/me"),
+  retry: false,
+};
+
+/**
+ * Loads the full user into the cache and hands it back, for the moment after a mutation that
+ * changes who the session is. Prefer this over `invalidateQueries`, which resolves even when
+ * the refetch failed — a caller awaiting it can't tell a warm cache from a 500, and would
+ * navigate into the app on either. This throws instead, so the caller can decide.
+ */
+export function refreshCurrentUser(queryClient: QueryClient): Promise<CurrentUser> {
+  return queryClient.fetchQuery(currentUserQueryOptions);
+}
+
+/** The single answer to "does this user have access". Tolerates a half-loaded user rather
+ * than throwing on `entitlement` — see the invariant on AUTH_ME_KEY. */
+export function isEntitled(user: CurrentUser | null | undefined): boolean {
+  return user?.entitlement?.active === true;
+}
+
 interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
@@ -34,14 +66,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<CurrentUser>({
-    queryKey: ["auth", "me"],
-    queryFn: () => api.get<CurrentUser>("/auth/me"),
-    retry: false,
+    ...currentUserQueryOptions,
     // An unentitled athlete's paywall has no other way to learn a Checkout/webhook or a
     // backoffice comp landed — poll gently so it clears within half a minute without a
     // manual reload. setPaymentRequiredHandler below covers the opposite direction (access
     // lapsing mid-session) immediately rather than waiting on this poll.
-    refetchInterval: (query) => (query.state.data && !query.state.data.entitlement.active ? 30_000 : false),
+    refetchInterval: (query) => (query.state.data && !isEntitled(query.state.data) ? 30_000 : false),
   });
 
   // Any 402 from any API call (see lib/api.ts) means the session's entitlement just lapsed —
@@ -86,7 +116,7 @@ export function useLogout() {
   const queryClient = useQueryClient();
   return async () => {
     await api.post("/auth/logout");
-    queryClient.setQueryData(["auth", "me"], null);
+    queryClient.setQueryData(AUTH_ME_KEY, null);
   };
 }
 
@@ -100,7 +130,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  if (!user.entitlement.active) {
+  if (!isEntitled(user)) {
     return <Subscribe />;
   }
   return <>{children}</>;

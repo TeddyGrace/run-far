@@ -321,6 +321,8 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     setSessionCookie(reply, updated.id);
+    // Deliberately partial — the account's identity, not the full /auth/me shape. Clients
+    // must refetch /auth/me for a usable session (see AUTH_ME_KEY in the web app).
     return { id: updated.id, email: updated.email };
   });
 

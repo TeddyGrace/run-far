@@ -32,7 +32,7 @@ export function Layout({ children }: { children: ReactNode }) {
     : "max-w-5xl";
 
   const daysLeft =
-    user?.entitlement.status === "trialing" ? trialDaysLeft(user.entitlement.expiresAt) : null;
+    user?.entitlement?.status === "trialing" ? trialDaysLeft(user.entitlement.expiresAt) : null;
   const showTrialBanner = daysLeft != null && daysLeft >= 0 && daysLeft <= TRIAL_BANNER_WINDOW_DAYS;
 
   return (

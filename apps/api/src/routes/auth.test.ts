@@ -257,3 +257,41 @@ describe("POST /api/auth/login against a Google-only account", () => {
     }
   });
 });
+
+describe("POST /api/auth/reset-password", () => {
+  let email: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    email = `reset-shape-${randomUUID()}@run-far.local`;
+    const [user] = await db.insert(users).values({ email }).returning();
+    userId = user!.id;
+  });
+
+  afterEach(async () => {
+    await db.delete(authTokens).where(eq(authTokens.userId, userId));
+    await db.delete(users).where(eq(users.id, userId));
+  });
+
+  it("answers with the account's identity only — clients must refetch /auth/me", async () => {
+    const app = await buildServer();
+    try {
+      const token = await issueAuthToken(userId, "password_reset");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/reset-password",
+        payload: { token, password: "a-fine-password-10" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      // Pinned on purpose. The web client used to seed its ["auth","me"] cache with this
+      // response, which rendered a session with no entitlement and blanked the page. Widening
+      // this payload toward the /auth/me shape would make that mistake look survivable again.
+      expect(res.json()).toEqual({ id: userId, email });
+      expect(res.headers["set-cookie"]).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+});
