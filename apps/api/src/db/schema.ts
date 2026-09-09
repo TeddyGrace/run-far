@@ -36,10 +36,18 @@ export const recommendationSeverityEnum = pgEnum("recommendation_severity", [
   "yellow",
   "red",
 ]);
+// "expired" and "stale" are terminal statuses that no athlete action produces — they record
+// outcomes that used to leave no trace at all. "expired": the producing rule stopped firing
+// while the card was still pending, so the athlete never resolved it (previously the row was
+// hard-deleted, discarding the most common outcome the engine has). "stale": the athlete tried
+// to accept, but every proposed change had been overtaken by an edit to the run — previously
+// written as "dismissed", which made that column mean two different things.
 export const recommendationStatusEnum = pgEnum("recommendation_status", [
   "pending",
   "accepted",
   "dismissed",
+  "expired",
+  "stale",
 ]);
 export const chatRoleEnum = pgEnum("chat_role", ["user", "assistant"]);
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
@@ -106,6 +114,12 @@ export const users = pgTable(
     // Null means "use the server default" (env.ANTHROPIC_MODEL) for that agent.
     assistantModel: text("assistant_model"),
     planModel: text("plan_model"),
+    // Per-athlete override for whether model-sourced recommendations are *rendered* to them.
+    // Null means inherit appSettings.modelRenderedDefault — same null-means-server-default
+    // convention as the two model columns above. Never read directly: resolve it through
+    // lib/modelRendering.ts. Note this gates rendering only; the model source still runs and is
+    // still scored in shadow regardless of what this says.
+    modelRenderedOverride: boolean("model_rendered_override"),
     // Athlete's location for NWS weather lookups, set via Settings (browser geolocation).
     // Null means weather is unavailable — see lib/athleteLocation.ts. locationUpdatedAt is
     // surfaced in Settings ("last set N ago") so a moved athlete notices it's stale and
@@ -431,6 +445,15 @@ export const recommendations = pgTable(
     inputSnapshot: jsonb("input_snapshot").notNull(),
     proposedChanges: jsonb("proposed_changes").notNull().default([]),
     status: recommendationStatusEnum("status").notNull().default("pending"),
+    // Which engine produced this card — see recommendations/sources/. Every row is already a
+    // features -> action -> outcome triple (input_snapshot, proposed_changes, status/applied_at);
+    // without this column that training set has no attribution, and it can't be reconstructed
+    // after the fact. Defaults to 'rules' because the rules engine is the only producer to date,
+    // which makes the backfill of historical rows correct by construction.
+    source: text("source").notNull().default("rules"),
+    // Version of the producing model, for scoring one model revision against another. Null for
+    // deterministic sources — the rules engine is versioned by the repo, not by a column.
+    modelVersion: text("model_version"),
     // Priority order decided by the rules engine (0 = the primary card). Persisted rather than
     // re-derived at read time so the ranking evaluate() computes — severity, then actionable
     // before advisory, then declared rule order — is what the dashboard actually renders.
@@ -440,12 +463,30 @@ export const recommendations = pgTable(
     // "this is the same conflict the athlete already dismissed" apart from "this is a new
     // one", instead of resurrecting an identical card on every regeneration.
     fingerprint: text("fingerprint").notNull().default(""),
+    // The world outside the athlete's body at decision time: a projection of each planned run
+    // this card proposes changing, plus the calendar windows that conflicted with it. Without
+    // it `proposed_changes` names a run id and nothing more, so a training set can't tell a
+    // 20-mile long run from a 3-mile shakeout, and busy periods (fetched live from Google,
+    // persisted nowhere else) are gone the moment the request ends. Deliberately excludes
+    // calendar event titles — see buildTrainingContext in recommendations/trainingContext.ts.
+    // Nullable: rows written before this column existed have none.
+    decisionContext: jsonb("decision_context"),
+    // When this card was first returned by the GET route — i.e. actually rendered to the
+    // athlete. Null means it was never seen, which is what makes an expired row interpretable:
+    // "never shown" is not a training example, "shown and not acted on" is a real negative.
+    firstShownAt: timestamp("first_shown_at", { withTimezone: true }),
+    // When this row left `pending` — set on all four terminal transitions (accepted, dismissed,
+    // expired, stale), not just the ones the athlete drove. Against created_at it gives
+    // time-to-decision for free. The column name predates that broader meaning; renaming it
+    // isn't worth a migration.
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("recommendations_user_date_idx").on(t.userId, t.date),
     index("recommendations_user_fingerprint_idx").on(t.userId, t.fingerprint, t.status),
+    // Backs the GET route's "only sources rendered for this athlete" filter.
+    index("recommendations_user_source_status_idx").on(t.userId, t.source, t.status),
     // At most one *pending* row per (user, rule) — makes the regenerate-on-ingestion path
     // (webhooks, dashboard reads, nightly safety net) idempotent under real concurrency
     // instead of relying on a non-atomic delete-then-insert. Resolved rows (accepted/dismissed)
@@ -455,8 +496,11 @@ export const recommendations = pgTable(
     // pending row for the same rule while the retraction sweep only ever looked at today's
     // date, so live cards piled up across days and proposed edits to runs already in the past.
     // The column stays for display and audit.
+    //
+    // `source` is part of the key so two sources emitting the same `ruleId` (a model trained to
+    // reproduce a rule's label, say) get a row each instead of clobbering one another on upsert.
     uniqueIndex("recommendations_pending_unique_idx")
-      .on(t.userId, t.ruleId)
+      .on(t.userId, t.source, t.ruleId)
       .where(sql`${t.status} = 'pending'`),
   ],
 );
@@ -604,4 +648,29 @@ export const processedWebhookEvents = pgTable("processed_webhook_events", {
   id: text("id").primaryKey(), // the provider's event id, e.g. Stripe's evt_...
   provider: text("provider").notNull(), // "stripe" today; free-text so a future provider needs no migration
   processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// --- App settings ---
+
+/**
+ * Single-row table of operator-controlled runtime settings — the state behind the backoffice
+ * switches that shouldn't require a redeploy to flip. Deliberately a table rather than env vars:
+ * these are toggled live from the backoffice, and an env var can't be.
+ *
+ * Always exactly one row, id "singleton", created by the migration. Readers treat a missing row
+ * as "all defaults" so a freshly created database still behaves.
+ */
+export const appSettings = pgTable("app_settings", {
+  id: text("id").primaryKey().default("singleton"),
+  // Default for whether model-sourced recommendations are rendered to athletes. Per-account
+  // overrides live on users.modelRenderedOverride; resolve the pair through
+  // lib/modelRendering.ts rather than reading either column directly.
+  //
+  // This gates *rendering* only. The model source runs and is scored in shadow on every
+  // ingestion event regardless, which is what keeps a continuous accept/dismiss record to
+  // evaluate a candidate model against before it is ever switched on.
+  modelRenderedDefault: boolean("model_rendered_default").notNull().default(false),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Who last flipped a switch here — same admin-attribution pattern as users.compedBy.
+  updatedBy: uuid("updated_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
 });

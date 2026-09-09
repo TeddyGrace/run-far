@@ -22,7 +22,7 @@ async function runForAllConnectedUsers(): Promise<void> {
       // sleep present" gate in service.ts: it fires the digest when the backfill completed
       // the pair, and just refreshes recommendation rows (harmlessly) otherwise, rather than
       // forcing out a premature email built from an admittedly-incomplete snapshot.
-      await generateRecommendationsSafe(userId, { notify: true });
+      await generateRecommendationsSafe(userId, { notify: true, ingestion: true });
     } catch (err) {
       logger.error({ err, userId }, "nightly whoop sync failed for user");
     }

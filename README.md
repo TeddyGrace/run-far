@@ -60,6 +60,38 @@ today's recovery doesn't match what the plan expects.
   regeneration.
   → [`apps/api/src/db/schema.ts`](apps/api/src/db/schema.ts),
   [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **Pluggable recommendation sources with a shadow mode** — the rules engine
+  is one implementation of a `RecommendationSource` interface, so a
+  machine-learned model can later run beside it, instead of it, or silently
+  against it. Every card is persisted with the source that produced it, next
+  to the input snapshot it was generated from and the athlete's eventual
+  accept/dismiss — a features → action → outcome record a candidate model can
+  be scored on before it is ever shown to anyone. Rendered sources are
+  arbitrated together so at most one card can touch a given run; shadow
+  sources are arbitrated alone, which is what makes them structurally unable
+  to change what the athlete sees. Rules win ties at `red` severity, so the
+  deterministic recovery override stays authoritative regardless of model
+  output.
+  → [`apps/api/src/recommendations/sources/`](apps/api/src/recommendations/sources/),
+  [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **A faithful training record, not just the cards that were clicked** — the
+  outcome a recommendation most often has is that nobody acts on it and the
+  situation passes. That used to be a hard `DELETE`, so the retained data
+  skewed toward the minority of cards someone clicked. Retraction now writes a
+  terminal `expired` status instead, `stale` is split out from `dismissed` so
+  "the athlete accepted, but the run had moved on" stops looking like a
+  rejection, each card snapshots the runs it targets and the calendar windows
+  that motivated it, and the GET route stamps `first_shown_at` so "never seen"
+  is distinguishable from "seen and ignored". All four are unrecoverable after
+  the fact, which is why they landed before the model rather than after.
+  → [`recommendations/trainingContext.ts`](apps/api/src/recommendations/trainingContext.ts),
+  [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **Runtime switches, not redeploys** — whether athletes see model-sourced
+  recommendations is a backoffice toggle with a global default and per-account
+  overrides, resolved in one place. The model runs and is scored either way;
+  the switch gates rendering only.
+  → [`apps/api/src/lib/modelRendering.ts`](apps/api/src/lib/modelRendering.ts),
+  [`apps/backoffice/src/App.tsx`](apps/backoffice/src/App.tsx)
 - **Timezone-correct scheduling** — wall-clock math (open-slot search,
   day-boundary detection) goes through small DST-safe conversion helpers
   built on `Intl.DateTimeFormat` rather than a heavyweight date library.
@@ -144,6 +176,33 @@ Coverage as of this writing:
 - Rule arbitration (`recommendations/arbitrate.test.ts`) — when several rules
   want to change the same run, one card owns it and the rest are folded into
   its reason; advisory rules pass through untouched.
+- Recommendation sources (`recommendations/sources/sources.test.ts`) — the
+  rules adapter matches `evaluate()` exactly, a model source that throws or
+  hangs fails open to no output rather than an empty dashboard, and the rules
+  source is deliberately *not* caught so a broken engine can't read as "no
+  recommendations today".
+- Source isolation (`recommendations/service.sources.test.ts`) — a shadow card
+  cannot claim a run or edit a rendered card's reason, shadow rows survive the
+  dashboard reads that regenerate only the rules engine, and two sources
+  emitting the same rule id get a row each instead of clobbering one another.
+- Shadow unreachability (`routes/recommendations.sources.test.ts`) — shadow
+  rows are absent from the pending list and 404 on both accept and dismiss, so
+  an engine that is switched off can never edit a real session.
+- Training-record capture (`recommendations/trainingRecord.test.ts`) — a rule
+  that stops firing leaves an `expired` row with `applied_at` set rather than a
+  missing row; that row is absent from the dashboard, the digest email and the
+  pending query; an expired card may fire again immediately while an
+  accepted/dismissed one stays suppressed inside the 14-day window; an expired
+  row and a fresh pending row coexist for the same `(user, source, rule)`
+  without violating the pending-only unique index; and `first_shown_at` is null
+  until the first GET, then stamped once and not re-stamped.
+- Decision context (`recommendations/trainingContext.test.ts`) — target-run
+  projection across several changes to different runs, advisory cards yielding
+  empty arrays, only overlapping busy windows captured, and calendar event
+  titles never appearing in the output.
+- Stale vs. dismissed (`routes/recommendations.stale.test.ts`) — accepting a
+  card whose every change was overtaken returns 409 `STALE_RECOMMENDATION` and
+  writes `stale`; an actual dismissal still writes `dismissed`.
 - Stale-proposal detection (`recommendations/staleness.test.ts`) — a proposed
   change whose run has been edited since the card was generated is skipped
   rather than overwriting the athlete's edit.
@@ -325,3 +384,51 @@ docker run --rm -p 8080:8080 --env-file .env -e NODE_ENV=production -e PORT=8080
   else in the codebase should ever see plaintext tokens.
 
 </details>
+
+## Data notes for the recommendations training set
+
+Each `recommendations` row is a features → action → outcome record: the
+athlete's physiology at decision time (`input_snapshot`), the world outside it
+(`decision_context`), the suggestion (`proposed_changes`), and what became of
+it (`status`, `first_shown_at`, `applied_at`). Read these caveats before
+training on it.
+
+**Status meanings.** `pending` is unresolved. `accepted` and `dismissed` are
+athlete verdicts. `expired` means the producing rule stopped firing while the
+card was still pending — the athlete never resolved it. `stale` means the
+athlete tried to accept but every proposed change had been overtaken by an edit
+to the run. `applied_at` is set on all four terminal transitions, so
+`applied_at - created_at` is time-to-decision; the column name predates that
+broader meaning.
+
+**Cutover: 2026-09-08.** Before this date, `expired` and `stale` did not exist.
+Retracted cards were hard-deleted and are simply absent — that period's data
+over-represents cards someone acted on, and the absences cannot be
+reconstructed. `dismissed` rows from before the cutover are a mix of real
+dismissals and what would now be `stale`, so either exclude pre-cutover
+dismissals or treat them as a noisier class. `decision_context` and
+`first_shown_at` are null on pre-cutover rows.
+
+**`first_shown_at` is what makes an expired row interpretable.** Null means the
+card was never rendered to the athlete — not a training example at all. Non-null
+on an expired row means it was shown and not acted on, which is a real negative.
+
+**`decision_context` deliberately omits calendar event titles.** Busy windows
+are recorded as bare `{start, end}` pairs. Event names are personal data from a
+third-party account pulled in for a transient scheduling decision, and copying
+them into a long-lived table changes both what that data is for and how long it
+lives. The overlap window is the part a model can learn from.
+
+Known limits this record still has:
+
+- **In-place supersede loses history.** The pending upsert overwrites a row when
+  a card's content changes, so if an athlete saw version A and then version B,
+  only B survives. Capturing every version would be mostly noise — the upsert
+  rewrites on every dashboard read — so the honest fix is fingerprint-triggered
+  versioning, deferred until there is a reason to want it.
+- **Flapping rules inflate row count.** A rule oscillating around a threshold
+  now mints a pending row and an expired row per cycle instead of silently
+  churning one row. Worth watching row growth; the existing
+  `(user_id, source, status)` index covers the queries.
+- **No retention policy.** Expired rows accumulate deliberately — they are the
+  asset. Revisit only if volume becomes a problem.

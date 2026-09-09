@@ -3,7 +3,16 @@ import { z } from "zod";
 export const recommendationSeveritySchema = z.enum(["info", "yellow", "red"]);
 export type RecommendationSeverity = z.infer<typeof recommendationSeveritySchema>;
 
-export const recommendationStatusSchema = z.enum(["pending", "accepted", "dismissed"]);
+// "expired" (the producing rule stopped firing while the card was pending) and "stale" (the
+// athlete tried to accept, but the run had already moved on) are terminal statuses the engine
+// writes without athlete action. Additive: every consumer filters explicitly on "pending".
+export const recommendationStatusSchema = z.enum([
+  "pending",
+  "accepted",
+  "dismissed",
+  "expired",
+  "stale",
+]);
 export type RecommendationStatus = z.infer<typeof recommendationStatusSchema>;
 
 export const recoverySnapshotSchema = z.object({
@@ -74,7 +83,20 @@ export const recommendationSchema = z.object({
   reason: z.string(),
   inputSnapshot: recoverySnapshotSchema,
   proposedChanges: z.array(proposedChangeSchema),
+  // Which engine produced the card — "rules" for the deterministic engine, a model source id
+  // otherwise. Defaulted rather than required so rows persisted before the column existed still
+  // parse, same convention as the snapshot fields above.
+  source: z.string().default("rules"),
+  // Version of the producing model; null/absent for deterministic sources.
+  modelVersion: z.string().nullable().optional(),
   status: recommendationStatusSchema,
+  // The planned runs this card targets and any calendar windows conflicting with them, as the
+  // engine saw them. Nullable/optional so rows persisted before the column existed still parse,
+  // same convention as the snapshot fields above. Never contains calendar event titles.
+  decisionContext: z.unknown().nullable().optional(),
+  // When the card was first rendered to the athlete; null if it never was.
+  firstShownAt: z.string().nullable().optional(),
+  // When the row left `pending` — set on all four terminal transitions, not only athlete ones.
   appliedAt: z.string().nullable(),
   createdAt: z.string(),
 });
