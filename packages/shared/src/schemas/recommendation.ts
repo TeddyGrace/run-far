@@ -94,6 +94,12 @@ export const recommendationSchema = z.object({
   // engine saw them. Nullable/optional so rows persisted before the column existed still parse,
   // same convention as the snapshot fields above. Never contains calendar event titles.
   decisionContext: z.unknown().nullable().optional(),
+  // What became of the advice rather than of the card: whether the targeted runs were actually
+  // executed, how they compared to what was planned, and the next morning's recovery. Written
+  // by the reconciliation sweep once those runs settle, so it is null on every card that is
+  // still pending and on ones whose runs haven't been reconciled yet. Same
+  // nullable/optional convention as decisionContext above.
+  outcomeContext: z.unknown().nullable().optional(),
   // When the card was first rendered to the athlete; null if it never was.
   firstShownAt: z.string().nullable().optional(),
   // When the row left `pending` — set on all four terminal transitions, not only athlete ones.

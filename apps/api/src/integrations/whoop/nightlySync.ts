@@ -3,6 +3,7 @@ import { oauthConnections } from "../../db/schema.js";
 import { eq } from "drizzle-orm";
 import { incrementalSyncWhoop } from "./sync.js";
 import { generateRecommendationsSafe } from "../../recommendations/service.js";
+import { reconcileUserSafe } from "../../reconciliation/service.js";
 import { logger } from "../../lib/logger.js";
 
 const INTERVAL_MS = 12 * 60 * 60 * 1000; // twice a day is enough for a safety net
@@ -23,6 +24,10 @@ async function runForAllConnectedUsers(): Promise<void> {
       // the pair, and just refreshes recommendation rows (harmlessly) otherwise, rather than
       // forcing out a premature email built from an admittedly-incomplete snapshot.
       await generateRecommendationsSafe(userId, { notify: true, ingestion: true });
+      // The safety net for reconciliation too: workout webhooks get dropped like any other, and
+      // an unreconciled run is invisible in adherence rather than merely late. Runs before the
+      // window closes on it — the sweep only reconsiders the last few weeks.
+      await reconcileUserSafe(userId);
     } catch (err) {
       logger.error({ err, userId }, "nightly whoop sync failed for user");
     }

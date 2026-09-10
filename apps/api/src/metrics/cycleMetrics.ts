@@ -2,7 +2,7 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { cycles } from "../db/schema.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
-import { RECOMMENDATION_CONFIG } from "../recommendations/config.js";
+import { ENGINE_CONFIG } from "../recommendations/config.js";
 
 type Cycle = typeof cycles.$inferSelect;
 
@@ -41,10 +41,10 @@ export async function getRecentCompletedCycles(userId: string, count: number): P
 /**
  * Fallback-only approximation of linear cardiovascular load from WHOOP's 0-21 strain score,
  * used when a cycle has no kilojoule reading. Not a WHOOP-published formula — see
- * RECOMMENDATION_CONFIG.cycleLoad for the calibration note.
+ * ENGINE_CONFIG.cycleLoad for the calibration note.
  */
 export function strainToLoad(strain: number): number {
-  return Math.exp(strain / RECOMMENDATION_CONFIG.cycleLoad.strainToLoadDivisor);
+  return Math.exp(strain / ENGINE_CONFIG.cycleLoad.strainToLoadDivisor);
 }
 
 /** Linear load for a cycle: kilojoule when present (a real additive energy measure),

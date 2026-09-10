@@ -1,4 +1,3 @@
-import { RECOMMENDATION_CONFIG } from "../config.js";
 import type { Rule, PlannedRunRow } from "../types.js";
 import { todaysRun, isHardRun, runsOnLocalDate } from "./shared.js";
 import { addLocalDays, dateYmdInZone } from "../../lib/zonedTime.js";
@@ -30,9 +29,9 @@ function firstFreeDayShift(
  *
  * The shift goes through `addLocalDays`, not `setUTCDate(+1)`: adding 24h in UTC moves the
  * athlete's wall-clock run time by an hour across a DST boundary. */
-export const sleepDebt: Rule = ({ snapshot, upcoming, timeZone, now }) => {
+export const sleepDebt: Rule = ({ snapshot, upcoming, timeZone, now, thresholds }) => {
   const debt = snapshot.sleepDebtMinToday;
-  if (debt == null || debt < RECOMMENDATION_CONFIG.sleepDebt.thresholdMin) return null;
+  if (debt == null || debt < thresholds.sleepDebtThresholdMin) return null;
 
   const run = todaysRun(upcoming, timeZone, now);
   if (!isHardRun(run) || !run) return null;

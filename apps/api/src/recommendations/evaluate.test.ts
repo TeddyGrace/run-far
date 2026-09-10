@@ -5,6 +5,7 @@ import type { RecommendationSource } from "./sources/types.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import type { DailyForecast } from "../integrations/weather/weatherClient.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
+import { DEFAULT_RULE_THRESHOLDS } from "./config.js";
 
 const baseSnapshot: RecoverySnapshot = {
   date: "2026-08-12",
@@ -45,6 +46,9 @@ function makeRun(overrides: Partial<PlannedRunRow> = {}): PlannedRunRow {
     gcalEventId: null,
     gcalEtag: null,
     origin: "manual",
+    actualWorkoutId: null,
+    matchSource: null,
+    reconciledAt: null,
     createdAt: new Date("2026-08-01T00:00:00Z"),
     updatedAt: new Date("2026-08-01T00:00:00Z"),
     ...overrides,
@@ -57,6 +61,9 @@ function makeContext(overrides: Partial<RuleContext> = {}): RuleContext {
     upcoming: [],
     busyPeriods: [],
     weatherForecast: [],
+    // The shipped defaults, so these fixtures keep asserting against the calibration the engine
+    // actually ships with. A test that needs a differently-tuned athlete overrides this field.
+    thresholds: DEFAULT_RULE_THRESHOLDS,
     timeZone: "America/New_York",
     // 08:00 America/New_York on Aug 12 — the local day makeRun() schedules onto by default,
     // so the recovery-driven rules (which now only touch *today's* run) see one.
@@ -71,6 +78,88 @@ function evaluated(ctx: RuleContext) {
   const fired = evaluate(ctx);
   return { primary: fired[0] ?? null, secondary: fired.slice(1), all: fired };
 }
+
+/**
+ * The payoff of per-athlete calibration: identical physiology, different verdicts.
+ *
+ * Every other test in this file runs against DEFAULT_RULE_THRESHOLDS, so without these the
+ * engine could quietly ignore the athlete's settings and the whole suite would still pass.
+ */
+describe("per-athlete thresholds", () => {
+  const tuned = (overrides: Partial<typeof DEFAULT_RULE_THRESHOLDS>) => ({
+    ...DEFAULT_RULE_THRESHOLDS,
+    ...overrides,
+  });
+
+  it("does not call a day red for an athlete whose red line is lower", () => {
+    const run = makeRun({ runType: "tempo" });
+    const snapshot = { ...baseSnapshot, recoveryScore: 30 };
+
+    // 30% is red under the shipped default of 33...
+    expect(evaluated(makeContext({ snapshot, upcoming: [run] })).primary?.ruleId).toBe(
+      "red-recovery-hard-session",
+    );
+
+    // ...and merely yellow for an athlete who runs low and has said so.
+    const result = evaluated(
+      makeContext({ snapshot, upcoming: [run], thresholds: tuned({ recoveryRedMax: 20 }) }),
+    );
+    expect(result.primary?.ruleId).toBe("yellow-recovery-hard-session");
+  });
+
+  it("quotes the athlete's own red line back to them, not the default", () => {
+    const result = evaluated(
+      makeContext({
+        snapshot: { ...baseSnapshot, recoveryScore: 18 },
+        upcoming: [makeRun({ runType: "tempo" })],
+        thresholds: tuned({ recoveryRedMax: 20 }),
+      }),
+    );
+    // A card explaining itself with a threshold the athlete didn't set reads as a bug in the
+    // engine rather than a setting they chose.
+    expect(result.primary?.reason).toContain("≤20%");
+    expect(result.primary?.reason).not.toContain("≤33%");
+  });
+
+  it("cuts a yellow-day session by the athlete's own percentage", () => {
+    const run = makeRun({ runType: "tempo", durationMin: 60, distanceM: 10000 });
+    const result = evaluated(
+      makeContext({
+        snapshot: { ...baseSnapshot, recoveryScore: 50 },
+        upcoming: [run],
+        thresholds: tuned({ volumeReductionYellowPct: 0.4 }),
+      }),
+    );
+
+    expect(result.primary?.proposedChanges).toEqual([
+      { plannedRunId: run.id, field: "durationMin", from: 60, to: 36 },
+      { plannedRunId: run.id, field: "distanceM", from: 10000, to: 6000 },
+    ]);
+  });
+
+  it("holds an ACWR warning for an athlete with a higher spike tolerance", () => {
+    const snapshot = { ...baseSnapshot, acwr: 1.6 };
+
+    expect(evaluated(makeContext({ snapshot })).primary?.ruleId).toBe("acwr-spike");
+    expect(
+      evaluated(makeContext({ snapshot, thresholds: tuned({ acwrSpikeThreshold: 1.8 }) })).primary,
+    ).toBeNull();
+  });
+
+  it("waits longer on HRV for an athlete who asked it to", () => {
+    const snapshot = { ...baseSnapshot, hrvSuppressedConsecutiveDays: 2 };
+    const upcoming = [makeRun({ runType: "tempo" })];
+
+    expect(
+      evaluated(makeContext({ snapshot, upcoming })).all.some((c) => c.ruleId === "hrv-suppressed"),
+    ).toBe(true);
+    expect(
+      evaluated(
+        makeContext({ snapshot, upcoming, thresholds: tuned({ hrvMinConsecutiveDays: 4 }) }),
+      ).all.some((c) => c.ruleId === "hrv-suppressed"),
+    ).toBe(false);
+  });
+});
 
 describe("red-recovery-hard-session", () => {
   it("downgrades a hard session when recovery is red and next run is hard", () => {

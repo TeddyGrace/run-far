@@ -1,12 +1,40 @@
 import type { FastifyInstance } from "fastify";
 import { eq, and, sql } from "drizzle-orm";
-import { createPlannedRunSchema, updatePlannedRunSchema } from "@run-far/shared";
+import { createPlannedRunSchema, setRunActualSchema, updatePlannedRunSchema } from "@run-far/shared";
+import { z } from "zod";
 import { db } from "../db/client.js";
-import { plannedRuns } from "../db/schema.js";
+import { plannedRuns, whoopWorkouts } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { pushPlannedRunToGoogle, deletePlannedRunFromGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
+import { buildAdherence } from "../reconciliation/adherence.js";
+import { reconcileUserSafe } from "../reconciliation/service.js";
+
+const adherenceQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(28),
+});
+
+/**
+ * Last time a reconciliation sweep ran for a user on this instance.
+ *
+ * The adherence read regenerates before it reports, so a dashboard is never showing a week-old
+ * verdict just because a webhook was dropped. Unlike the recommendations route's regeneration,
+ * this one makes no third-party calls — it is three queries and a small transaction — but it is
+ * still throttled, because a dashboard that polls has no need to re-decide the same fortnight
+ * every few seconds. Process-local and best-effort by design: the worst case of a cold instance
+ * is one extra sweep, and the nightly job and Whoop webhooks are what actually guarantee
+ * freshness.
+ */
+const lastSweepAt = new Map<string, number>();
+const SWEEP_THROTTLE_MS = 60_000;
+
+async function reconcileThrottled(userId: string): Promise<void> {
+  const last = lastSweepAt.get(userId) ?? 0;
+  if (Date.now() - last < SWEEP_THROTTLE_MS) return;
+  lastSweepAt.set(userId, Date.now());
+  await reconcileUserSafe(userId);
+}
 
 export async function runRoutes(app: FastifyInstance) {
   app.get("/api/runs", async (request, reply) => {
@@ -24,6 +52,83 @@ export async function runRoutes(app: FastifyInstance) {
       .from(plannedRuns)
       .where(and(...conditions))
       .orderBy(plannedRuns.scheduledAt);
+  });
+
+  /** Planned vs actual for a recent window: what the plan asked for, what Whoop recorded, and
+   * which runs the sweep could not account for. */
+  app.get("/api/runs/adherence", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { days } = adherenceQuerySchema.parse(request.query);
+
+    await reconcileThrottled(userId);
+    return buildAdherence(userId, { windowDays: days });
+  });
+
+  /**
+   * Athlete correction of a match the sweep got wrong — link a different workout, or say a run
+   * was skipped after all.
+   *
+   * Separate from the general PATCH because it means something the general one doesn't: it
+   * stamps the run `manual`, which takes it out of the sweep's hands permanently. Folding that
+   * into a plain status edit would make every incidental status change a silent opt-out of
+   * reconciliation.
+   */
+  app.patch("/api/runs/:id/actual", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { id } = request.params as { id: string };
+    const body = setRunActualSchema.parse(request.body);
+
+    const [existing] = await db
+      .select({ id: plannedRuns.id })
+      .from(plannedRuns)
+      .where(and(eq(plannedRuns.id, id), eq(plannedRuns.userId, userId)));
+    if (!existing) {
+      reply.status(404).send({ error: { message: "Run not found", code: "NOT_FOUND" } });
+      return;
+    }
+
+    if (body.workoutId) {
+      const [workout] = await db
+        .select({ id: whoopWorkouts.id })
+        .from(whoopWorkouts)
+        .where(and(eq(whoopWorkouts.id, body.workoutId), eq(whoopWorkouts.userId, userId)));
+      if (!workout) {
+        reply.status(404).send({ error: { message: "Workout not found", code: "NOT_FOUND" } });
+        return;
+      }
+
+      // One workout satisfies one run: releasing it from whichever run currently holds it is
+      // part of assigning it here, not a separate step the caller has to remember. Without
+      // this the partial unique index rejects the correction outright.
+      await db
+        .update(plannedRuns)
+        .set({ actualWorkoutId: null, status: "planned", matchSource: null, reconciledAt: null })
+        .where(
+          and(
+            eq(plannedRuns.userId, userId),
+            eq(plannedRuns.actualWorkoutId, body.workoutId),
+            sql`${plannedRuns.id} <> ${id}`,
+          ),
+        );
+    }
+
+    await db
+      .update(plannedRuns)
+      .set({
+        actualWorkoutId: body.workoutId,
+        status: body.workoutId ? "completed" : (body.status ?? "planned"),
+        matchSource: "manual",
+        reconciledAt: new Date(),
+      })
+      .where(and(eq(plannedRuns.id, id), eq(plannedRuns.userId, userId)));
+
+    const [updated] = await db
+      .select()
+      .from(plannedRuns)
+      .where(and(eq(plannedRuns.id, id), eq(plannedRuns.userId, userId)));
+    return updated;
   });
 
   app.post("/api/runs", async (request, reply) => {

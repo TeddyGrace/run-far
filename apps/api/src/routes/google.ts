@@ -2,7 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import { buildAuthorizeUrl, exchangeCodeAndStore } from "../integrations/google/oauth.js";
-import { ensureRunningCalendar } from "../integrations/google/calendarClient.js";
+import {
+  ensureRunningCalendar,
+  invalidateBusyPeriods,
+} from "../integrations/google/calendarClient.js";
 import { registerWatch } from "../integrations/google/channelRenewal.js";
 import { pullGoogleCalendarChanges } from "../integrations/google/pull.js";
 import { db } from "../db/client.js";
@@ -38,6 +41,10 @@ export async function googleRoutes(app: FastifyInstance) {
     }
 
     await exchangeCodeAndStore(userId, code);
+    // Busy periods are cached in memory for a few minutes. Consent just changed hands, and it
+    // may have changed to a different Google account entirely — drop anything read under the
+    // old grant rather than let it inform recommendations until the TTL lapses.
+    invalidateBusyPeriods(userId);
     await ensureRunningCalendar(userId);
 
     // Push notifications need a public HTTPS URL; skip registering a watch channel if

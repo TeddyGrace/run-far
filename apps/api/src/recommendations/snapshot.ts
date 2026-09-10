@@ -1,7 +1,8 @@
 import { and, eq, gte, lte, desc, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { recoveryMetrics, sleepRecords, whoopWorkouts } from "../db/schema.js";
-import { RECOMMENDATION_CONFIG } from "./config.js";
+import { ENGINE_CONFIG } from "./config.js";
+import { getRuleThresholds } from "../lib/ruleThresholds.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
@@ -82,6 +83,11 @@ function startOfLocalMonth(localIso: string): string {
  */
 export async function buildRecoverySnapshot(userId: string): Promise<RecoverySnapshot> {
   const tz = await getAthleteTimezone(userId);
+  // The HRV suppression streak below is counted against a threshold the athlete can tune, so
+  // the snapshot has to resolve it too — it is the only tunable that shapes a *derived field*
+  // rather than being compared against one inside a rule. Everything downstream (the hrv rule,
+  // the digest, the assistant) then sees one consistent count instead of re-deriving it.
+  const thresholds = await getRuleThresholds(userId);
   const today = new Date();
   const todayIso = localIsoDate(today, tz);
 
@@ -124,7 +130,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
       const row = recoveryByCycleId.get(cycle.whoopCycleId);
       if (!row || row.hrvRmssdMs == null) break;
       const sdBelow = (hrvBaselineMs - row.hrvRmssdMs) / hrvBaselineSd;
-      if (sdBelow >= RECOMMENDATION_CONFIG.hrv.suppressedSdThreshold) {
+      if (sdBelow >= thresholds.hrvSuppressedSd) {
         hrvSuppressedConsecutiveDays++;
       } else {
         break;
@@ -214,7 +220,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     cycleLoadSum7d != null &&
     chronicWeeklyEquivalent != null &&
     chronicWeeklyEquivalent > 0 &&
-    chronicLoadValues.length >= RECOMMENDATION_CONFIG.acwr.minChronicCycles
+    chronicLoadValues.length >= ENGINE_CONFIG.acwr.minChronicCycles
       ? cycleLoadSum7d / chronicWeeklyEquivalent
       : null;
 

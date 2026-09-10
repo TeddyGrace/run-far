@@ -30,6 +30,10 @@ export const runTypeEnum = pgEnum("run_type", [
 ]);
 export const runStatusEnum = pgEnum("run_status", ["planned", "completed", "skipped", "moved"]);
 export const runOriginEnum = pgEnum("run_origin", ["imported", "manual", "recommendation", "ai_generated"]);
+// How a planned run came to be linked to (or explicitly divorced from) a Whoop workout.
+// "auto" is the reconciliation sweep's own guess and it may revise it on any later pass;
+// "manual" is the athlete correcting that guess, and the sweep never overwrites it.
+export const runMatchSourceEnum = pgEnum("run_match_source", ["auto", "manual"]);
 export const planStatusEnum = pgEnum("plan_status", ["active", "inactive", "archived"]);
 export const recommendationSeverityEnum = pgEnum("recommendation_severity", [
   "info",
@@ -130,6 +134,13 @@ export const users = pgTable(
     // IANA zone captured from the browser at login (see lib/athleteTimezone.ts). Null falls
     // back to env.ATHLETE_TIMEZONE, same pattern as location above.
     timezone: text("timezone"),
+    // This athlete's overrides of the rules engine's tunable thresholds — what counts as a red
+    // recovery day, how many suppressed HRV days before the engine says something, and so on.
+    // Stored sparsely and merged over DEFAULT_RULE_THRESHOLDS: a field absent here means "track
+    // the shipped default", so improving a default still reaches everyone who never moved that
+    // one. Null (the common case) means no overrides at all. Never read directly — resolve it
+    // through lib/ruleThresholds.ts, same convention as modelRenderedOverride above.
+    ruleThresholds: jsonb("rule_thresholds"),
     // Null means the new-account tutorial overlay hasn't been completed/skipped yet. Existing
     // accounts are backfilled to non-null at migration time so only new signups see it.
     tutorialCompletedAt: timestamp("tutorial_completed_at", { withTimezone: true }),
@@ -211,9 +222,11 @@ export const oauthConnections = pgTable(
 
 // --- Weather ---
 
-// NWS daily forecast, one row per (user, calendar date). Upserted on every
-// generateRecommendations run, so it's always as fresh as the last dashboard read /
-// webhook / nightly sync — see recommendations/service.ts.
+// NWS daily forecast, one row per (user, calendar date). Read through by
+// integrations/weather/forecastStore.ts, which serves these rows while `fetched_at` is inside
+// its TTL and refetches from NWS when it isn't — so this table is the cache, not merely a copy
+// of one. Rows record no coordinates, which is why a location change deletes them outright
+// rather than waiting for them to age out.
 export const weatherForecasts = pgTable(
   "weather_forecasts",
   {
@@ -419,12 +432,36 @@ export const plannedRuns = pgTable(
     gcalEventId: text("gcal_event_id"),
     gcalEtag: text("gcal_etag"),
     origin: runOriginEnum("origin").notNull().default("manual"),
+    // The Whoop workout this planned run was actually executed as. `status` has carried a
+    // 'completed' value since the first migration and nothing ever wrote it: the plan and the
+    // workouts synced from Whoop were two parallel tables that never touched, so the app could
+    // say what was intended and what happened but never that they were the same session.
+    // Null means "not linked" — which, read together with `reconciled_at` and `status`, is how
+    // "not looked at yet" stays distinguishable from "looked at, and nothing matched".
+    actualWorkoutId: uuid("actual_workout_id").references(() => whoopWorkouts.id, {
+      onDelete: "set null",
+    }),
+    // Who decided this link. See runMatchSourceEnum: 'auto' rows are the sweep's own guess and
+    // it rewrites them freely; 'manual' rows are the athlete's correction and the sweep leaves
+    // them alone. Null on runs no pass has touched. A correction is itself a labelled example
+    // of a match the heuristic got wrong, which is why it's attributed rather than just applied.
+    matchSource: runMatchSourceEnum("match_source"),
+    // When a reconciliation pass last decided about this run. Distinct from `updated_at`, which
+    // any edit moves. Without it a run sitting at 'planned' is ambiguous: not yet reconciled, or
+    // reconciled and genuinely unmatched.
+    reconciledAt: timestamp("reconciled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("planned_runs_user_scheduled_idx").on(t.userId, t.scheduledAt),
     uniqueIndex("planned_runs_gcal_event_id_idx").on(t.userId, t.gcalEventId),
+    // One workout satisfies at most one planned run. Without this, a double-session day where
+    // the matcher mis-assigns leaves the same 10k counted twice and adherence reads over 100%.
+    // Partial so the many unlinked runs don't collide on NULL.
+    uniqueIndex("planned_runs_actual_workout_idx")
+      .on(t.userId, t.actualWorkoutId)
+      .where(sql`${t.actualWorkoutId} IS NOT NULL`),
   ],
 );
 
@@ -471,6 +508,15 @@ export const recommendations = pgTable(
     // calendar event titles — see buildTrainingContext in recommendations/trainingContext.ts.
     // Nullable: rows written before this column existed have none.
     decisionContext: jsonb("decision_context"),
+    // What became of the advice, as opposed to what became of the card. `status` records the
+    // click; this records the consequence — for each run the card proposed changing, whether it
+    // was actually executed and how the session that happened compared to the one that was
+    // planned, plus the recovery score the following morning. Written once by the reconciliation
+    // sweep, after the targeted runs are reconciled and never revised, so a training set can ask
+    // "did following this advice help?" rather than only "did they click accept?".
+    // Nullable: unwritten until the runs settle, and permanently null for cards resolved before
+    // this column existed.
+    outcomeContext: jsonb("outcome_context"),
     // When this card was first returned by the GET route — i.e. actually rendered to the
     // athlete. Null means it was never seen, which is what makes an expired row interpretable:
     // "never shown" is not a training example, "shown and not acted on" is a real negative.

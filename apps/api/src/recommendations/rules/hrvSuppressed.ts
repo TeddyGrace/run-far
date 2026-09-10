@@ -1,4 +1,3 @@
-import { RECOMMENDATION_CONFIG } from "../config.js";
 import type { Rule } from "../types.js";
 import { todaysRun, isHardRun } from "./shared.js";
 
@@ -9,12 +8,12 @@ import { todaysRun, isHardRun } from "./shared.js";
  * the consecutive-day count (computed by the snapshot builder, which has the history this
  * rule doesn't) is what actually gates the rule.
  */
-export const hrvSuppressed: Rule = ({ snapshot, upcoming, timeZone, now }) => {
+export const hrvSuppressed: Rule = ({ snapshot, upcoming, timeZone, now, thresholds }) => {
   const { hrvRmssdMs, hrvBaselineMs, hrvBaselineSd, hrvSuppressedConsecutiveDays } = snapshot;
   if (hrvRmssdMs == null || hrvBaselineMs == null || hrvBaselineSd == null || hrvBaselineSd === 0) {
     return null;
   }
-  if (hrvSuppressedConsecutiveDays < RECOMMENDATION_CONFIG.hrv.minConsecutiveDays) return null;
+  if (hrvSuppressedConsecutiveDays < thresholds.hrvMinConsecutiveDays) return null;
   const sdBelow = (hrvBaselineMs - hrvRmssdMs) / hrvBaselineSd;
 
   const run = todaysRun(upcoming, timeZone, now);

@@ -1,10 +1,11 @@
 import "dotenv/config";
 import { db, pool } from "./client.js";
-import { users, recoveryMetrics, sleepRecords, whoopWorkouts, cycles, plannedRuns } from "./schema.js";
+import { users, recoveryMetrics, sleepRecords, whoopWorkouts, cycles, plannedRuns, syncState } from "./schema.js";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "../lib/auth.js";
 import { env } from "../env.js";
 import { offsetStringForZone } from "../lib/zonedTime.js";
+import { reconcileUserSafe } from "../reconciliation/service.js";
 
 const SEED_EMAIL = "dev@run-far.local";
 const SEED_PASSWORD = "devpassword123";
@@ -130,6 +131,22 @@ async function main() {
     }
   }
 
+  // Two weeks of planned runs, half of them already behind the athlete.
+  //
+  // The past half exists so the reconciliation sweep has something to decide and the adherence
+  // panel has something to show on a fresh database, before any integration is connected. Its
+  // shape is chosen against the seeded workouts above (which land on even offsets): day -6 and
+  // -2 have a workout and reconcile as completed, -5 and -1 have none and reconcile as missed,
+  // and -4 carries a workout with no planned run at all — which is what puts a real "you ran
+  // this a day late, did it count?" correction in front of the panel's fix control.
+  const pastPlan = [
+    { day: -6, hour: 6, type: "easy" as const, dist: 8000, dur: 45, desc: "Easy aerobic run" },
+    { day: -5, hour: 6, type: "tempo" as const, dist: 10000, dur: 50, desc: "Tempo: 4x1600m" },
+    { day: -3, hour: 6, type: "rest" as const, dist: 0, dur: 0, desc: "Rest day" },
+    { day: -2, hour: 6, type: "easy" as const, dist: 6000, dur: 35, desc: "Recovery jog" },
+    { day: -1, hour: 8, type: "long" as const, dist: 18000, dur: 95, desc: "Long run, easy pace" },
+  ];
+
   // A week of planned runs: today through +6 days.
   const plan = [
     { day: 0, hour: 6, type: "easy" as const, dist: 8000, dur: 45, desc: "Easy aerobic run" },
@@ -141,7 +158,7 @@ async function main() {
     { day: 6, hour: 8, type: "long" as const, dist: 21000, dur: 110, desc: "Long run, easy pace" },
   ];
 
-  for (const p of plan) {
+  for (const p of [...pastPlan, ...plan]) {
     await db.insert(plannedRuns).values({
       userId,
       planId: null,
@@ -158,7 +175,25 @@ async function main() {
     });
   }
 
-  console.log(`Seeded user ${SEED_EMAIL} with 7 days of recovery data and 7 planned runs.`);
+  // The seeded workouts stand in for a real Whoop sync, so record the watermark that sync would
+  // have left. Without it the reconciliation sweep correctly refuses to call anything missed —
+  // it has no basis for believing it would have seen a workout — and the whole seeded week reads
+  // as "not tracked" instead of demonstrating anything.
+  await db
+    .insert(syncState)
+    .values({ userId, provider: "whoop", lastPolledAt: new Date() })
+    .onConflictDoUpdate({
+      target: [syncState.userId, syncState.provider],
+      set: { lastPolledAt: new Date() },
+    });
+
+  // Decide the past runs now, so the dashboard's adherence panel is populated on first load
+  // rather than waiting for a Whoop webhook that a local dev database will never receive.
+  await reconcileUserSafe(userId);
+
+  console.log(
+    `Seeded user ${SEED_EMAIL} with 7 days of recovery data and ${pastPlan.length + plan.length} planned runs.`,
+  );
   console.log(`Dev login: ${SEED_EMAIL} / ${SEED_PASSWORD}`);
   await pool.end();
 }

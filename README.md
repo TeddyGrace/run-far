@@ -34,6 +34,11 @@ today's recovery doesn't match what the plan expects.
   timed commitments on the athlete's primary calendar (declined invites,
   all-day events, and "Free"-marked events are filtered out) and proposes
   the nearest open slot.
+- **Planned vs. actual reconciliation** — matches the workouts Whoop synced
+  against the sessions the plan asked for, so the app can say whether the
+  plan is actually being followed rather than only what was intended. Runs
+  reconcile to completed or missed on their own, and the athlete can correct
+  a match the heuristic got wrong.
 - **AI-assisted planning** — describe a training block in a multi-turn chat
   with Claude and get back a structured plan to preview and commit, or ask
   the assistant questions about your schedule.
@@ -44,7 +49,9 @@ today's recovery doesn't match what the plan expects.
   Google Calendar sync avoid update loops via a sync-origin marker, and when
   both the app and Google changed the same run since the last sync, the
   app's version wins and the overwrite is logged to `sync_conflicts` for
-  auditability.
+  auditability. "App wins" holds even when Google's side of the disagreement is
+  a deletion: the event is recreated from the app's copy rather than the write
+  failing, which is the case the policy most exists for.
   → [`apps/api/src/integrations/google/pull.ts`](apps/api/src/integrations/google/pull.ts),
   [`push.ts`](apps/api/src/integrations/google/push.ts)
 - **Pure, unit-testable rules engine** — every recommendation rule is a
@@ -86,6 +93,104 @@ today's recovery doesn't match what the plan expects.
   the fact, which is why they landed before the model rather than after.
   → [`recommendations/trainingContext.ts`](apps/api/src/recommendations/trainingContext.ts),
   [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **"Missed" requires positive evidence** — the sweep will only call a session
+  missed if it would have seen the workout had it happened: Whoop must have
+  been polled through the *end* of that day. Absence of evidence is not
+  evidence of absence, and without the gate an athlete with a plan and no
+  wearable had every past run marked missed and was shown 0% adherence for
+  sessions the app simply couldn't observe. Wrong on the dashboard, and worse
+  in the training record, where it manufactures fabricated negatives. Runs it
+  can't observe are reported as `untracked` — a state the UI keeps visibly
+  distinct from missed — and the sweep withdraws any verdict it can no longer
+  justify, which repairs rows written before the gate existed.
+  → [`reconciliation/service.ts`](apps/api/src/reconciliation/service.ts)
+- **Closing the loop between the plan and what was run** — `planned_runs`
+  carried a `completed` status from the first migration that nothing ever
+  wrote: the plan and the workouts synced from Whoop were parallel tables
+  that never touched, so the app could show what was intended and what
+  happened but never that they were the same session. A reconciliation sweep
+  now links them. The matcher is pure and conservative — run sports only,
+  same athlete-local day, time-of-day used only to rank candidates within a
+  day and never to rescue one across a boundary — because a wrong link
+  silently corrupts both the adherence figure and the outcome attached to a
+  recommendation. The sweep is re-derivable rather than incremental: it
+  clears its own prior guesses inside the window and re-decides from current
+  data, so a late sync, a re-score, or a deleted workout all converge. What
+  the athlete corrects by hand is stamped `manual` and never revisited, and
+  that correction is itself a labelled example of a case the heuristic
+  missed. It deliberately leaves `updated_at` alone — that column is what
+  Google's inbound sync reads as "the app changed this run", and a
+  background pass bumping it would turn every inbound calendar edit into a
+  false conflict.
+  → [`apps/api/src/reconciliation/`](apps/api/src/reconciliation/)
+- **Outcomes, not just clicks** — a recommendation's `status` records the
+  athlete's verdict on the card and stops there. Whether the athlete who
+  accepted "downgrade tomorrow's tempo" actually ran easy, and what their
+  recovery looked like the next morning, is the part that says whether the
+  advice was any good — and it only becomes knowable once the targeted runs
+  reconcile. `outcome_context` is written once at that point and never
+  revised, since a label that kept moving would silently change the target
+  under any model already scored on it. Cards whose runs never settle are
+  recorded at a deadline rather than held forever, so the retained set
+  doesn't skew toward the tidy cases.
+  → [`recommendations/outcome.ts`](apps/api/src/reconciliation/outcome.ts)
+- **Third-party I/O off the request path** — a dashboard read regenerates
+  recommendations before it answers, which meant every page view spent three
+  NWS calls and a Google Calendar round trip re-fetching data that had almost
+  certainly not changed, plus one sequential upsert per forecast day. Both are
+  now read through caches sized to how fast the underlying thing actually
+  moves: the forecast is served from the `weather_forecasts` rows while
+  `fetched_at` is inside a 30-minute TTL (NWS republishes roughly hourly), and
+  busy periods from a 5-minute in-process TTL, short because that is data the
+  athlete edits and expects to see reflected on reload. The forecast write is
+  one multi-row upsert. A repeat dashboard read went from ~520ms to ~14ms
+  locally, with zero outbound calls. The forecast store also falls back to
+  stale persisted rows when NWS is down, where the old code caught the error
+  and continued with an empty forecast — silently switching the weather rule
+  off for the length of an outage.
+  → [`integrations/weather/forecastStore.ts`](apps/api/src/integrations/weather/forecastStore.ts),
+  [`integrations/google/calendarClient.ts`](apps/api/src/integrations/google/calendarClient.ts)
+- **A rule that reads the plan, not the body** — every other rule is reactive:
+  it waits for recovery to drop or HRV to fall, which means the earliest the
+  engine can speak is *after* the athlete absorbed the load that caused it.
+  `hard-day-density` reads the shape of the schedule instead and objects to
+  three straight quality days before the third one is what makes Thursday red.
+  It proposes easing the *middle* day — easing the first wastes the day the
+  athlete is freshest for, easing the last just shortens the block without
+  separating anything — and an easy day, a rest day, or a day with nothing on
+  it all break the streak, because that gap is precisely what makes the
+  surrounding days sustainable. It's the live-schedule counterpart to what
+  `plans/validate.ts` checks at import time, which matters because a sensible
+  plan becomes three hard days in a row through a week of drags and accepted
+  recommendations, not through anyone deciding to do that.
+  → [`rules/hardDayDensity.ts`](apps/api/src/recommendations/rules/hardDayDensity.ts)
+- **Weather that moves a run instead of warning about one** — a run's start
+  time is the one thing about it that changes without changing the training at
+  all, which makes the forecast the input best suited to acting on. Where
+  hourly data supports it, the weather rule now proposes the *nearest* hour
+  that day which is genuinely clear — not the coolest, since the coolest hour
+  of a hot day is 5am every time and a rule that always answers 5am stops being
+  read — and it refuses slots that collide with the athlete's calendar or
+  another run, so it can't propose a move the calendar-conflict rule would
+  immediately object to. Hourly data also sharpened the flag itself: judging
+  heat off the day's high meant a 6am run got a heat warning because the
+  afternoon hit 95°F.
+  → [`rules/weatherAdvisory.ts`](apps/api/src/recommendations/rules/weatherAdvisory.ts)
+- **Calibration is per athlete, and the split from engine mechanics is explicit** —
+  what counts as a red recovery day was one global constant, so every athlete
+  was reasoned about with someone else's numbers. Thresholds now resolve per
+  athlete: shipped defaults with a *sparse* override merged over them, so a
+  field the athlete never touched keeps tracking a future improvement to the
+  default rather than freezing today's value at signup, and `null` (distinct
+  from omitting) is how you opt back in. Rules read the resolved set off their
+  context and never reach for the defaults themselves, which keeps them pure
+  functions of their input. The tunables are deliberately only the judgement
+  calls — the suppression window, the source timeout, ACWR's data-sufficiency
+  floor and the strain→load curve stay in `ENGINE_CONFIG`, because those are
+  correctness, and a slider for them would let an athlete break the engine
+  rather than tune it.
+  → [`recommendations/config.ts`](apps/api/src/recommendations/config.ts),
+  [`lib/ruleThresholds.ts`](apps/api/src/lib/ruleThresholds.ts)
 - **Runtime switches, not redeploys** — whether athletes see model-sourced
   recommendations is a backoffice toggle with a global default and per-account
   overrides, resolved in one place. The model runs and is scored either way;
@@ -210,6 +315,60 @@ Coverage as of this writing:
 - Stale-proposal detection (`recommendations/staleness.test.ts`) — a proposed
   change whose run has been edited since the card was generated is skipped
   rather than overwriting the athlete's edit.
+- Workout matching (`reconciliation/match.test.ts`) — same-day matching across
+  the whole day rather than a window around the planned time, no matching
+  across a day boundary, bucketing in the athlete's zone rather than UTC,
+  non-run sports and rest days excluded, one workout to at most one run on a
+  double day, timed candidates beating untimed ones, and a result that is a
+  function of its inputs rather than of row order.
+- Untracked vs. missed (`reconciliation/reconcile.test.ts`) — an athlete with no
+  synced workout data getting no verdict at all rather than a wall of missed
+  sessions and a 0% rate; a matching workout still counting as completed
+  regardless of the watermark, since coverage gates only the negative verdict;
+  judging only the days the sync actually reached; requiring the whole day to
+  be polled past rather than just the run's start time; withdrawing a verdict
+  that can no longer be justified; and never overriding the athlete's own
+  manual call.
+- Reconciliation sweep (`reconciliation/reconcile.test.ts`) — idempotence, a
+  deleted workout un-completing the run it satisfied, a workout reassigning
+  between runs without tripping the one-workout-one-run index, today's
+  unmatched run staying undecided instead of being called missed, a dormant
+  plan's runs not competing for the live plan's workouts, `updated_at` left
+  untouched so Google's conflict detection still works, manual corrections
+  surviving every later pass and withholding their workout from other runs,
+  the adherence figures themselves, and outcome capture (written once, never
+  revised, advisory cards included, a deleted target run still recorded).
+- Forecast read-through cache (`weather/forecastStore.test.ts`) — a second read
+  inside the TTL makes no NWS call, jsonb hourly/alert payloads survive the
+  database round trip intact, a refetch upserts rather than duplicating a date,
+  yesterday's row doesn't count as evidence that today is current, an NWS
+  outage falls back to stale rows rather than an empty forecast, and a location
+  change forces a refetch.
+- Busy-period cache (`google/busyCache.test.ts`) — reuse inside the TTL, the
+  window padding that makes a slightly-later request still hit, a refetch when
+  the requested window isn't contained by the cached one (a narrower window
+  would read as "nothing scheduled"), per-user isolation, and explicit
+  invalidation on reconnect.
+- Hard-day density (`rules/hardDayDensity.test.ts`) — firing on three straight
+  quality days and easing the middle one, an easy day / rest day / empty day
+  each breaking the streak, a double day counting as hard when quality is on
+  it, days already past ignored, the athlete's own allowance respected, and the
+  earlier middle chosen on an even-length streak.
+- Actionable weather (`rules/weatherAdvisory.test.ts`) — moving a run to the
+  nearest genuinely clear hour rather than the coolest, judging heat by the
+  hours the run covers rather than the day's high, refusing slots that collide
+  with the calendar or another run, never proposing a time already past,
+  staying advisory when no hourly detail exists or no hour that day is better,
+  and proposing a change to at most one run.
+- Per-athlete thresholds (`lib/ruleThresholds.test.ts`) — sparse overrides
+  leaving untouched fields tracking the default, a stored null reading as
+  absent rather than as zero (which would silently switch the red-zone rule
+  off), a malformed or out-of-range stored row degrading to defaults instead
+  of failing the read, `null` clearing an override, red-below-yellow validated
+  against the *resolved* pair rather than the patch, and per-athlete isolation.
+  Their effect on the engine is covered in `evaluate.test.ts`: the same
+  physiology producing a different verdict for a differently-tuned athlete, and
+  cards quoting the athlete's own threshold back to them.
 - Timezone helpers (`lib/zonedTime.test.ts`) — wall-clock conversion, and
   `addLocalDays` preserving the athlete's clock time across both DST boundaries.
 - Local calendar dates in the web app (`web/src/lib/localDate.test.ts`,
@@ -229,11 +388,20 @@ Coverage as of this writing:
 - Whoop access-token refresh concurrency (`client.test.ts`) — concurrent
   requests against an expiring token trigger exactly one refresh.
 
-Google Calendar's two-way sync loop-prevention and app-wins conflict
-resolution (`pull.ts` / `push.ts`) were verified live against a real
-Google Calendar during development rather than with mocks — see the
-worked example in the original implementation plan. They're reasonable
-candidates for `nock`-style HTTP-mocked tests if this grows further.
+- Two-way Google sync (`google/sync.test.ts`) — run against a fake calendar
+  (`google/fakeCalendar.ts`) that models the parts the sync code actually
+  depends on: an etag that changes on every write, `If-Match` returning 412 on
+  a stale one, sync tokens as a delta cursor, deletions surviving in the delta
+  as `cancelled`, and a 410 for an expired token. Deliberately a small stateful
+  server rather than canned responses, because loop prevention and app-wins are
+  not properties of any single request — they emerge from the round trip.
+  Everything below the `googleapis` boundary is the real code, including the
+  database. Covers: the echo of the app's own push not being mistaken for an
+  external edit; an external time change applying; an external delete removing
+  the run; both app-wins conflicts keeping the app's version *and* logging what
+  they overwrote; adopting an event created directly in the Running calendar;
+  rest days never being pushed; a needs-reauth connection reading as
+  disconnected; sync-token persistence, pagination, and 410 recovery.
 
 A pre-commit hook (`.githooks/pre-commit`) warns — but doesn't block — when
 `apps/api/src`, `apps/web/src`, `packages/shared/src`, or a migration
@@ -397,9 +565,9 @@ docker run --rm -p 8080:8080 --env-file .env -e NODE_ENV=production -e PORT=8080
 
 Each `recommendations` row is a features → action → outcome record: the
 athlete's physiology at decision time (`input_snapshot`), the world outside it
-(`decision_context`), the suggestion (`proposed_changes`), and what became of
-it (`status`, `first_shown_at`, `applied_at`). Read these caveats before
-training on it.
+(`decision_context`), the suggestion (`proposed_changes`), what the athlete did
+with it (`status`, `first_shown_at`, `applied_at`), and what actually happened
+afterwards (`outcome_context`). Read these caveats before training on it.
 
 **Status meanings.** `pending` is unresolved. `accepted` and `dismissed` are
 athlete verdicts. `expired` means the producing rule stopped firing while the
@@ -421,6 +589,31 @@ dismissals or treat them as a noisier class. `decision_context` and
 card was never rendered to the athlete — not a training example at all. Non-null
 on an expired row means it was shown and not acted on, which is a real negative.
 
+**`outcome_context` is the consequence, not the click.** `status` says what the
+athlete did with the card; `outcome_context` says what became of the sessions it
+was about — for each targeted run, whether it was executed and how the session
+that happened compared to the one planned, plus the next morning's recovery. It
+is written once by the reconciliation sweep after the targeted runs settle, and
+never revised: a label that kept being recomputed would silently change the
+target under any model already scored on it. Advisory cards that propose no
+change still get a row, since next-day recovery is a real outcome for them too.
+Check `complete` before training on one — false means a targeted run was still
+undecided when the deadline forced the record out, or was deleted before it could
+reconcile, which is missing data rather than a missed session. Null means the
+card is still pending, its runs have not settled, or it resolved before the
+column existed (see the cutover note above; `outcome_context` landed with the
+reconciliation sweep, later than `decision_context`).
+
+**Reconciliation is a heuristic, and `planned_runs.match_source` says whose.**
+`auto` is the matcher's own guess — run sports, same athlete-local day, nearest
+start time — and it is re-derived on every sweep. `manual` is the athlete
+overriding it, and those rows are worth treating as a distinct, higher-confidence
+class: each one is also a labelled example of a pairing the heuristic would not
+make on its own (most often a session run a day later than planned). A run with
+`reconciled_at` set and no `actual_workout_id` was examined and genuinely
+matched nothing; a null `reconciled_at` means no pass has reached it, which is
+not the same thing.
+
 **`decision_context` deliberately omits calendar event titles.** Busy windows
 are recorded as bare `{start, end}` pairs. Event names are personal data from a
 third-party account pulled in for a transient scheduling decision, and copying
@@ -440,3 +633,11 @@ Known limits this record still has:
   `(user_id, source, status)` index covers the queries.
 - **No retention policy.** Expired rows accumulate deliberately — they are the
   asset. Revisit only if volume becomes a problem.
+- **Matching is greedy, not optimal.** On a double day where two planned runs and
+  two workouts pair up crosswise, the nearest-first assignment can get both
+  backwards. Optimal assignment would fix it at roughly five times the code; a
+  wrong link costs the athlete one click to correct, and the correction is
+  recorded. Revisit if double days turn out to be common.
+- **`outcome_context` reads next-day recovery, not a controlled comparison.**
+  Recovery the morning after is confounded by everything else the athlete did
+  that day. It is a signal, not an effect estimate.
