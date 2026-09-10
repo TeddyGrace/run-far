@@ -28,6 +28,10 @@ vi.mock("./sources/modelSource.js", () => ({
   modelSource: { id: "model", version: "v-test", generate: async () => [] },
 }));
 vi.mock("../integrations/google/calendarClient.js", () => ({
+  // The engine reads through the cached wrapper; stubbing it directly is what keeps these
+  // fixtures deterministic, since a real TTL cache would carry one test's busy periods into
+  // the next.
+  getPrimaryBusyPeriodsCached: async () => busy.current,
   getPrimaryBusyPeriods: async () => busy.current,
 }));
 vi.mock("../lib/mailer.js", () => ({

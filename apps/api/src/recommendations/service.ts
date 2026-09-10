@@ -1,6 +1,6 @@
 import { and, eq, sql, gte, inArray, notInArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { plannedRuns, recommendations, oauthConnections, weatherForecasts } from "../db/schema.js";
+import { plannedRuns, recommendations, oauthConnections } from "../db/schema.js";
 import { buildRecoverySnapshot } from "./snapshot.js";
 import { rankOutputs } from "./evaluate.js";
 import { arbitrate } from "./arbitrate.js";
@@ -9,8 +9,9 @@ import { planSources, gather } from "./sources/index.js";
 import type { RecommendationSource } from "./sources/index.js";
 import type { RuleContext, RuleOutput } from "./types.js";
 import { isModelRenderedFor } from "../lib/modelRendering.js";
-import { getPrimaryBusyPeriods } from "../integrations/google/calendarClient.js";
-import { getDailyForecasts } from "../integrations/weather/weatherClient.js";
+import { getPrimaryBusyPeriodsCached } from "../integrations/google/calendarClient.js";
+import { getForecastsForRules } from "../integrations/weather/forecastStore.js";
+import type { DailyForecast } from "../integrations/weather/weatherClient.js";
 import { getAthleteLocation } from "../lib/athleteLocation.js";
 import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
@@ -250,52 +251,32 @@ export async function generateRecommendations(
   let busyPeriods: Array<{ start: Date; end: Date }> = [];
   if (await hasGoogleConnection(userId)) {
     try {
-      busyPeriods = await getPrimaryBusyPeriods(userId, now.toISOString(), windowEnd.toISOString());
+      busyPeriods = await getPrimaryBusyPeriodsCached(
+        userId,
+        now.toISOString(),
+        windowEnd.toISOString(),
+        now,
+      );
     } catch (err) {
       logger.warn({ err, userId }, "failed to fetch google busy periods for recommendations");
     }
   }
 
-  // Refreshed on every call (dashboard read, webhook, nightly sync) — this upsert is what
-  // keeps the persisted table, and therefore the calendar tab's forecast display, current.
-  let weatherForecast: Awaited<ReturnType<typeof getDailyForecasts>> = [];
+  // Read through the persisted table rather than refetched here. This used to make three NWS
+  // calls plus a per-day upsert on every dashboard load; getForecastsForRules serves the stored
+  // rows while they are recent, refreshes them when they aren't, and owns keeping the table
+  // current for the calendar tab and the digest email — the job this block used to do.
+  let weatherForecast: DailyForecast[] = [];
   const athleteLocation = await getAthleteLocation(userId);
   if (athleteLocation) {
-    try {
-      weatherForecast = await getDailyForecasts(
-        athleteLocation.lat,
-        athleteLocation.lon,
-        timeZone,
-        LOOKAHEAD_DAYS,
-      );
-      for (const day of weatherForecast) {
-        const values = {
-          userId,
-          date: day.date,
-          highTempF: day.highTempF,
-          lowTempF: day.lowTempF,
-          shortForecast: day.shortForecast,
-          precipProbabilityPct: day.precipProbabilityPct,
-          windSpeed: day.windSpeed,
-          windDirection: day.windDirection,
-          iconUrl: day.iconUrl,
-          iconCode: day.iconCode,
-          hourly: day.hourly,
-          segments: day.segments,
-          alerts: day.alerts,
-          fetchedAt: new Date(),
-        };
-        await db
-          .insert(weatherForecasts)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [weatherForecasts.userId, weatherForecasts.date],
-            set: { ...values, updatedAt: new Date() },
-          });
-      }
-    } catch (err) {
-      logger.warn({ err, userId }, "failed to fetch NWS weather for recommendations");
-    }
+    weatherForecast = await getForecastsForRules(
+      userId,
+      athleteLocation.lat,
+      athleteLocation.lon,
+      timeZone,
+      LOOKAHEAD_DAYS,
+      now,
+    );
   }
 
   const ctx: RuleContext = { snapshot, upcoming, busyPeriods, weatherForecast, timeZone, now };

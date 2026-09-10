@@ -215,9 +215,11 @@ export const oauthConnections = pgTable(
 
 // --- Weather ---
 
-// NWS daily forecast, one row per (user, calendar date). Upserted on every
-// generateRecommendations run, so it's always as fresh as the last dashboard read /
-// webhook / nightly sync — see recommendations/service.ts.
+// NWS daily forecast, one row per (user, calendar date). Read through by
+// integrations/weather/forecastStore.ts, which serves these rows while `fetched_at` is inside
+// its TTL and refetches from NWS when it isn't — so this table is the cache, not merely a copy
+// of one. Rows record no coordinates, which is why a location change deletes them outright
+// rather than waiting for them to age out.
 export const weatherForecasts = pgTable(
   "weather_forecasts",
   {

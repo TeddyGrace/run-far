@@ -5,6 +5,8 @@ import { requireUserId } from "../lib/session.js";
 import { db } from "../db/client.js";
 import { users, oauthConnections, trainingPlans } from "../db/schema.js";
 import { env } from "../env.js";
+import { logger } from "../lib/logger.js";
+import { invalidateForecasts } from "../integrations/weather/forecastStore.js";
 
 function isValidIanaTimeZone(tz: string): boolean {
   try {
@@ -100,6 +102,16 @@ export async function settingsRoutes(app: FastifyInstance) {
     if (!updated) {
       reply.status(404).send({ error: { message: "User not found", code: "NOT_FOUND" } });
       return;
+    }
+
+    // Persisted forecasts are keyed by (user, date) and record no coordinates, so after a move
+    // they would keep being served — for up to the store's TTL — as if they described the new
+    // place. Dropping them makes the next read refetch. Best-effort: failing to clear a cache
+    // is not a reason to fail the settings write the athlete actually asked for.
+    if (settingLocation) {
+      invalidateForecasts(userId).catch((err) =>
+        logger.warn({ err, userId }, "failed to clear persisted forecasts after location change"),
+      );
     }
 
     return {

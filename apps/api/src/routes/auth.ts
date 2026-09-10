@@ -32,7 +32,10 @@ import {
   LOGIN_SCOPES,
 } from "../integrations/google/authOauth.js";
 import { persistGoogleTokens } from "../integrations/google/oauth.js";
-import { ensureRunningCalendar } from "../integrations/google/calendarClient.js";
+import {
+  ensureRunningCalendar,
+  invalidateBusyPeriods,
+} from "../integrations/google/calendarClient.js";
 import { registerWatch } from "../integrations/google/channelRenewal.js";
 import { pullGoogleCalendarChanges } from "../integrations/google/pull.js";
 import { env } from "../env.js";
@@ -123,6 +126,10 @@ async function findOrCreateGoogleUser(identity: {
 
 /** Calendar setup after sign-in. Runs in the background so login isn't blocked on it. */
 async function setUpCalendar(userId: string): Promise<void> {
+  // Signing in with Google is also a Calendar grant, and it may be a different Google account
+  // than last time — drop any busy periods this process cached under the previous one. Same
+  // reasoning as the Settings-side connect in routes/google.ts.
+  invalidateBusyPeriods(userId);
   await ensureRunningCalendar(userId);
 
   // Push notifications need a public HTTPS URL; without one, sync falls back to

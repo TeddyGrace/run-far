@@ -215,9 +215,101 @@ export async function getPrimaryBusyPeriods(
   userId: string,
   timeMinIso: string,
   timeMaxIso: string,
-): Promise<Array<{ start: Date; end: Date; summary?: string }>> {
+): Promise<BusyPeriod[]> {
   const events = await listPrimaryEvents(userId, timeMinIso, timeMaxIso);
   return events.map((e) => ({ start: new Date(e.start), end: new Date(e.end), summary: e.summary }));
+}
+
+export interface BusyPeriod {
+  start: Date;
+  end: Date;
+  summary?: string;
+}
+
+/**
+ * How long a fetched set of busy periods is reused.
+ *
+ * Short on purpose. Unlike the weather forecast, this is data the athlete edits themselves —
+ * block out a morning, reload the dashboard, expect the conflict to be noticed. Five minutes is
+ * the largest window in which that still feels immediate, while collapsing the repeated reloads
+ * of a single sitting into one Google call instead of one per page view.
+ *
+ * There is no push signal to invalidate against: the app's `events.watch` channel covers the
+ * dedicated "Running" calendar it writes to, not the primary calendar these periods come from.
+ * So the TTL is the whole invalidation story, and it is deliberately measured in minutes.
+ */
+const BUSY_TTL_MS = 5 * 60_000;
+
+/**
+ * Extra span fetched beyond what was asked for.
+ *
+ * The requested window is always "now through now + lookahead", so it slides forward between
+ * calls. Without the pad, a window cached sixty seconds ago would fall a minute short of the
+ * one being asked for now and the cache would never hit. A day of slack costs nothing on a
+ * single list call and makes every request inside the TTL a hit.
+ */
+const BUSY_WINDOW_PAD_MS = 24 * 60 * 60 * 1000;
+
+interface BusyCacheEntry {
+  fetchedAtMs: number;
+  windowStartMs: number;
+  windowEndMs: number;
+  periods: BusyPeriod[];
+}
+
+/**
+ * Process-local, and that is the right scope for it. The entries are small, already-in-memory
+ * projections of data this process just fetched, and the cost of a miss on a cold or sibling
+ * instance is exactly one Google call — the behaviour before this cache existed. Persisting
+ * them would mean a table whose only job is to hold five minutes of someone's calendar.
+ */
+const busyCache = new Map<string, BusyCacheEntry>();
+
+/** Drop a user's cached periods — used when their Google connection changes underneath us, so
+ * a reconnect or revoke doesn't keep serving windows fetched under the old grant. */
+export function invalidateBusyPeriods(userId: string): void {
+  busyCache.delete(userId);
+}
+
+/**
+ * `getPrimaryBusyPeriods` with a short TTL, for the recommendation engine.
+ *
+ * Regenerating recommendations is what a dashboard read does before it answers, so this call sat
+ * on the request path and cost a Google API round trip per page view — quota and latency spent
+ * to re-fetch a calendar that had almost certainly not changed. Callers that need a guaranteed
+ * live read (the assistant's calendar tool) should keep using `getPrimaryBusyPeriods` directly.
+ */
+export async function getPrimaryBusyPeriodsCached(
+  userId: string,
+  timeMinIso: string,
+  timeMaxIso: string,
+  now: Date = new Date(),
+): Promise<BusyPeriod[]> {
+  const nowMs = now.getTime();
+  const startMs = new Date(timeMinIso).getTime();
+  const endMs = new Date(timeMaxIso).getTime();
+
+  const hit = busyCache.get(userId);
+  // The cached window has to *contain* the requested one, not merely overlap it: a narrower
+  // window would be missing events at an edge and read as "nothing scheduled there".
+  if (
+    hit &&
+    nowMs - hit.fetchedAtMs < BUSY_TTL_MS &&
+    hit.windowStartMs <= startMs &&
+    hit.windowEndMs >= endMs
+  ) {
+    return hit.periods;
+  }
+
+  const paddedEnd = new Date(endMs + BUSY_WINDOW_PAD_MS).toISOString();
+  const periods = await getPrimaryBusyPeriods(userId, timeMinIso, paddedEnd);
+  busyCache.set(userId, {
+    fetchedAtMs: nowMs,
+    windowStartMs: startMs,
+    windowEndMs: endMs + BUSY_WINDOW_PAD_MS,
+    periods,
+  });
+  return periods;
 }
 
 /** One page of an incremental (or, with no syncToken, full) events.list call. */

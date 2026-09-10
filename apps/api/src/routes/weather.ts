@@ -8,9 +8,10 @@ import { getAthleteLocation } from "../lib/athleteLocation.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 
 export async function weatherRoutes(app: FastifyInstance) {
-  // Pure read of the persisted forecast — kept fresh by generateRecommendations (dashboard
-  // read, Whoop webhook, nightly sync), not refetched from NWS on every request. `configured`
-  // tells the frontend whether an empty list means "no location set" vs. "no data yet".
+  // Pure read of the persisted forecast. The table is kept current by forecastStore's
+  // read-through cache, driven by whatever regenerates recommendations (dashboard read, Whoop
+  // webhook, nightly sync); nothing refetches NWS on this request. `configured` tells the
+  // frontend whether an empty list means "no location set" vs. "no data yet".
   app.get("/api/weather/forecast", async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;

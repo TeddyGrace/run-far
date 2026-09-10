@@ -121,6 +121,22 @@ today's recovery doesn't match what the plan expects.
   recorded at a deadline rather than held forever, so the retained set
   doesn't skew toward the tidy cases.
   → [`recommendations/outcome.ts`](apps/api/src/reconciliation/outcome.ts)
+- **Third-party I/O off the request path** — a dashboard read regenerates
+  recommendations before it answers, which meant every page view spent three
+  NWS calls and a Google Calendar round trip re-fetching data that had almost
+  certainly not changed, plus one sequential upsert per forecast day. Both are
+  now read through caches sized to how fast the underlying thing actually
+  moves: the forecast is served from the `weather_forecasts` rows while
+  `fetched_at` is inside a 30-minute TTL (NWS republishes roughly hourly), and
+  busy periods from a 5-minute in-process TTL, short because that is data the
+  athlete edits and expects to see reflected on reload. The forecast write is
+  one multi-row upsert. A repeat dashboard read went from ~520ms to ~14ms
+  locally, with zero outbound calls. The forecast store also falls back to
+  stale persisted rows when NWS is down, where the old code caught the error
+  and continued with an empty forecast — silently switching the weather rule
+  off for the length of an outage.
+  → [`integrations/weather/forecastStore.ts`](apps/api/src/integrations/weather/forecastStore.ts),
+  [`integrations/google/calendarClient.ts`](apps/api/src/integrations/google/calendarClient.ts)
 - **Runtime switches, not redeploys** — whether athletes see model-sourced
   recommendations is a backoffice toggle with a global default and per-account
   overrides, resolved in one place. The model runs and is scored either way;
@@ -256,6 +272,17 @@ Coverage as of this writing:
   surviving every later pass and withholding their workout from other runs,
   the adherence figures themselves, and outcome capture (written once, never
   revised, advisory cards included, a deleted target run still recorded).
+- Forecast read-through cache (`weather/forecastStore.test.ts`) — a second read
+  inside the TTL makes no NWS call, jsonb hourly/alert payloads survive the
+  database round trip intact, a refetch upserts rather than duplicating a date,
+  yesterday's row doesn't count as evidence that today is current, an NWS
+  outage falls back to stale rows rather than an empty forecast, and a location
+  change forces a refetch.
+- Busy-period cache (`google/busyCache.test.ts`) — reuse inside the TTL, the
+  window padding that makes a slightly-later request still hit, a refetch when
+  the requested window isn't contained by the cached one (a narrower window
+  would read as "nothing scheduled"), per-user isolation, and explicit
+  invalidation on reconnect.
 - Timezone helpers (`lib/zonedTime.test.ts`) — wall-clock conversion, and
   `addLocalDays` preserving the athlete's clock time across both DST boundaries.
 - Recommendation fingerprinting (`recommendations/fingerprint.test.ts`) —
