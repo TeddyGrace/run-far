@@ -19,6 +19,7 @@ export const DEFAULT_RULE_THRESHOLDS: ResolvedRuleThresholds = {
   sleepDebtThresholdMin: 90, // today's rolling sleep debt (minutes, Whoop's own figure)
   acwrSpikeThreshold: 1.5, // acute:chronic load ratio above this is a ramp-rate warning
   volumeReductionYellowPct: 0.2, // reduce volume/intensity ~20% on a yellow-zone hard day
+  maxConsecutiveHardDays: 2, // a third straight quality day is where the density rule objects
 };
 
 /**

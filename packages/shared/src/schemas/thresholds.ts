@@ -35,6 +35,8 @@ export const ruleThresholdsSchema = z.object({
   acwrSpikeThreshold: z.number().min(1.05).max(3).optional(),
   /** Fractional volume/intensity cut proposed on a yellow-zone hard day (0.2 = 20%). */
   volumeReductionYellowPct: z.number().min(0.05).max(0.75).optional(),
+  /** Hard days in a row the plan may schedule before the density rule objects. */
+  maxConsecutiveHardDays: z.number().int().min(1).max(6).optional(),
 });
 export type RuleThresholds = z.infer<typeof ruleThresholdsSchema>;
 

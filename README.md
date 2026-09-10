@@ -137,6 +137,32 @@ today's recovery doesn't match what the plan expects.
   off for the length of an outage.
   → [`integrations/weather/forecastStore.ts`](apps/api/src/integrations/weather/forecastStore.ts),
   [`integrations/google/calendarClient.ts`](apps/api/src/integrations/google/calendarClient.ts)
+- **A rule that reads the plan, not the body** — every other rule is reactive:
+  it waits for recovery to drop or HRV to fall, which means the earliest the
+  engine can speak is *after* the athlete absorbed the load that caused it.
+  `hard-day-density` reads the shape of the schedule instead and objects to
+  three straight quality days before the third one is what makes Thursday red.
+  It proposes easing the *middle* day — easing the first wastes the day the
+  athlete is freshest for, easing the last just shortens the block without
+  separating anything — and an easy day, a rest day, or a day with nothing on
+  it all break the streak, because that gap is precisely what makes the
+  surrounding days sustainable. It's the live-schedule counterpart to what
+  `plans/validate.ts` checks at import time, which matters because a sensible
+  plan becomes three hard days in a row through a week of drags and accepted
+  recommendations, not through anyone deciding to do that.
+  → [`rules/hardDayDensity.ts`](apps/api/src/recommendations/rules/hardDayDensity.ts)
+- **Weather that moves a run instead of warning about one** — a run's start
+  time is the one thing about it that changes without changing the training at
+  all, which makes the forecast the input best suited to acting on. Where
+  hourly data supports it, the weather rule now proposes the *nearest* hour
+  that day which is genuinely clear — not the coolest, since the coolest hour
+  of a hot day is 5am every time and a rule that always answers 5am stops being
+  read — and it refuses slots that collide with the athlete's calendar or
+  another run, so it can't propose a move the calendar-conflict rule would
+  immediately object to. Hourly data also sharpened the flag itself: judging
+  heat off the day's high meant a 6am run got a heat warning because the
+  afternoon hit 95°F.
+  → [`rules/weatherAdvisory.ts`](apps/api/src/recommendations/rules/weatherAdvisory.ts)
 - **Calibration is per athlete, and the split from engine mechanics is explicit** —
   what counts as a red recovery day was one global constant, so every athlete
   was reasoned about with someone else's numbers. Thresholds now resolve per
@@ -298,6 +324,17 @@ Coverage as of this writing:
   the requested window isn't contained by the cached one (a narrower window
   would read as "nothing scheduled"), per-user isolation, and explicit
   invalidation on reconnect.
+- Hard-day density (`rules/hardDayDensity.test.ts`) — firing on three straight
+  quality days and easing the middle one, an easy day / rest day / empty day
+  each breaking the streak, a double day counting as hard when quality is on
+  it, days already past ignored, the athlete's own allowance respected, and the
+  earlier middle chosen on an even-length streak.
+- Actionable weather (`rules/weatherAdvisory.test.ts`) — moving a run to the
+  nearest genuinely clear hour rather than the coolest, judging heat by the
+  hours the run covers rather than the day's high, refusing slots that collide
+  with the calendar or another run, never proposing a time already past,
+  staying advisory when no hourly detail exists or no hour that day is better,
+  and proposing a change to at most one run.
 - Per-athlete thresholds (`lib/ruleThresholds.test.ts`) — sparse overrides
   leaving untouched fields tracking the default, a stored null reading as
   absent rather than as zero (which would silently switch the red-zone rule

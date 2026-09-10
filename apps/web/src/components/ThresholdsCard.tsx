@@ -54,6 +54,15 @@ const FIELDS: Array<{
     suffix: "%",
   },
   {
+    key: "maxConsecutiveHardDays",
+    label: "Hard days in a row",
+    help: "How many straight quality days the plan may schedule before it gets flagged.",
+    min: 1,
+    max: 6,
+    step: 1,
+    suffix: " days",
+  },
+  {
     key: "hrvSuppressedSd",
     label: "HRV suppression",
     help: "How far below your rolling baseline counts as a suppressed day.",
