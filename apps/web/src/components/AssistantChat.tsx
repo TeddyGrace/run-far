@@ -23,6 +23,88 @@ const STARTER_PROMPTS = [
   "Is this a good week to add mileage?",
 ];
 
+/** Panel state lives in localStorage: the dashboard ("/") and the other tabs render separate
+ * `Layout` instances, so navigating between them remounts this component. Persisting means the
+ * panel comes back open, on the same thread, at the same size — across tabs and across reloads. */
+const PREFS_KEY = "runfar.coach.panel";
+
+/** Matches the `sm:h-[34rem] sm:w-[27rem]` defaults the panel used before it was resizable. */
+const DEFAULT_SIZE = { width: 432, height: 544 };
+const MIN_SIZE = { width: 320, height: 280 };
+/** Gap the panel keeps from the viewport edges, matching its `bottom-20 right-5` offsets. */
+const VIEWPORT_MARGIN = { x: 40, y: 96 };
+/** Pixels a keyboard-driven resize moves per arrow press. */
+const RESIZE_STEP = 24;
+
+interface PanelSize {
+  width: number;
+  height: number;
+}
+
+interface PanelPrefs {
+  open: boolean;
+  sessionId: string | null;
+  size: PanelSize;
+}
+
+const DEFAULT_PREFS: PanelPrefs = { open: false, sessionId: null, size: DEFAULT_SIZE };
+
+function readPrefs(): PanelPrefs {
+  if (typeof window === "undefined") return DEFAULT_PREFS;
+  try {
+    const raw = window.localStorage.getItem(PREFS_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const parsed = JSON.parse(raw) as Partial<PanelPrefs>;
+    const size = parsed.size;
+    return {
+      open: parsed.open === true,
+      sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : null,
+      size:
+        size && Number.isFinite(size.width) && Number.isFinite(size.height)
+          ? { width: size.width, height: size.height }
+          : DEFAULT_SIZE,
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+function writePrefs(patch: Partial<PanelPrefs>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readPrefs(), ...patch }));
+  } catch {
+    // Private-mode or quota failures just mean the panel forgets; nothing worth surfacing.
+  }
+}
+
+/** Keeps a requested size within the panel's minimum and whatever the viewport can hold. */
+function clampSize(size: PanelSize): PanelSize {
+  if (typeof window === "undefined") return size;
+  const maxWidth = Math.max(MIN_SIZE.width, window.innerWidth - VIEWPORT_MARGIN.x);
+  const maxHeight = Math.max(MIN_SIZE.height, window.innerHeight - VIEWPORT_MARGIN.y);
+  return {
+    width: Math.round(Math.min(Math.max(size.width, MIN_SIZE.width), maxWidth)),
+    height: Math.round(Math.min(Math.max(size.height, MIN_SIZE.height), maxHeight)),
+  };
+}
+
+/** True at Tailwind's `sm` breakpoint and up — where the panel is a floating card that can be
+ * resized, rather than a full-width bottom sheet. */
+function useIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    setIsDesktop(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return isDesktop;
+}
+
 /** A mountain-range glyph — the coach's mark, standing in for an avatar. */
 function PeakMark({ className }: { className?: string }) {
   return (
@@ -51,14 +133,18 @@ function formatTime(iso: string): string {
 
 export function AssistantChat() {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [prefs] = useState(readPrefs);
+  const [open, setOpen] = useState(prefs.open);
   // Panel stays mounted slightly past `open` going false so the closing transition can play,
   // and `visible` flips a frame after mount so the opening transition animates from its
   // initial (closed) styles instead of snapping straight to open.
   const [panelMounted, setPanelMounted] = useState(false);
   const [visible, setVisible] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(prefs.sessionId);
+  const [size, setSize] = useState<PanelSize>(() => clampSize(prefs.size));
+  const [resizing, setResizing] = useState(false);
+  const isDesktop = useIsDesktop();
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingProposal, setPendingProposal] = useState<{
@@ -132,6 +218,68 @@ export function AssistantChat() {
 
   // Abort any in-flight stream on unmount.
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Remember open/thread/size so the panel survives a tab switch (which remounts this
+  // component) and a reload.
+  useEffect(() => writePrefs({ open }), [open]);
+  useEffect(() => writePrefs({ sessionId: activeSessionId }), [activeSessionId]);
+  useEffect(() => writePrefs({ size }), [size]);
+
+  // A shrinking window can leave a stored size larger than the viewport.
+  useEffect(() => {
+    function onResize() {
+      setSize((prev) => {
+        const next = clampSize(prev);
+        return next.width === prev.width && next.height === prev.height ? prev : next;
+      });
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // The panel is anchored bottom-right, so dragging its top/left edges outward grows it: a
+  // leftward drag adds to the width, an upward drag adds to the height.
+  function startResize(e: React.PointerEvent<HTMLElement>, axis: "x" | "y" | "both") {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const start = size;
+    // Capture keeps the drag alive once the pointer leaves the thin handle.
+    handle.setPointerCapture?.(e.pointerId);
+    setResizing(true);
+
+    const onMove = (ev: PointerEvent) => {
+      setSize(
+        clampSize({
+          width: axis === "y" ? start.width : start.width + (startX - ev.clientX),
+          height: axis === "x" ? start.height : start.height + (startY - ev.clientY),
+        }),
+      );
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      setResizing(false);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+
+  function resizeByKey(e: React.KeyboardEvent, axis: "x" | "y" | "both") {
+    const dx = e.key === "ArrowLeft" ? RESIZE_STEP : e.key === "ArrowRight" ? -RESIZE_STEP : 0;
+    const dy = e.key === "ArrowUp" ? RESIZE_STEP : e.key === "ArrowDown" ? -RESIZE_STEP : 0;
+    if (!dx && !dy) return;
+    e.preventDefault();
+    setSize((prev) =>
+      clampSize({
+        width: axis === "y" ? prev.width : prev.width + dx,
+        height: axis === "x" ? prev.height : prev.height + dy,
+      }),
+    );
+  }
 
   const createSession = useMutation({
     mutationFn: () => api.post<{ id: string }>("/assistant/sessions", {}),
@@ -328,13 +476,42 @@ export function AssistantChat() {
           className={clsx(
             "fixed z-40 flex flex-col overflow-hidden border border-border bg-surface-0 shadow-2xl",
             "inset-x-0 bottom-0 h-[88vh] max-h-[88vh] w-full rounded-t-2xl",
-            "sm:inset-auto sm:bottom-20 sm:right-5 sm:h-[34rem] sm:w-[27rem] sm:max-w-[calc(100vw-2.5rem)] sm:rounded-2xl",
-            "origin-bottom transition-all duration-200 ease-out sm:origin-bottom-right",
+            "sm:inset-auto sm:bottom-20 sm:right-5 sm:h-[34rem] sm:max-h-none sm:w-[27rem] sm:max-w-[calc(100vw-2.5rem)] sm:rounded-2xl",
+            "origin-bottom ease-out sm:origin-bottom-right",
+            // Transitions animate the open/close motion; during a drag they'd make the panel
+            // lag behind the pointer, so they're dropped while resizing.
+            resizing ? "transition-none" : "transition-all duration-200",
             visible
               ? "translate-y-0 opacity-100 sm:scale-100"
               : "translate-y-4 opacity-0 sm:translate-y-3 sm:scale-95",
           )}
+          style={isDesktop ? { width: size.width, height: size.height } : undefined}
         >
+          {isDesktop && (
+            <>
+              <ResizeHandle
+                label="Resize chat width"
+                orientation="vertical"
+                className="left-0 top-0 h-full w-1.5 cursor-ew-resize"
+                onPointerDown={(e) => startResize(e, "x")}
+                onKeyDown={(e) => resizeByKey(e, "x")}
+              />
+              <ResizeHandle
+                label="Resize chat height"
+                orientation="horizontal"
+                className="left-0 top-0 h-1.5 w-full cursor-ns-resize"
+                onPointerDown={(e) => startResize(e, "y")}
+                onKeyDown={(e) => resizeByKey(e, "y")}
+              />
+              <ResizeHandle
+                label="Resize chat panel"
+                orientation="vertical"
+                className="left-0 top-0 z-20 h-4 w-4 cursor-nwse-resize"
+                onPointerDown={(e) => startResize(e, "both")}
+                onKeyDown={(e) => resizeByKey(e, "both")}
+              />
+            </>
+          )}
           <Header
             title={activeTitle}
             showSessions={showSessions}
@@ -488,6 +665,36 @@ function IconButton({
         {children}
       </svg>
     </button>
+  );
+}
+
+/** An edge or corner grab area. Focusable so the panel can also be resized with arrow keys. */
+function ResizeHandle({
+  label,
+  orientation,
+  className,
+  onPointerDown,
+  onKeyDown,
+}: {
+  label: string;
+  orientation: "horizontal" | "vertical";
+  className: string;
+  onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-label={label}
+      aria-orientation={orientation}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+      className={clsx(
+        "absolute z-10 touch-none rounded-sm outline-none transition-colors hover:bg-accent/30 focus-visible:bg-accent/40",
+        className,
+      )}
+    />
   );
 }
 
