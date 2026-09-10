@@ -67,4 +67,44 @@ describe("validatePlanDraft", () => {
     });
     expect(res.valid).toBe(true);
   });
+
+  // The coach is told to write scheduledAt with the athlete's offset, but a bare-UTC
+  // timestamp for an evening run still has to be judged on the day the athlete runs it.
+  describe("timezone", () => {
+    it("counts a late-evening run on its local day, not the next UTC one", () => {
+      const res = validatePlanDraft({
+        draft: draft([{ scheduledAt: "2026-09-08T01:00:00Z", runType: "race", distanceM: 42195 }]),
+        today: new Date("2026-08-11T12:00:00Z"),
+        timeZone: "America/New_York",
+        startDate: "2026-08-11",
+        raceDate: "2026-09-07",
+      });
+      // 9pm Sep 7 local — race day, not the day after it.
+      expect(res.errors.some((e) => /after race day/.test(e))).toBe(false);
+      expect(res.warnings.some((w) => /No run of type "race"/.test(w))).toBe(false);
+      expect(res.stats.lastDate).toBe("2026-09-07");
+    });
+
+    it("still reads a run written with an explicit offset as its local day", () => {
+      const res = validatePlanDraft({
+        draft: draft([{ scheduledAt: "2026-09-07T21:00:00-04:00", runType: "race", distanceM: 42195 }]),
+        today: new Date("2026-08-11T12:00:00Z"),
+        timeZone: "America/New_York",
+        startDate: "2026-08-11",
+        raceDate: "2026-09-07",
+      });
+      expect(res.stats.lastDate).toBe("2026-09-07");
+      expect(res.errors).toEqual([]);
+    });
+
+    it("resolves today in the athlete's timezone when warning about past runs", () => {
+      const res = validatePlanDraft({
+        draft: draft([{ scheduledAt: "2026-08-11T14:00:00Z", runType: "easy", distanceM: 5000 }]),
+        // 9pm Mon Aug 10 in New York: a Tuesday-morning run is still in the future.
+        today: new Date("2026-08-11T01:00:00Z"),
+        timeZone: "America/New_York",
+      });
+      expect(res.warnings.some((w) => /before today/.test(w))).toBe(false);
+    });
+  });
 });

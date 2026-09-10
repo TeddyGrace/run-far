@@ -3,16 +3,7 @@ import { Link } from "react-router-dom";
 import type { WeatherForecastResponse } from "@run-far/shared";
 import { api } from "../lib/api.js";
 import { WeatherReadout } from "./WeatherReadout.js";
-
-function todayYmd(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function tomorrowYmd(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
+import { addDaysYmd, todayYmd } from "../lib/localDate.js";
 
 const ROLLING_WINDOW_HOURS = 24;
 
@@ -26,8 +17,10 @@ function hourLabel(iso: string): string {
 }
 
 export function WeatherToday() {
+  // Local calendar dates: the forecast rows the API returns are keyed by the athlete's local
+  // date, and a UTC slice asks for tomorrow's row all evening west of Greenwich.
   const today = todayYmd();
-  const tomorrow = tomorrowYmd();
+  const tomorrow = addDaysYmd(today, 1);
   const weatherQuery = useQuery<WeatherForecastResponse>({
     queryKey: ["weather", today, tomorrow],
     queryFn: () => api.get<WeatherForecastResponse>(`/weather/forecast?from=${today}&to=${tomorrow}`),

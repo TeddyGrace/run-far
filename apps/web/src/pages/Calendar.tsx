@@ -6,40 +6,36 @@ import type { PlannedRun, WeatherForecast, WeatherForecastResponse } from "@run-
 import { api } from "../lib/api.js";
 import { DayColumn } from "../components/DayColumn.js";
 import { RunEditModal } from "../components/RunEditModal.js";
-
-function startOfWeek(offsetWeeks: number): Date {
-  const now = new Date();
-  const day = now.getUTCDay();
-  const monday = new Date(now);
-  monday.setUTCDate(now.getUTCDate() - ((day + 6) % 7) + offsetWeeks * 7);
-  monday.setUTCHours(0, 0, 0, 0);
-  return monday;
-}
+import { addDaysYmd, localWeekDays, toLocalYmd, withLocalYmd, ymdToLocalDate } from "../lib/localDate.js";
 
 export function Calendar() {
   const [weekOffset, setWeekOffset] = useState(0);
   const [selectedRun, setSelectedRun] = useState<PlannedRun | null>(null);
   const queryClient = useQueryClient();
 
-  const weekStart = startOfWeek(weekOffset);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
-  const days = useMemo(
-    () => Array.from({ length: 7 }, (_, i) => new Date(weekStart.getTime() + i * 86_400_000)),
-    [weekStart],
+  // Day columns are calendar dates in the athlete's own timezone, never UTC slices: at 9pm in
+  // a negative-offset zone the UTC date is already tomorrow, which used to shift the whole
+  // week (and the "Today" marker) forward by a day. The run/weather queries convert back to
+  // instants only at the window edges.
+  const days = useMemo(() => localWeekDays(weekOffset), [weekOffset]);
+  const weekStartYmd = days[0]!;
+  const weekEndYmd = days[6]!;
+  const rangeFrom = useMemo(() => ymdToLocalDate(weekStartYmd).toISOString(), [weekStartYmd]);
+  // End of the last local day, so a Sunday-evening run is inside the window.
+  const rangeTo = useMemo(
+    () => new Date(ymdToLocalDate(addDaysYmd(weekEndYmd, 1)).getTime() - 1).toISOString(),
+    [weekEndYmd],
   );
 
   const runsQuery = useQuery<PlannedRun[]>({
-    queryKey: ["runs", weekStart.toISOString(), weekEnd.toISOString()],
-    queryFn: () => api.get<PlannedRun[]>(`/runs?from=${weekStart.toISOString()}&to=${weekEnd.toISOString()}`),
+    queryKey: ["runs", rangeFrom, rangeTo],
+    queryFn: () => api.get<PlannedRun[]>(`/runs?from=${rangeFrom}&to=${rangeTo}`),
   });
 
   const weatherQuery = useQuery<WeatherForecastResponse>({
-    queryKey: ["weather", weekStart.toISOString(), weekEnd.toISOString()],
+    queryKey: ["weather", weekStartYmd, weekEndYmd],
     queryFn: () =>
-      api.get<WeatherForecastResponse>(
-        `/weather/forecast?from=${weekStart.toISOString().slice(0, 10)}&to=${weekEnd.toISOString().slice(0, 10)}`,
-      ),
+      api.get<WeatherForecastResponse>(`/weather/forecast?from=${weekStartYmd}&to=${weekEndYmd}`),
   });
 
   const invalidateRuns = () => queryClient.invalidateQueries({ queryKey: ["runs"] });
@@ -61,14 +57,16 @@ export function Calendar() {
     },
   });
 
-  function runsForDay(day: Date): PlannedRun[] {
-    const key = day.toISOString().slice(0, 10);
-    return (runsQuery.data ?? []).filter((r) => r.scheduledAt.slice(0, 10) === key);
+  // A run's stored scheduledAt is a UTC instant; bucket it by the local day it falls on
+  // rather than by the ISO string's prefix, so a 9pm run stays on the evening it belongs to.
+  function runsForDay(dayYmd: string): PlannedRun[] {
+    return (runsQuery.data ?? []).filter((r) => toLocalYmd(new Date(r.scheduledAt)) === dayYmd);
   }
 
-  function forecastForDay(day: Date): WeatherForecast | undefined {
-    const key = day.toISOString().slice(0, 10);
-    return (weatherQuery.data?.forecasts ?? []).find((f) => f.date === key);
+  // Forecast dates are already the athlete's local calendar dates (the API buckets them in
+  // users.timezone), so these keys line up directly.
+  function forecastForDay(dayYmd: string): WeatherForecast | undefined {
+    return (weatherQuery.data?.forecasts ?? []).find((f) => f.date === dayYmd);
   }
 
   function onDragEnd(event: DragEndEvent) {
@@ -78,12 +76,10 @@ export function Calendar() {
 
     const run = runsQuery.data?.find((r) => r.id === runId);
     if (!run) return;
-    if (run.scheduledAt.slice(0, 10) === targetDayKey) return;
-
     const original = new Date(run.scheduledAt);
-    const [y, m, d] = targetDayKey.split("-").map(Number);
-    const updated = new Date(original);
-    updated.setUTCFullYear(y!, m! - 1, d!);
+    if (toLocalYmd(original) === targetDayKey) return;
+
+    const updated = withLocalYmd(original, targetDayKey);
     updateRun.mutate({ id: runId, updates: { scheduledAt: updated.toISOString() } });
   }
 
@@ -91,8 +87,8 @@ export function Calendar() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="font-display text-xl font-semibold text-ink-primary">
-          {weekStart.toLocaleDateString(undefined, { month: "long", day: "numeric" })} –{" "}
-          {days[6]!.toLocaleDateString(undefined, { month: "long", day: "numeric" })}
+          {ymdToLocalDate(weekStartYmd).toLocaleDateString(undefined, { month: "long", day: "numeric" })} –{" "}
+          {ymdToLocalDate(weekEndYmd).toLocaleDateString(undefined, { month: "long", day: "numeric" })}
         </h1>
         <div className="flex gap-2">
           <button
@@ -130,8 +126,8 @@ export function Calendar() {
         <div className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 xl:min-h-[calc(100vh-14rem)]">
           {days.map((day) => (
             <DayColumn
-              key={day.toISOString()}
-              date={day}
+              key={day}
+              dayYmd={day}
               runs={runsForDay(day)}
               forecast={forecastForDay(day)}
               onSelectRun={setSelectedRun}

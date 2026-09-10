@@ -1,3 +1,5 @@
+import { dateYmdInZone } from "../lib/zonedTime.js";
+
 const DAY_MS = 86_400_000;
 
 export interface PlanWeek {
@@ -49,14 +51,17 @@ function mondayOnOrAfter(from: Date): Date {
  */
 export function computePlanWindow(input: {
   today: Date;
+  /** IANA zone deciding which calendar day `today` falls on. Without it an evening request
+   * from a negative-offset zone would plan from tomorrow. Defaults to UTC. */
+  timeZone?: string;
   startDate?: string;
   raceDate?: string;
   goalDate?: string;
   preferStart?: "today" | "tomorrow" | "next_monday";
 }): { ok: true; window: PlanWindow } | { ok: false; error: string } {
-  const today = new Date(
-    Date.UTC(input.today.getUTCFullYear(), input.today.getUTCMonth(), input.today.getUTCDate()),
-  );
+  // Everything below is calendar arithmetic on UTC-midnight anchors; only the athlete's
+  // *current* day has to be resolved through their zone first.
+  const today = parseUtcDay(dateYmdInZone(input.today, input.timeZone ?? "UTC"))!;
   const notes: string[] = [];
 
   let start: Date;

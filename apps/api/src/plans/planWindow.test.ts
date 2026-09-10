@@ -36,4 +36,33 @@ describe("computePlanWindow", () => {
     // Next Monday after Tue Aug 11 is Aug 17.
     expect(res.window.startDate).toBe("2026-08-17");
   });
+
+  // An athlete planning at 9pm is still on today's date; without the zone the window would
+  // start from tomorrow, and "next Monday" would jump a whole week when they plan on a
+  // Sunday evening.
+  it("resolves today in the athlete's timezone, not UTC", () => {
+    const ninePmMonday = new Date("2026-08-11T01:00:00Z"); // 9pm Mon Aug 10 in New York
+    const res = computePlanWindow({
+      today: ninePmMonday,
+      timeZone: "America/New_York",
+      preferStart: "today",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.window.todayIso).toBe("2026-08-10");
+    expect(res.window.startDate).toBe("2026-08-10");
+  });
+
+  it("does not skip a week when planning on a Sunday evening", () => {
+    const ninePmSunday = new Date("2026-08-17T01:00:00Z"); // 9pm Sun Aug 16 in New York
+    const res = computePlanWindow({
+      today: ninePmSunday,
+      timeZone: "America/New_York",
+      preferStart: "next_monday",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // Tomorrow, Aug 17 — not Aug 24, which is what a UTC "today" of Mon Aug 17 would give.
+    expect(res.window.startDate).toBe("2026-08-17");
+  });
 });

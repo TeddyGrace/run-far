@@ -9,5 +9,9 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // Pinned to a negative-offset zone so date-bucketing tests exercise the case where the
+    // athlete's calendar day and the UTC one disagree — the whole reason lib/localDate exists.
+    // A UTC runner would let a `toISOString().slice(0, 10)` regression pass silently.
+    env: { TZ: "America/New_York" },
   },
 });

@@ -47,7 +47,7 @@ for that. Never sum sleepDebtMin across multiple days from get_recovery_history 
 — that would massively over-count. The per-day history from get_recovery_history is still useful for trend
 questions (e.g. "how has my sleep debt changed this month"), just never for summing.
 
-Today's date (UTC) is ${todayIso}. Athlete timezone is ${timeZone} (current offset ${offset}).
+Today's date in the athlete's timezone is ${todayIso} (${timeZone}, current offset ${offset}). Anchor every date to that, never to UTC.
 
 You can also help reconfigure the athlete's week or calendar (move runs, add/remove sessions, rest days,
 etc). You must NEVER write to the calendar directly. Instead:
@@ -100,7 +100,8 @@ Keep answers concise and coach-like.`;
 const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_current_date",
-    description: "Return today's date (UTC), weekday, and the athlete's timezone/offset.",
+    description:
+      "Return today's date, weekday and clock time in the athlete's timezone, plus that zone and its current UTC offset.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -246,7 +247,13 @@ async function executeTool(
       const now = new Date();
       return {
         todayIso: isoDate(now, tz),
-        weekday: now.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
+        weekday: now.toLocaleDateString("en-US", { weekday: "long", timeZone: tz }),
+        localTime: now.toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+          timeZone: tz,
+        }),
         timeZone: tz,
         utcOffset: offsetStringForZone(tz, now),
       };
