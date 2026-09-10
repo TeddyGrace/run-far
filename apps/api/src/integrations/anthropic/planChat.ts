@@ -14,7 +14,7 @@ import { computePlanWindow } from "../../plans/planWindow.js";
 import { validatePlanDraft } from "../../plans/validate.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
-import { offsetStringForZone, shiftRunsToLocalTime } from "../../lib/zonedTime.js";
+import { dateYmdInZone, offsetStringForZone, shiftRunsToLocalTime } from "../../lib/zonedTime.js";
 import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
 import { AiUsageAccumulator } from "../../lib/aiCost.js";
 import { withImperialRunFields } from "../../lib/units.js";
@@ -27,7 +27,7 @@ function systemPrompt(todayIso: string, timeZone: string): string {
 Help the athlete design a concrete, date-accurate training plan through conversation.
 You can also revise their *existing* active plan (e.g. change start times, tweak volume) when they ask.
 
-Today's date (UTC) is ${todayIso}. Athlete timezone is ${timeZone} (current offset ${offset}).
+Today's date in the athlete's timezone is ${todayIso} (${timeZone}, current offset ${offset}). Anchor every date to that, never to UTC.
 Never guess the date — call get_current_date if you need it again.
 
 Workflow (new plan):
@@ -66,7 +66,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "get_current_date",
     description:
-      "Return today's date (UTC), weekday, and the athlete's timezone/offset. Use this to anchor all scheduling.",
+      "Return today's date, weekday and clock time in the athlete's timezone, plus that zone and its current UTC offset. Use this to anchor all scheduling.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -232,8 +232,14 @@ async function executeTool(
     case "get_current_date": {
       const now = new Date();
       return {
-        todayIso: now.toISOString().slice(0, 10),
-        weekday: now.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
+        todayIso: dateYmdInZone(now, ctx.timeZone),
+        weekday: now.toLocaleDateString("en-US", { weekday: "long", timeZone: ctx.timeZone }),
+        localTime: now.toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+          timeZone: ctx.timeZone,
+        }),
         timeZone: ctx.timeZone,
         utcOffset: offsetStringForZone(ctx.timeZone, now),
       };
@@ -287,6 +293,7 @@ async function executeTool(
       if (typeof input.goalDate === "string") ctx.bounds.goalDate = input.goalDate;
       const result = computePlanWindow({
         today: new Date(),
+        timeZone: ctx.timeZone,
         startDate: input.startDate as string | undefined,
         raceDate: input.raceDate as string | undefined,
         goalDate: input.goalDate as string | undefined,
@@ -316,6 +323,7 @@ async function executeTool(
       return validatePlanDraft({
         draft: parsed.data,
         today: new Date(),
+        timeZone: ctx.timeZone,
         startDate: (input.startDate as string | undefined) ?? ctx.bounds.startDate,
         raceDate: (input.raceDate as string | undefined) ?? ctx.bounds.raceDate,
         availableWeekdays: ctx.bounds.availableWeekdays,
@@ -340,7 +348,7 @@ export async function runPlanChatTurn(params: {
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const tz = await getAthleteTimezone(params.userId);
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = dateYmdInZone(new Date(), tz);
   const bounds: ToolBounds = {};
 
   const [user] = await db
@@ -393,6 +401,7 @@ export async function runPlanChatTurn(params: {
           const check = validatePlanDraft({
             draft: parsed.data,
             today: new Date(),
+            timeZone: tz,
             startDate: bounds.startDate,
             raceDate: bounds.raceDate,
             availableWeekdays: bounds.availableWeekdays,
@@ -482,7 +491,7 @@ export async function runPlanChatTurnStream(params: {
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const tz = await getAthleteTimezone(params.userId);
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = dateYmdInZone(new Date(), tz);
   const bounds: ToolBounds = {};
 
   const [user] = await db
@@ -547,6 +556,7 @@ export async function runPlanChatTurnStream(params: {
           const check = validatePlanDraft({
             draft: parsed.data,
             today: new Date(),
+            timeZone: tz,
             startDate: bounds.startDate,
             raceDate: bounds.raceDate,
             availableWeekdays: bounds.availableWeekdays,

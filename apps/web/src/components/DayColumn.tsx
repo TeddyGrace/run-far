@@ -5,19 +5,23 @@ import type { PlannedRun, WeatherForecast } from "@run-far/shared";
 import { RunCard } from "./RunCard.js";
 import { WeatherReadout } from "./WeatherReadout.js";
 import { SEGMENT_LABELS } from "../lib/weather.js";
+import { todayYmd, ymdToLocalDate } from "../lib/localDate.js";
 
 interface DayColumnProps {
-  date: Date;
+  /** The column's calendar date (YYYY-MM-DD) in the athlete's own timezone. */
+  dayYmd: string;
   runs: PlannedRun[];
   forecast?: WeatherForecast;
   onSelectRun: (run: PlannedRun) => void;
 }
 
-export function DayColumn({ date, runs, forecast, onSelectRun }: DayColumnProps) {
+export function DayColumn({ dayYmd, runs, forecast, onSelectRun }: DayColumnProps) {
   const [expanded, setExpanded] = useState(true);
-  const dayKey = date.toISOString().slice(0, 10);
-  const { setNodeRef, isOver } = useDroppable({ id: dayKey });
-  const isToday = dayKey === new Date().toISOString().slice(0, 10);
+  const { setNodeRef, isOver } = useDroppable({ id: dayYmd });
+  // Both sides are local calendar dates, so "Today" tracks the athlete's clock rather than
+  // UTC's — the two disagree all evening in any negative-offset zone.
+  const isToday = dayYmd === todayYmd();
+  const date = ymdToLocalDate(dayYmd);
 
   return (
     <div
@@ -38,7 +42,7 @@ export function DayColumn({ date, runs, forecast, onSelectRun }: DayColumnProps)
             isToday ? "text-accent" : "text-ink-secondary",
           )}
         >
-          {date.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })}
+          {date.toLocaleDateString(undefined, { weekday: "short" })}
           {isToday && (
             <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-surface-0">
               Today
@@ -51,7 +55,7 @@ export function DayColumn({ date, runs, forecast, onSelectRun }: DayColumnProps)
             isToday ? "text-accent" : "text-ink-muted",
           )}
         >
-          {date.getUTCDate()}
+          {date.getDate()}
         </span>
       </div>
       {forecast && (

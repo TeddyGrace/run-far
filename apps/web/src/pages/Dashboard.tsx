@@ -11,6 +11,7 @@ import { WeatherToday } from "../components/WeatherToday.js";
 import { OnboardingChecklist } from "../components/OnboardingChecklist.js";
 import { HARD_RUN_TYPES } from "../lib/runTypes.js";
 import { formatMiles } from "../lib/units.js";
+import { addDaysYmd, todayYmd, ymdToLocalDate } from "../lib/localDate.js";
 
 interface OnboardingStatus {
   hasWhoop: boolean;
@@ -18,13 +19,13 @@ interface OnboardingStatus {
   hasPlan: boolean;
 }
 
-// Snapped to UTC midnight so the value is identical across renders — a timestamp that
-// moves every render would change the query key and refetch in a loop.
+// Snapped to *local* midnight so the value is identical across renders (a timestamp that
+// moves every render would change the query key and refetch in a loop) and so the window
+// starts at the athlete's today, not UTC's — those are different days all evening in any
+// negative-offset zone, which dropped today's remaining runs out of the lookahead.
 function todayRange() {
-  const from = new Date();
-  from.setUTCHours(0, 0, 0, 0);
-  const to = new Date(from);
-  to.setUTCDate(to.getUTCDate() + 8);
+  const from = ymdToLocalDate(todayYmd());
+  const to = ymdToLocalDate(addDaysYmd(todayYmd(), 8));
   return { from: from.toISOString(), to: to.toISOString() };
 }
 

@@ -94,8 +94,12 @@ today's recovery doesn't match what the plan expects.
   [`apps/backoffice/src/App.tsx`](apps/backoffice/src/App.tsx)
 - **Timezone-correct scheduling** — wall-clock math (open-slot search,
   day-boundary detection) goes through small DST-safe conversion helpers
-  built on `Intl.DateTimeFormat` rather than a heavyweight date library.
-  → [`apps/api/src/lib/zonedTime.ts`](apps/api/src/lib/zonedTime.ts)
+  built on `Intl.DateTimeFormat` rather than a heavyweight date library. The
+  same rule holds end to end: the calendar grid, the coach's notion of
+  "today", and plan validation all bucket dates in the athlete's zone, never
+  in UTC — the two are different days every evening west of Greenwich.
+  → [`apps/api/src/lib/zonedTime.ts`](apps/api/src/lib/zonedTime.ts),
+  [`apps/web/src/lib/localDate.ts`](apps/web/src/lib/localDate.ts)
 - **Encrypted OAuth tokens + single-flight refresh** — tokens are encrypted
   at rest with AES-256-GCM, and concurrent requests against an
   about-to-expire access token trigger exactly one refresh, not one per
@@ -208,6 +212,10 @@ Coverage as of this writing:
   rather than overwriting the athlete's edit.
 - Timezone helpers (`lib/zonedTime.test.ts`) — wall-clock conversion, and
   `addLocalDays` preserving the athlete's clock time across both DST boundaries.
+- Local calendar dates in the web app (`web/src/lib/localDate.test.ts`,
+  `web/src/pages/Calendar.test.tsx`) — the suite is pinned to
+  `America/New_York`, so a 9pm run stays on the evening it is run and the
+  "Today" column tracks the athlete's clock rather than UTC's.
 - Recommendation fingerprinting (`recommendations/fingerprint.test.ts`) —
   stability across key/array ordering, sensitivity to real content changes.
 - Calendar event filtering (`integrations/google/calendarClient.test.ts`) —

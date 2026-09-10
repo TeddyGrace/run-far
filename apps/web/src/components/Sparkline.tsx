@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ymdToLocalDate } from "../lib/localDate.js";
 
 interface SparklinePoint {
   date: string; // YYYY-MM-DD
@@ -18,17 +19,14 @@ interface SparklineProps {
 }
 
 function formatAxisDate(iso: string): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  return ymdToLocalDate(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function formatHoverDate(iso: string): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  return d.toLocaleDateString(undefined, {
+  return ymdToLocalDate(iso).toLocaleDateString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
-    timeZone: "UTC",
   });
 }
 

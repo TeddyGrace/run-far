@@ -4,6 +4,7 @@ import type { RecentActivity, ZoneDurations } from "../types.js";
 import { isRunSport, sportLabel } from "../lib/sports.js";
 import { api, ApiError } from "../lib/api.js";
 import { formatMiles, formatPacePerMile, metersToFeet, milesToMeters } from "../lib/units.js";
+import { addDaysYmd, todayYmd, ymdToLocalDate } from "../lib/localDate.js";
 
 /** Strain runs 0–21; tint once it crosses into a genuinely hard effort. */
 function strainTone(strain: number | null): string {
@@ -13,18 +14,16 @@ function strainTone(strain: number | null): string {
   return "text-zone-good";
 }
 
+/** `iso` is a YYYY-MM-DD calendar date the API already bucketed in the athlete's timezone, so
+ * "today" has to be their local date too — comparing against UTC midnight labelled this
+ * evening's activity "Yesterday" west of Greenwich. */
 function formatDay(iso: string): string {
-  const d = new Date(`${iso}T00:00:00Z`);
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const diffDays = Math.round((today.getTime() - d.getTime()) / 86_400_000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, {
+  if (iso === todayYmd()) return "Today";
+  if (iso === addDaysYmd(todayYmd(), -1)) return "Yesterday";
+  return ymdToLocalDate(iso).toLocaleDateString(undefined, {
     weekday: "short",
     month: "short",
     day: "numeric",
-    timeZone: "UTC",
   });
 }
 

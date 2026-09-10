@@ -1,4 +1,5 @@
 import type { AiPlanDraft } from "@run-far/shared";
+import { dateYmdInZone } from "../lib/zonedTime.js";
 
 const DAY_MS = 86_400_000;
 const HARD_TYPES = new Set(["tempo", "interval", "long", "race"]);
@@ -6,6 +7,10 @@ const HARD_TYPES = new Set(["tempo", "interval", "long", "race"]);
 export interface PlanValidationInput {
   draft: AiPlanDraft;
   today: Date;
+  /** IANA zone the draft's dates are judged in. A run written as a UTC instant ("…T01:00:00Z")
+   * belongs to the previous local day west of Greenwich, and "today" moves with it. Defaults
+   * to UTC. */
+  timeZone?: string;
   startDate?: string; // YYYY-MM-DD, earliest allowed run
   raceDate?: string; // YYYY-MM-DD, latest allowed run (should hold the race)
   availableWeekdays?: number[]; // 0 Sun .. 6 Sat; if set, non-rest runs must fall on these
@@ -32,6 +37,21 @@ function utcDay(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * The calendar day a drafted run lands on, as a UTC-midnight anchor for the comparisons below.
+ * A timestamp carrying a zone (an offset, or a "Z") is resolved in `timeZone`, so a 9pm run
+ * written as the next day's UTC instant is still counted on the evening the athlete runs it.
+ * A bare YYYY-MM-DD is already a calendar date and is taken as written.
+ */
+function runDay(scheduledAt: string, timeZone: string): Date | null {
+  const value = scheduledAt.trim();
+  const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(value);
+  if (!hasZone) return utcDay(value);
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return utcDay(value);
+  return utcDay(dateYmdInZone(instant, timeZone));
+}
+
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -53,15 +73,14 @@ export function validatePlanDraft(input: PlanValidationInput): PlanValidationRes
   const warnings: string[] = [];
   const rampPct = input.maxWeeklyRampPct ?? 0.15;
 
+  const timeZone = input.timeZone ?? "UTC";
   const start = input.startDate ? utcDay(input.startDate) : null;
   const race = input.raceDate ? utcDay(input.raceDate) : null;
-  const today = new Date(
-    Date.UTC(input.today.getUTCFullYear(), input.today.getUTCMonth(), input.today.getUTCDate()),
-  );
+  const today = utcDay(dateYmdInZone(input.today, timeZone))!;
 
   const parsed = draft.runs
     .map((r, i) => {
-      const d = utcDay(r.scheduledAt);
+      const d = runDay(r.scheduledAt, timeZone);
       return d ? { i, date: d, run: r } : null;
     })
     .filter((x): x is { i: number; date: Date; run: AiPlanDraft["runs"][number] } => x !== null)
