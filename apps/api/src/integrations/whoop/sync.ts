@@ -7,6 +7,7 @@ import { logger } from "../../lib/logger.js";
 import { dateYmdInZone } from "../../lib/zonedTime.js";
 import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
 import { cycleLocalDate } from "../../metrics/cycleMetrics.js";
+import { reconcileUserSafe } from "../../reconciliation/service.js";
 
 /** Athlete-local calendar date for a raw Whoop ISO timestamp. Whoop's sleep/workout payloads
  * don't carry a per-event timezone offset, so the athlete's configured timezone is the best
@@ -224,6 +225,9 @@ export async function backfillWhoop(userId: string): Promise<void> {
   const start = new Date();
   start.setUTCDate(start.getUTCDate() - 90);
   await syncWhoopRange(userId, start.toISOString());
+  // Reconcile immediately rather than leaving the athlete with an empty adherence panel until
+  // the first workout webhook fires — the 90 days just imported are exactly what it needs.
+  await reconcileUserSafe(userId);
 }
 
 /** Incremental sync from the stored watermark; falls back to a 7-day window if none exists. */

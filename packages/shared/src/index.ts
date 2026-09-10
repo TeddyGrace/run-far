@@ -6,3 +6,5 @@ export * from "./schemas/chat.js";
 export * from "./schemas/settings.js";
 export * from "./schemas/auth.js";
 export * from "./schemas/weather.js";
+export * from "./schemas/adherence.js";
+export * from "./sports.js";

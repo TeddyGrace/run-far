@@ -6,6 +6,7 @@ import { db } from "../../db/client.js";
 import { oauthConnections, recoveryMetrics, sleepRecords, whoopWorkouts } from "../../db/schema.js";
 import { syncSingleResource } from "./sync.js";
 import { generateRecommendationsSafe } from "../../recommendations/service.js";
+import { reconcileUserSafe } from "../../reconciliation/service.js";
 import { logger } from "../../lib/logger.js";
 import type { WhoopWebhookPayload } from "./types.js";
 
@@ -114,12 +115,21 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
         .where(and(eq(sleepRecords.whoopSleepId, id), eq(sleepRecords.userId, userId)));
       return;
     case "workout.updated":
+      // A workout landing is the only event that can turn a planned run into a completed one,
+      // so it is the natural trigger for reconciliation. Also covers re-scoring: Whoop sends
+      // this again when it finishes computing strain or backfills a GPS distance, and the sweep
+      // re-derives from current data rather than trusting its earlier guess.
       await syncSingleResource(userId, "workout", id);
+      await reconcileUserSafe(userId);
       return;
     case "workout.deleted":
       await db
         .delete(whoopWorkouts)
         .where(and(eq(whoopWorkouts.whoopWorkoutId, id), eq(whoopWorkouts.userId, userId)));
+      // The FK clears the link on its own (ON DELETE SET NULL), but that leaves the run sitting
+      // at 'completed' with nothing behind it — a deleted workout has to be able to un-complete
+      // a run, or adherence permanently overstates what was done.
+      await reconcileUserSafe(userId);
       return;
   }
 }

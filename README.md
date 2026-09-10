@@ -34,6 +34,11 @@ today's recovery doesn't match what the plan expects.
   timed commitments on the athlete's primary calendar (declined invites,
   all-day events, and "Free"-marked events are filtered out) and proposes
   the nearest open slot.
+- **Planned vs. actual reconciliation** — matches the workouts Whoop synced
+  against the sessions the plan asked for, so the app can say whether the
+  plan is actually being followed rather than only what was intended. Runs
+  reconcile to completed or missed on their own, and the athlete can correct
+  a match the heuristic got wrong.
 - **AI-assisted planning** — describe a training block in a multi-turn chat
   with Claude and get back a structured plan to preview and commit, or ask
   the assistant questions about your schedule.
@@ -86,6 +91,36 @@ today's recovery doesn't match what the plan expects.
   the fact, which is why they landed before the model rather than after.
   → [`recommendations/trainingContext.ts`](apps/api/src/recommendations/trainingContext.ts),
   [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **Closing the loop between the plan and what was run** — `planned_runs`
+  carried a `completed` status from the first migration that nothing ever
+  wrote: the plan and the workouts synced from Whoop were parallel tables
+  that never touched, so the app could show what was intended and what
+  happened but never that they were the same session. A reconciliation sweep
+  now links them. The matcher is pure and conservative — run sports only,
+  same athlete-local day, time-of-day used only to rank candidates within a
+  day and never to rescue one across a boundary — because a wrong link
+  silently corrupts both the adherence figure and the outcome attached to a
+  recommendation. The sweep is re-derivable rather than incremental: it
+  clears its own prior guesses inside the window and re-decides from current
+  data, so a late sync, a re-score, or a deleted workout all converge. What
+  the athlete corrects by hand is stamped `manual` and never revisited, and
+  that correction is itself a labelled example of a case the heuristic
+  missed. It deliberately leaves `updated_at` alone — that column is what
+  Google's inbound sync reads as "the app changed this run", and a
+  background pass bumping it would turn every inbound calendar edit into a
+  false conflict.
+  → [`apps/api/src/reconciliation/`](apps/api/src/reconciliation/)
+- **Outcomes, not just clicks** — a recommendation's `status` records the
+  athlete's verdict on the card and stops there. Whether the athlete who
+  accepted "downgrade tomorrow's tempo" actually ran easy, and what their
+  recovery looked like the next morning, is the part that says whether the
+  advice was any good — and it only becomes knowable once the targeted runs
+  reconcile. `outcome_context` is written once at that point and never
+  revised, since a label that kept moving would silently change the target
+  under any model already scored on it. Cards whose runs never settle are
+  recorded at a deadline rather than held forever, so the retained set
+  doesn't skew toward the tidy cases.
+  → [`recommendations/outcome.ts`](apps/api/src/reconciliation/outcome.ts)
 - **Runtime switches, not redeploys** — whether athletes see model-sourced
   recommendations is a backoffice toggle with a global default and per-account
   overrides, resolved in one place. The model runs and is scored either way;
@@ -206,6 +241,21 @@ Coverage as of this writing:
 - Stale-proposal detection (`recommendations/staleness.test.ts`) — a proposed
   change whose run has been edited since the card was generated is skipped
   rather than overwriting the athlete's edit.
+- Workout matching (`reconciliation/match.test.ts`) — same-day matching across
+  the whole day rather than a window around the planned time, no matching
+  across a day boundary, bucketing in the athlete's zone rather than UTC,
+  non-run sports and rest days excluded, one workout to at most one run on a
+  double day, timed candidates beating untimed ones, and a result that is a
+  function of its inputs rather than of row order.
+- Reconciliation sweep (`reconciliation/reconcile.test.ts`) — idempotence, a
+  deleted workout un-completing the run it satisfied, a workout reassigning
+  between runs without tripping the one-workout-one-run index, today's
+  unmatched run staying undecided instead of being called missed, a dormant
+  plan's runs not competing for the live plan's workouts, `updated_at` left
+  untouched so Google's conflict detection still works, manual corrections
+  surviving every later pass and withholding their workout from other runs,
+  the adherence figures themselves, and outcome capture (written once, never
+  revised, advisory cards included, a deleted target run still recorded).
 - Timezone helpers (`lib/zonedTime.test.ts`) — wall-clock conversion, and
   `addLocalDays` preserving the athlete's clock time across both DST boundaries.
 - Recommendation fingerprinting (`recommendations/fingerprint.test.ts`) —
@@ -389,9 +439,9 @@ docker run --rm -p 8080:8080 --env-file .env -e NODE_ENV=production -e PORT=8080
 
 Each `recommendations` row is a features → action → outcome record: the
 athlete's physiology at decision time (`input_snapshot`), the world outside it
-(`decision_context`), the suggestion (`proposed_changes`), and what became of
-it (`status`, `first_shown_at`, `applied_at`). Read these caveats before
-training on it.
+(`decision_context`), the suggestion (`proposed_changes`), what the athlete did
+with it (`status`, `first_shown_at`, `applied_at`), and what actually happened
+afterwards (`outcome_context`). Read these caveats before training on it.
 
 **Status meanings.** `pending` is unresolved. `accepted` and `dismissed` are
 athlete verdicts. `expired` means the producing rule stopped firing while the
@@ -413,6 +463,31 @@ dismissals or treat them as a noisier class. `decision_context` and
 card was never rendered to the athlete — not a training example at all. Non-null
 on an expired row means it was shown and not acted on, which is a real negative.
 
+**`outcome_context` is the consequence, not the click.** `status` says what the
+athlete did with the card; `outcome_context` says what became of the sessions it
+was about — for each targeted run, whether it was executed and how the session
+that happened compared to the one planned, plus the next morning's recovery. It
+is written once by the reconciliation sweep after the targeted runs settle, and
+never revised: a label that kept being recomputed would silently change the
+target under any model already scored on it. Advisory cards that propose no
+change still get a row, since next-day recovery is a real outcome for them too.
+Check `complete` before training on one — false means a targeted run was still
+undecided when the deadline forced the record out, or was deleted before it could
+reconcile, which is missing data rather than a missed session. Null means the
+card is still pending, its runs have not settled, or it resolved before the
+column existed (see the cutover note above; `outcome_context` landed with the
+reconciliation sweep, later than `decision_context`).
+
+**Reconciliation is a heuristic, and `planned_runs.match_source` says whose.**
+`auto` is the matcher's own guess — run sports, same athlete-local day, nearest
+start time — and it is re-derived on every sweep. `manual` is the athlete
+overriding it, and those rows are worth treating as a distinct, higher-confidence
+class: each one is also a labelled example of a pairing the heuristic would not
+make on its own (most often a session run a day later than planned). A run with
+`reconciled_at` set and no `actual_workout_id` was examined and genuinely
+matched nothing; a null `reconciled_at` means no pass has reached it, which is
+not the same thing.
+
 **`decision_context` deliberately omits calendar event titles.** Busy windows
 are recorded as bare `{start, end}` pairs. Event names are personal data from a
 third-party account pulled in for a transient scheduling decision, and copying
@@ -432,3 +507,11 @@ Known limits this record still has:
   `(user_id, source, status)` index covers the queries.
 - **No retention policy.** Expired rows accumulate deliberately — they are the
   asset. Revisit only if volume becomes a problem.
+- **Matching is greedy, not optimal.** On a double day where two planned runs and
+  two workouts pair up crosswise, the nearest-first assignment can get both
+  backwards. Optimal assignment would fix it at roughly five times the code; a
+  wrong link costs the athlete one click to correct, and the correction is
+  recorded. Revisit if double days turn out to be common.
+- **`outcome_context` reads next-day recovery, not a controlled comparison.**
+  Recovery the morning after is confounded by everything else the athlete did
+  that day. It is a signal, not an effect estimate.

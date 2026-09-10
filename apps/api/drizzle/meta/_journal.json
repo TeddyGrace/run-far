@@ -211,6 +211,13 @@
       "when": 1788905547973,
       "tag": "0029_yellow_angel",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1789004114443,
+      "tag": "0030_empty_jackpot",
+      "breakpoints": true
     }
   ]
 }

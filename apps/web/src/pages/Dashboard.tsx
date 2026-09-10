@@ -7,6 +7,7 @@ import type { RecoveryHistoryEntry } from "../types.js";
 import { RecoveryHero } from "../components/RecoveryHero.js";
 import { RecommendationCard } from "../components/RecommendationCard.js";
 import { RecentActivities } from "../components/RecentActivities.js";
+import { AdherencePanel } from "../components/AdherencePanel.js";
 import { WeatherToday } from "../components/WeatherToday.js";
 import { OnboardingChecklist } from "../components/OnboardingChecklist.js";
 import { HARD_RUN_TYPES } from "../lib/runTypes.js";
@@ -165,6 +166,8 @@ export function Dashboard() {
           })}
         </div>
       </div>
+
+      <AdherencePanel />
 
       <RecentActivities />
     </div>
