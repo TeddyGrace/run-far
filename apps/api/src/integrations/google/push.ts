@@ -66,15 +66,20 @@ export async function pushPlannedRunToGoogle(plannedRunId: string, userId: strin
   const input = toEventInput(run);
 
   if (!run.gcalEventId) {
-    const { eventId, etag } = await insertEvent(userId, calendarId, input);
-    await db
-      .update(plannedRuns)
-      .set({ gcalEventId: eventId, gcalEtag: etag })
-      .where(eq(plannedRuns.id, run.id));
+    await createEventFor(run.id, userId, calendarId, input);
     return;
   }
 
   const result = await updateEvent(userId, calendarId, run.gcalEventId, input, run.gcalEtag ?? undefined);
+  if ("gone" in result) {
+    // The event was deleted on the Google side. App-wins means the session survives, so
+    // recreate it rather than failing — this is the case the policy exists for, and rethrowing
+    // here (which is what happened before updateEvent distinguished gone from conflict) aborted
+    // the whole inbound pull that was trying to enforce it.
+    logger.info({ plannedRunId, userId }, "google event was deleted — recreating from the app's copy");
+    await createEventFor(run.id, userId, calendarId, input);
+    return;
+  }
   if ("conflict" in result) {
     // The stored etag is stale: something changed the event on Google's side since our
     // last write, and we're about to overwrite it. Per the app-wins policy, force the
@@ -93,6 +98,22 @@ export async function pushPlannedRunToGoogle(plannedRunId: string, userId: strin
     return;
   }
   await db.update(plannedRuns).set({ gcalEtag: result.etag }).where(eq(plannedRuns.id, run.id));
+}
+
+/** Creates the event and records the ids it comes back with. Shared by the first push for a run
+ * and by the recreate-after-deletion path, which must not diverge — a recreate that forgot to
+ * store the new id would orphan the event and create another on the next push. */
+async function createEventFor(
+  runId: string,
+  userId: string,
+  calendarId: string,
+  input: EventUpsertInput,
+): Promise<void> {
+  const { eventId, etag } = await insertEvent(userId, calendarId, input);
+  await db
+    .update(plannedRuns)
+    .set({ gcalEventId: eventId, gcalEtag: etag })
+    .where(eq(plannedRuns.id, runId));
 }
 
 /** Deletes the Google Calendar event for a planned run being deleted from the app. */

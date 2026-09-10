@@ -49,7 +49,9 @@ today's recovery doesn't match what the plan expects.
   Google Calendar sync avoid update loops via a sync-origin marker, and when
   both the app and Google changed the same run since the last sync, the
   app's version wins and the overwrite is logged to `sync_conflicts` for
-  auditability.
+  auditability. "App wins" holds even when Google's side of the disagreement is
+  a deletion: the event is recreated from the app's copy rather than the write
+  failing, which is the case the policy most exists for.
   → [`apps/api/src/integrations/google/pull.ts`](apps/api/src/integrations/google/pull.ts),
   [`push.ts`](apps/api/src/integrations/google/push.ts)
 - **Pure, unit-testable rules engine** — every recommendation rule is a
@@ -359,11 +361,20 @@ Coverage as of this writing:
 - Whoop access-token refresh concurrency (`client.test.ts`) — concurrent
   requests against an expiring token trigger exactly one refresh.
 
-Google Calendar's two-way sync loop-prevention and app-wins conflict
-resolution (`pull.ts` / `push.ts`) were verified live against a real
-Google Calendar during development rather than with mocks — see the
-worked example in the original implementation plan. They're reasonable
-candidates for `nock`-style HTTP-mocked tests if this grows further.
+- Two-way Google sync (`google/sync.test.ts`) — run against a fake calendar
+  (`google/fakeCalendar.ts`) that models the parts the sync code actually
+  depends on: an etag that changes on every write, `If-Match` returning 412 on
+  a stale one, sync tokens as a delta cursor, deletions surviving in the delta
+  as `cancelled`, and a 410 for an expired token. Deliberately a small stateful
+  server rather than canned responses, because loop prevention and app-wins are
+  not properties of any single request — they emerge from the round trip.
+  Everything below the `googleapis` boundary is the real code, including the
+  database. Covers: the echo of the app's own push not being mistaken for an
+  external edit; an external time change applying; an external delete removing
+  the run; both app-wins conflicts keeping the app's version *and* logging what
+  they overwrote; adopting an event created directly in the Running calendar;
+  rest days never being pushed; a needs-reauth connection reading as
+  disconnected; sync-token persistence, pagination, and 410 recovery.
 
 A pre-commit hook (`.githooks/pre-commit`) warns — but doesn't block — when
 `apps/api/src`, `apps/web/src`, `packages/shared/src`, or a migration

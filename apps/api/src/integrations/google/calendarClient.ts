@@ -63,15 +63,23 @@ export async function insertEvent(
   return { eventId: data.id, etag: data.etag };
 }
 
-/** Updates an existing event. Sends If-Match so a stale write fails loudly instead of clobbering
- * a concurrent external edit — callers should treat that failure as a conflict to resolve. */
+/**
+ * Updates an existing event. Sends If-Match so a stale write fails loudly instead of clobbering
+ * a concurrent external edit — callers should treat that failure as a conflict to resolve.
+ *
+ * Distinguishes the two ways a write can fail to land, because the right response differs:
+ * `conflict` means the event is there but someone else wrote it since we last read it, and
+ * `gone` means there is no longer an event to update at all. Treating the second as an error
+ * (which this used to, by rethrowing) meant the app-wins policy quietly stopped applying in the
+ * one case it most needs to — an event deleted on the Google side.
+ */
 export async function updateEvent(
   userId: string,
   calendarId: string,
   eventId: string,
   input: EventUpsertInput,
   ifMatchEtag?: string,
-): Promise<{ etag: string } | { conflict: true }> {
+): Promise<{ etag: string } | { conflict: true } | { gone: true }> {
   const api = await getCalendarApi(userId);
   try {
     const { data } = await api.events.update({
@@ -85,6 +93,7 @@ export async function updateEvent(
   } catch (err: unknown) {
     const status = (err as { code?: number; response?: { status?: number } })?.response?.status;
     if (status === 412) return { conflict: true }; // precondition failed = etag mismatch
+    if (status === 404 || status === 410) return { gone: true }; // deleted on the Google side
     throw err;
   }
 }
