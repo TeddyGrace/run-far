@@ -108,6 +108,15 @@ export async function buildAdherence(
   const skipped = runs.filter((r) => r.status === "skipped");
   const settled = completed.length + skipped.length;
 
+  // Of the unsettled runs, the ones whose day is over are unsettled for a different reason than
+  // the ones still ahead: the sweep looked and could not tell (see workoutCoverageThrough in
+  // service.ts). Reporting them together as "open" is what let an athlete with no wearable be
+  // shown 0% adherence.
+  const unsettled = runs.filter((r) => r.status !== "completed" && r.status !== "skipped");
+  const untracked = unsettled.filter(
+    (r) => dateYmdInZone(new Date(r.scheduledAt), timeZone) < todayYmd,
+  );
+
   const byRunType = new Map<RunType, { completed: number; skipped: number }>();
   for (const r of runs) {
     if (r.status !== "completed" && r.status !== "skipped") continue;
@@ -158,7 +167,8 @@ export async function buildAdherence(
         total: runs.length,
         completed: completed.length,
         skipped: skipped.length,
-        open: runs.length - settled,
+        upcoming: unsettled.length - untracked.length,
+        untracked: untracked.length,
       },
       completionRate: settled === 0 ? null : completed.length / settled,
       plannedDistanceM: sum(runs.map((r) => r.plannedDistanceM)),

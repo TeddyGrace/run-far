@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import type { ActualWorkout, AdherenceResponse, ReconciledRun } from "@run-far/shared";
 
 import { api } from "../lib/api.js";
@@ -101,6 +102,10 @@ export function AdherencePanel() {
   const { summary, runs, unmatchedWorkouts } = data;
   const rate = summary.completionRate;
   const settled = summary.counts.completed + summary.counts.skipped;
+  // Nothing has settled and there is a backlog the app could not observe: the honest reading is
+  // "we aren't tracking this", not "you completed 0%". Showing a rate here would accuse the
+  // athlete of missing sessions the app simply cannot see.
+  const nothingTracked = settled === 0 && summary.counts.untracked > 0;
 
   const candidatesFor = (run: ReconciledRun) =>
     unmatchedWorkouts
@@ -131,16 +136,42 @@ export function AdherencePanel() {
         <span className="font-mono text-xs text-ink-muted">Last {WINDOW_DAYS} days</span>
       </div>
 
+      {nothingTracked && (
+        <p className="mb-4 rounded-lg border border-border bg-surface-2 p-3 text-sm text-ink-secondary">
+          {summary.counts.untracked} past {summary.counts.untracked === 1 ? "session" : "sessions"}{" "}
+          couldn&apos;t be checked — there&apos;s no synced workout data covering those days.{" "}
+          <Link to="/settings" className="text-accent hover:underline">
+            Connect Whoop
+          </Link>{" "}
+          and they&apos;ll be matched up automatically.
+        </p>
+      )}
+
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat
           label="Completed"
           value={rate == null ? "—" : `${Math.round(rate * 100)}%`}
-          sub={rate == null ? "nothing settled yet" : `${summary.counts.completed} of ${settled}`}
+          sub={
+            rate == null
+              ? nothingTracked
+                ? "not tracked"
+                : "nothing settled yet"
+              : `${summary.counts.completed} of ${settled}`
+          }
         />
         <Stat
           label="Missed"
-          value={String(summary.counts.skipped)}
-          sub={summary.counts.open > 0 ? `${summary.counts.open} still ahead` : undefined}
+          value={rate == null ? "—" : String(summary.counts.skipped)}
+          sub={
+            [
+              summary.counts.upcoming > 0 ? `${summary.counts.upcoming} still ahead` : null,
+              // Surfaced next to "missed" on purpose — it is the number most easily mistaken
+              // for one, and the two must never be conflated.
+              summary.counts.untracked > 0 ? `${summary.counts.untracked} not tracked` : null,
+            ]
+              .filter(Boolean)
+              .join(", ") || undefined
+          }
         />
         <Stat
           label="Planned"

@@ -1,7 +1,7 @@
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 
 import { db } from "../db/client.js";
-import { plannedRuns, whoopWorkouts } from "../db/schema.js";
+import { plannedRuns, syncState, whoopWorkouts } from "../db/schema.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
 import { logger } from "../lib/logger.js";
 import { addLocalDays, dateYmdInZone, zonedLocalToIso } from "../lib/zonedTime.js";
@@ -20,6 +20,32 @@ export interface ReconcileResult {
   completed: number;
   skipped: number;
   reopened: number;
+  /** Past runs the sweep deliberately reached no verdict on, because it had no way to observe
+   * whether they happened. Reported so a caller can tell "nothing was missed" from "we couldn't
+   * see". */
+  untracked: number;
+}
+
+/**
+ * The instant through which we can trust an absence of workouts to mean an absence of running.
+ *
+ * Null when Whoop has never synced for this athlete. Absence of evidence is not evidence of
+ * absence: without this gate, an athlete with a plan and no Whoop connected has every past run
+ * marked `skipped` and is told they missed everything, when the truth is the app cannot see what
+ * they did. That is wrong on the dashboard, and worse in the training record — a card targeting
+ * one of those runs would record a fabricated "the athlete skipped it", which is precisely the
+ * kind of unrecoverable corruption the rest of this design exists to prevent.
+ *
+ * The sync watermark is the right signal on its own, and subsumes the connection state: a dead
+ * refresh token stops `lastPolledAt` advancing, so days after the token died fall outside
+ * coverage without needing a separate `needsReauth` check.
+ */
+async function workoutCoverageThrough(userId: string): Promise<Date | null> {
+  const [state] = await db
+    .select({ lastPolledAt: syncState.lastPolledAt })
+    .from(syncState)
+    .where(and(eq(syncState.userId, userId), eq(syncState.provider, "whoop")));
+  return state?.lastPolledAt ?? null;
 }
 
 /**
@@ -139,10 +165,30 @@ export async function reconcileUser(
 
   const byId = new Map(autoRuns.map((r) => [r.id, r]));
   const unmatched = result.unmatchedRunIds.map((id) => byId.get(id)!).filter(Boolean);
-  // A run whose day is over and which nothing matched was not done. A run still inside today
-  // is simply undecided — the athlete may yet go out — so it is reopened rather than judged.
+  // A run still inside today is simply undecided — the athlete may yet go out — so it is
+  // reopened rather than judged.
   const isPastDay = (r: { scheduledAt: Date }) => dateYmdInZone(r.scheduledAt, timeZone) < todayYmd;
-  const skippedIds = unmatched.filter(isPastDay).map((r) => r.id);
+
+  /**
+   * "Nothing matched" only means "not done" if we would have seen it had it happened.
+   *
+   * A day counts as observed once Whoop has been polled past the *end* of it. Comparing against
+   * the run's own start time instead would be wrong in the ordinary case: a run planned for 7am
+   * and actually done at 8pm would look observed by a 9am poll, and get marked missed.
+   */
+  const coverageThrough = await workoutCoverageThrough(userId);
+  const isObserved = (r: { scheduledAt: Date }) => {
+    if (!coverageThrough) return false;
+    const dayAfter = dateYmdInZone(addLocalDays(r.scheduledAt, 1, timeZone), timeZone);
+    return coverageThrough >= new Date(zonedLocalToIso(dayAfter, "00:00", timeZone));
+  };
+
+  const pastUnmatched = unmatched.filter(isPastDay);
+  const skippedIds = pastUnmatched.filter(isObserved).map((r) => r.id);
+  // Past, unmatched, and unobservable. Left entirely alone — status stays whatever it was and
+  // reconciled_at stays null, which is already this codebase's way of saying "no pass has
+  // reached a verdict here". Counted so callers can distinguish it from a clean week.
+  const untrackedIds = pastUnmatched.filter((r) => !isObserved(r)).map((r) => r.id);
   const openIds = unmatched.filter((r) => !isPastDay(r)).map((r) => r.id);
 
   if (autoRuns.length > 0) {
@@ -185,6 +231,23 @@ export async function reconcileUser(
           .where(and(eq(plannedRuns.userId, userId), inArray(plannedRuns.id, skippedIds)));
       }
 
+      if (untrackedIds.length > 0) {
+        // Withdraw a verdict this sweep can no longer justify. Scoped to rows the sweep itself
+        // wrote (`match_source = 'auto'`) for two reasons: it repairs runs an earlier version
+        // wrongly marked skipped when it had no way to observe them, and it leaves everything
+        // else — including a `moved` status written by Google's inbound sync — untouched.
+        await tx
+          .update(plannedRuns)
+          .set({ status: "planned", matchSource: null, reconciledAt: null })
+          .where(
+            and(
+              eq(plannedRuns.userId, userId),
+              inArray(plannedRuns.id, untrackedIds),
+              eq(plannedRuns.matchSource, "auto"),
+            ),
+          );
+      }
+
       if (openIds.length > 0) {
         // Back to undecided, including reconciled_at — a run today that a previous pass
         // completed off a workout since deleted must not keep reading as reconciled.
@@ -209,6 +272,7 @@ export async function reconcileUser(
     completed: result.matches.length,
     skipped: skippedIds.length,
     reopened: openIds.length,
+    untracked: untrackedIds.length,
   };
 }
 

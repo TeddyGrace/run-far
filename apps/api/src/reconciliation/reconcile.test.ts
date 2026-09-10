@@ -17,7 +17,7 @@ process.env.ATHLETE_TIMEZONE ??= "America/New_York";
  * alone so Google's inbound conflict detection keeps working.
  */
 const { db } = await import("../db/client.js");
-const { users, plannedRuns, whoopWorkouts, trainingPlans, recommendations, recoveryMetrics } =
+const { users, plannedRuns, whoopWorkouts, trainingPlans, recommendations, recoveryMetrics, syncState } =
   await import("../db/schema.js");
 const { reconcileUser } = await import("./service.js");
 const { buildAdherence } = await import("./adherence.js");
@@ -75,6 +75,24 @@ async function addWorkout(
   return row!.id;
 }
 
+/**
+ * Record that Whoop has synced through `through`.
+ *
+ * In production a workout row only exists because a sync wrote it, and that sync also advances
+ * this watermark — so a test that inserts workouts directly has to say so too. Without it the
+ * sweep correctly refuses to call anything missed, since it has no basis for believing it would
+ * have seen the workout.
+ */
+async function markWhoopSyncedThrough(through: Date) {
+  await db
+    .insert(syncState)
+    .values({ userId, provider: "whoop", lastPolledAt: through })
+    .onConflictDoUpdate({
+      target: [syncState.userId, syncState.provider],
+      set: { lastPolledAt: through },
+    });
+}
+
 async function readRun(id: string) {
   const [row] = await db.select().from(plannedRuns).where(eq(plannedRuns.id, id));
   return row!;
@@ -99,6 +117,10 @@ beforeEach(async () => {
     .values({ userId, name: "Test block", status: "active" })
     .returning({ id: trainingPlans.id });
   planId = plan!.id;
+
+  // The default for this suite is a connected, fully-synced athlete — the assumption every test
+  // here was already making implicitly. The untracked cases below override it.
+  await markWhoopSyncedThrough(NOW);
 });
 
 afterEach(async () => {
@@ -334,7 +356,7 @@ describe("adherence", () => {
     await reconcileUser(userId, { now: NOW });
     const { summary, runs } = await buildAdherence(userId, { windowDays: 14, now: NOW });
 
-    expect(summary.counts).toEqual({ total: 3, completed: 1, skipped: 1, open: 1 });
+    expect(summary.counts).toEqual({ total: 3, completed: 1, skipped: 1, upcoming: 1, untracked: 0 });
     // 1 of 2 settled — the run still ahead of the athlete today is deliberately not counted
     // against them.
     expect(summary.completionRate).toBe(0.5);
@@ -592,5 +614,125 @@ describe("route access", () => {
       .from(plannedRuns)
       .where(and(eq(plannedRuns.id, runId), eq(plannedRuns.userId, userId)))
       .then((r) => r[0]?.actualWorkoutId)).toBeNull();
+  });
+});
+
+/**
+ * The case that slipped past the entire original suite, because every test in it seeded workouts
+ * and a sync watermark without ever asking what happens when there are none.
+ */
+describe("an athlete the app cannot observe", () => {
+  async function clearWhoopSync() {
+    await db.delete(syncState).where(and(eq(syncState.userId, userId), eq(syncState.provider, "whoop")));
+  }
+
+  it("reaches no verdict at all when Whoop has never synced", async () => {
+    await clearWhoopSync();
+    const runIds = await Promise.all([
+      addRun(local("2025-06-08T07:00:00")),
+      addRun(local("2025-06-09T07:00:00")),
+      addRun(local("2025-06-10T07:00:00")),
+    ]);
+
+    const result = await reconcileUser(userId, { now: NOW });
+
+    // The bug this replaces marked all three missed and told the athlete they were at 0%.
+    // Absence of evidence is not evidence of absence.
+    expect(result).toMatchObject({ completed: 0, skipped: 0, untracked: 3 });
+    for (const id of runIds) {
+      const run = await readRun(id);
+      expect(run.status).toBe("planned");
+      expect(run.reconciledAt).toBeNull();
+    }
+  });
+
+  it("reports untracked rather than missed, and refuses to compute a rate", async () => {
+    await clearWhoopSync();
+    await addRun(local("2025-06-09T07:00:00"));
+    await addRun(local("2025-06-10T07:00:00"));
+
+    await reconcileUser(userId, { now: NOW });
+    const { summary } = await buildAdherence(userId, { windowDays: 28, now: NOW });
+
+    expect(summary.counts).toMatchObject({ completed: 0, skipped: 0, untracked: 2 });
+    // A rate of 0 here is a lie about the athlete; null is the truth about the app.
+    expect(summary.completionRate).toBeNull();
+  });
+
+  it("still credits a run it can see, even with no sync watermark", async () => {
+    await clearWhoopSync();
+    const runId = await addRun(local("2025-06-10T07:00:00"));
+    await addWorkout("2025-06-10", local("2025-06-10T07:05:00"));
+
+    await reconcileUser(userId, { now: NOW });
+
+    // Coverage gates the *negative* verdict only. A workout that matches is positive evidence
+    // regardless of what the watermark says.
+    expect((await readRun(runId)).status).toBe("completed");
+  });
+
+  it("judges only the days the sync actually reached", async () => {
+    // Whoop stopped syncing after the 9th — a dead refresh token, say.
+    await markWhoopSyncedThrough(local("2025-06-10T00:00:00"));
+    const observed = await addRun(local("2025-06-09T07:00:00"));
+    const beyond = await addRun(local("2025-06-10T07:00:00"));
+
+    const result = await reconcileUser(userId, { now: NOW });
+
+    expect((await readRun(observed)).status).toBe("skipped");
+    // The 10th was never polled through, so nothing can be concluded about it. The watermark
+    // subsumes the connection state: a dead token simply stops it advancing.
+    expect((await readRun(beyond)).status).toBe("planned");
+    expect(result).toMatchObject({ skipped: 1, untracked: 1 });
+  });
+
+  it("requires the whole day to be polled past, not just the run's start time", async () => {
+    // Polled at 9am on the 10th. A run planned for 7am that morning could still have been done
+    // that evening, so a poll earlier the same day proves nothing about it.
+    await markWhoopSyncedThrough(local("2025-06-10T09:00:00"));
+    const runId = await addRun(local("2025-06-10T07:00:00"));
+
+    await reconcileUser(userId, { now: NOW });
+
+    expect((await readRun(runId)).status).toBe("planned");
+  });
+
+  it("repairs a run an earlier pass wrongly marked missed", async () => {
+    const runId = await addRun(local("2025-06-09T07:00:00"));
+    await reconcileUser(userId, { now: NOW });
+    expect((await readRun(runId)).status).toBe("skipped");
+
+    // The athlete disconnects Whoop and the watermark goes with it. The verdict that was based
+    // on it can no longer be justified, so it is withdrawn rather than left standing.
+    await clearWhoopSync();
+    await reconcileUser(userId, { now: NOW });
+
+    const run = await readRun(runId);
+    expect(run.status).toBe("planned");
+    expect(run.matchSource).toBeNull();
+    expect(run.reconciledAt).toBeNull();
+  });
+
+  it("leaves an athlete's own manual verdict alone", async () => {
+    await clearWhoopSync();
+    const runId = await addRun(local("2025-06-09T07:00:00"));
+
+    const app = await buildServer();
+    try {
+      await app.inject({
+        method: "PATCH",
+        url: `/api/runs/${runId}/actual`,
+        cookies: { [SESSION_COOKIE]: app.signCookie(userId) },
+        payload: { workoutId: null, status: "skipped" },
+      });
+    } finally {
+      await app.close();
+    }
+
+    await reconcileUser(userId, { now: NOW });
+
+    // The athlete saying "I missed that one" is evidence the app doesn't have and can't
+    // second-guess, wearable or not.
+    expect((await readRun(runId)).status).toBe("skipped");
   });
 });

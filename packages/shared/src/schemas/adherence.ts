@@ -56,11 +56,18 @@ export const adherenceSummarySchema = z.object({
     total: z.number().int().nonnegative(),
     completed: z.number().int().nonnegative(),
     skipped: z.number().int().nonnegative(),
-    /** Neither completed nor skipped: still upcoming, or reconciled to no verdict yet. */
-    open: z.number().int().nonnegative(),
+    /** Still ahead of the athlete today, so not yet anything. */
+    upcoming: z.number().int().nonnegative(),
+    /** Past, but with no way to tell whether it happened — Whoop isn't connected, the
+     * connection is broken, or the sync hasn't reached that day. Emphatically not the same as
+     * missed: telling an athlete they skipped a session the app simply couldn't see is both
+     * wrong and accusatory, and it is the difference between "you're at 0%" and "we're not
+     * tracking this yet". */
+    untracked: z.number().int().nonnegative(),
   }),
-  /** completed / (completed + skipped) — deliberately excludes still-open runs, so a week
-   * that has only just started doesn't read as 15% adherence. Null when nothing has settled. */
+  /** completed / (completed + skipped) — deliberately excludes upcoming and untracked runs, so
+   * neither a week that has only just started nor an athlete without a wearable reads as poor
+   * adherence. Null when nothing has settled either way. */
   completionRate: z.number().nullable(),
   plannedDistanceM: z.number(),
   actualDistanceM: z.number(),

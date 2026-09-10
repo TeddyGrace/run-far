@@ -93,6 +93,17 @@ today's recovery doesn't match what the plan expects.
   the fact, which is why they landed before the model rather than after.
   → [`recommendations/trainingContext.ts`](apps/api/src/recommendations/trainingContext.ts),
   [`recommendations/service.ts`](apps/api/src/recommendations/service.ts)
+- **"Missed" requires positive evidence** — the sweep will only call a session
+  missed if it would have seen the workout had it happened: Whoop must have
+  been polled through the *end* of that day. Absence of evidence is not
+  evidence of absence, and without the gate an athlete with a plan and no
+  wearable had every past run marked missed and was shown 0% adherence for
+  sessions the app simply couldn't observe. Wrong on the dashboard, and worse
+  in the training record, where it manufactures fabricated negatives. Runs it
+  can't observe are reported as `untracked` — a state the UI keeps visibly
+  distinct from missed — and the sweep withdraws any verdict it can no longer
+  justify, which repairs rows written before the gate existed.
+  → [`reconciliation/service.ts`](apps/api/src/reconciliation/service.ts)
 - **Closing the loop between the plan and what was run** — `planned_runs`
   carried a `completed` status from the first migration that nothing ever
   wrote: the plan and the workouts synced from Whoop were parallel tables
@@ -306,6 +317,14 @@ Coverage as of this writing:
   non-run sports and rest days excluded, one workout to at most one run on a
   double day, timed candidates beating untimed ones, and a result that is a
   function of its inputs rather than of row order.
+- Untracked vs. missed (`reconciliation/reconcile.test.ts`) — an athlete with no
+  synced workout data getting no verdict at all rather than a wall of missed
+  sessions and a 0% rate; a matching workout still counting as completed
+  regardless of the watermark, since coverage gates only the negative verdict;
+  judging only the days the sync actually reached; requiring the whole day to
+  be polled past rather than just the run's start time; withdrawing a verdict
+  that can no longer be justified; and never overriding the athlete's own
+  manual call.
 - Reconciliation sweep (`reconciliation/reconcile.test.ts`) — idempotence, a
   deleted workout un-completing the run it satisfied, a workout reassigning
   between runs without tripping the one-workout-one-run index, today's

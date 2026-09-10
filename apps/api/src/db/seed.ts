@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { db, pool } from "./client.js";
-import { users, recoveryMetrics, sleepRecords, whoopWorkouts, cycles, plannedRuns } from "./schema.js";
+import { users, recoveryMetrics, sleepRecords, whoopWorkouts, cycles, plannedRuns, syncState } from "./schema.js";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "../lib/auth.js";
 import { env } from "../env.js";
@@ -174,6 +174,18 @@ async function main() {
       origin: "manual",
     });
   }
+
+  // The seeded workouts stand in for a real Whoop sync, so record the watermark that sync would
+  // have left. Without it the reconciliation sweep correctly refuses to call anything missed —
+  // it has no basis for believing it would have seen a workout — and the whole seeded week reads
+  // as "not tracked" instead of demonstrating anything.
+  await db
+    .insert(syncState)
+    .values({ userId, provider: "whoop", lastPolledAt: new Date() })
+    .onConflictDoUpdate({
+      target: [syncState.userId, syncState.provider],
+      set: { lastPolledAt: new Date() },
+    });
 
   // Decide the past runs now, so the dashboard's adherence panel is populated on first load
   // rather than waiting for a Whoop webhook that a local dev database will never receive.
