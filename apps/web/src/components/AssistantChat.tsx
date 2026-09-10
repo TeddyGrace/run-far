@@ -23,9 +23,10 @@ const STARTER_PROMPTS = [
   "Is this a good week to add mileage?",
 ];
 
-/** Panel state lives in localStorage: the dashboard ("/") and the other tabs render separate
- * `Layout` instances, so navigating between them remounts this component. Persisting means the
- * panel comes back open, on the same thread, at the same size — across tabs and across reloads. */
+/** Panel state lives in localStorage so it survives a reload (and any remount): the panel comes
+ * back open, on the same thread, at the same size. Tab switches keep this component mounted —
+ * every signed-in route shares one `Layout` (see `AuthedApp` in App.tsx) — so navigating leaves
+ * the panel untouched rather than replaying its open animation. */
 const PREFS_KEY = "runfar.coach.panel";
 
 /** Matches the `sm:h-[34rem] sm:w-[27rem]` defaults the panel used before it was resizable. */
@@ -219,8 +220,7 @@ export function AssistantChat() {
   // Abort any in-flight stream on unmount.
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // Remember open/thread/size so the panel survives a tab switch (which remounts this
-  // component) and a reload.
+  // Remember open/thread/size so the panel survives a reload.
   useEffect(() => writePrefs({ open }), [open]);
   useEffect(() => writePrefs({ sessionId: activeSessionId }), [activeSessionId]);
   useEffect(() => writePrefs({ size }), [size]);
