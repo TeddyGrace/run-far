@@ -7,4 +7,5 @@ export * from "./schemas/settings.js";
 export * from "./schemas/auth.js";
 export * from "./schemas/weather.js";
 export * from "./schemas/adherence.js";
+export * from "./schemas/thresholds.js";
 export * from "./sports.js";

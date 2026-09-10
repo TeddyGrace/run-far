@@ -134,6 +134,13 @@ export const users = pgTable(
     // IANA zone captured from the browser at login (see lib/athleteTimezone.ts). Null falls
     // back to env.ATHLETE_TIMEZONE, same pattern as location above.
     timezone: text("timezone"),
+    // This athlete's overrides of the rules engine's tunable thresholds — what counts as a red
+    // recovery day, how many suppressed HRV days before the engine says something, and so on.
+    // Stored sparsely and merged over DEFAULT_RULE_THRESHOLDS: a field absent here means "track
+    // the shipped default", so improving a default still reaches everyone who never moved that
+    // one. Null (the common case) means no overrides at all. Never read directly — resolve it
+    // through lib/ruleThresholds.ts, same convention as modelRenderedOverride above.
+    ruleThresholds: jsonb("rule_thresholds"),
     // Null means the new-account tutorial overlay hasn't been completed/skipped yet. Existing
     // accounts are backfilled to non-null at migration time so only new signups see it.
     tutorialCompletedAt: timestamp("tutorial_completed_at", { withTimezone: true }),

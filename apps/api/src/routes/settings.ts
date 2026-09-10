@@ -1,12 +1,20 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
-import { updateUserSettingsSchema } from "@run-far/shared";
+import { updateRuleThresholdsSchema, updateUserSettingsSchema } from "@run-far/shared";
 import { requireUserId } from "../lib/session.js";
 import { db } from "../db/client.js";
 import { users, oauthConnections, trainingPlans } from "../db/schema.js";
 import { env } from "../env.js";
 import { logger } from "../lib/logger.js";
 import { invalidateForecasts } from "../integrations/weather/forecastStore.js";
+import { DEFAULT_RULE_THRESHOLDS } from "../recommendations/config.js";
+import { generateRecommendationsSafe } from "../recommendations/service.js";
+import {
+  getRuleThresholds,
+  getStoredThresholds,
+  ThresholdValidationError,
+  updateRuleThresholds,
+} from "../lib/ruleThresholds.js";
 
 function isValidIanaTimeZone(tz: string): boolean {
   try {
@@ -125,6 +133,59 @@ export async function settingsRoutes(app: FastifyInstance) {
       locationUpdatedAt: updated.locationUpdatedAt?.toISOString() ?? null,
       timezone: updated.timezone,
     };
+  });
+
+  /**
+   * The athlete's rules-engine calibration: what ships, what they changed, and the merged result.
+   *
+   * Its own endpoint rather than more fields on /api/settings because it is a different kind of
+   * setting — everything else there is account plumbing (which model, where you are, what
+   * timezone), while these change what the engine tells you about your own training.
+   */
+  app.get("/api/settings/thresholds", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+
+    const [overrides, resolved] = await Promise.all([
+      getStoredThresholds(userId),
+      getRuleThresholds(userId),
+    ]);
+    return { defaults: DEFAULT_RULE_THRESHOLDS, overrides, resolved };
+  });
+
+  app.patch("/api/settings/thresholds", async (request, reply) => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    const { thresholds } = updateRuleThresholdsSchema.parse(request.body);
+
+    try {
+      await updateRuleThresholds(userId, thresholds);
+    } catch (err) {
+      // A rejected threshold is the athlete asking for something incoherent (a red line above
+      // their yellow one, a value outside the allowed range) — a 400 with the reason, not a 500.
+      if (err instanceof ThresholdValidationError) {
+        reply
+          .status(400)
+          .send({ error: { message: err.message, code: "INVALID_THRESHOLD" } });
+        return;
+      }
+      throw err;
+    }
+
+    // Recalibrating is exactly a request to re-decide: a raised red line should retract the red
+    // card it no longer justifies, and a lowered one should mint the card it now does. The
+    // dashboard read would regenerate anyway, but not the digest — and waiting for a page load
+    // to apply a setting the athlete just changed reads as the setting not having worked.
+    // Backgrounded: the settings write has already succeeded and must not fail on this.
+    generateRecommendationsSafe(userId).catch((err) =>
+      logger.warn({ err, userId }, "failed to regenerate recommendations after threshold change"),
+    );
+
+    const [overrides, resolved] = await Promise.all([
+      getStoredThresholds(userId),
+      getRuleThresholds(userId),
+    ]);
+    return { defaults: DEFAULT_RULE_THRESHOLDS, overrides, resolved };
   });
 
   // Drives the Dashboard's onboarding checklist — cheap enough (three small lookups by

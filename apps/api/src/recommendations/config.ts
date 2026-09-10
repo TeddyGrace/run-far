@@ -1,26 +1,42 @@
-/** Tunable thresholds for the recommendation rules engine. Kept in one place so they can
- * be adjusted (or exposed as UI sliders, per the plan) without touching rule logic. */
-export const RECOMMENDATION_CONFIG = {
-  recovery: {
-    redMax: 33, // recovery_score <= this => "red" zone
-    yellowMax: 66, // recovery_score <= this (and > redMax) => "yellow" zone
-  },
-  hrv: {
-    suppressedSdThreshold: 1, // HRV this many SDs below baseline counts as "suppressed"
-    minConsecutiveDays: 2,
-  },
-  sleepDebt: {
-    thresholdMin: 90, // today's rolling sleep debt (minutes, Whoop's own figure) that triggers a shift
-  },
+import type { ResolvedRuleThresholds } from "@run-far/shared";
+
+/**
+ * Shipped defaults for the thresholds an athlete can tune.
+ *
+ * Rules never read this directly — they read the resolved set off `RuleContext.thresholds`, which
+ * is these values with that athlete's overrides applied (see lib/ruleThresholds.ts). Reading the
+ * defaults inside a rule would silently ignore whatever the athlete had set, so the constant is
+ * exported for the resolver and for tests, not as a convenience.
+ *
+ * Because overrides are stored sparsely, changing a number here reaches every athlete who has not
+ * explicitly moved that one — which is the point of storing them sparsely.
+ */
+export const DEFAULT_RULE_THRESHOLDS: ResolvedRuleThresholds = {
+  recoveryRedMax: 33, // recovery_score <= this => "red" zone
+  recoveryYellowMax: 66, // recovery_score <= this (and > red) => "yellow" zone
+  hrvSuppressedSd: 1, // HRV this many SDs below baseline counts as "suppressed"
+  hrvMinConsecutiveDays: 2, // a single suppressed day is common noise; require a run of them
+  sleepDebtThresholdMin: 90, // today's rolling sleep debt (minutes, Whoop's own figure)
+  acwrSpikeThreshold: 1.5, // acute:chronic load ratio above this is a ramp-rate warning
+  volumeReductionYellowPct: 0.2, // reduce volume/intensity ~20% on a yellow-zone hard day
+};
+
+/**
+ * Engine mechanics, deliberately *not* per-athlete.
+ *
+ * The split from DEFAULT_RULE_THRESHOLDS above is the point of this file: those are judgement
+ * calls about one athlete's physiology, and reasonable people set them differently. These are
+ * correctness and infrastructure — a data-sufficiency guard, a suppression window, a network
+ * timeout, a unit conversion. Exposing them as sliders would let an athlete break the engine
+ * rather than tune it, so they stay global and stay here.
+ */
+export const ENGINE_CONFIG = {
   acwr: {
-    spikeThreshold: 1.5, // acute:chronic training load ratio above this is a ramp-rate warning
     // Minimum completed cycles required before ACWR is reported at all. The chronic baseline is
     // a 28-cycle sum / 4; with only a handful of cycles that weekly figure is tiny and the ratio
     // explodes into a meaningless "spike", so we withhold ACWR until ~3 weeks of history exist.
+    // Not a preference: below this the number is not conservative, it is wrong.
     minChronicCycles: 21,
-  },
-  volumeReduction: {
-    yellowPct: 0.2, // reduce volume/intensity ~20% on a yellow-zone hard day
   },
   suppression: {
     // How long a dismissed/accepted recommendation's content stays suppressed. The fingerprint

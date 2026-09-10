@@ -3,7 +3,7 @@ import { gather, planSources, rulesSource, modelSource, ALL_SOURCE_IDS } from ".
 import type { RecommendationSource } from "./types.js";
 import type { RuleContext, RuleOutput } from "../types.js";
 import { evaluate } from "../evaluate.js";
-import { RECOMMENDATION_CONFIG } from "../config.js";
+import { DEFAULT_RULE_THRESHOLDS, ENGINE_CONFIG } from "../config.js";
 
 /** A context nothing fires on — enough to exercise the plumbing without fixture snapshots,
  * which the rule-level suites already cover. */
@@ -30,6 +30,9 @@ const emptyCtx = {
   weatherForecast: [],
   timeZone: "America/New_York",
   now: new Date("2026-09-08T12:00:00Z"),
+  thresholds: DEFAULT_RULE_THRESHOLDS,
+  // The cast is here because the snapshot literal above is deliberately partial; it also means
+  // a newly-required RuleContext field won't be caught by the typechecker, only at runtime.
 } as unknown as RuleContext;
 
 function fakeSource(id: string, generate: () => Promise<RuleOutput[]>): RecommendationSource {
@@ -101,7 +104,7 @@ describe("gather", () => {
     try {
       const source = fakeSource("model", () => new Promise<RuleOutput[]>(() => {}));
       const pending = gather(source, emptyCtx, "user-1");
-      await vi.advanceTimersByTimeAsync(RECOMMENDATION_CONFIG.sources.timeoutMs + 1);
+      await vi.advanceTimersByTimeAsync(ENGINE_CONFIG.sources.timeoutMs + 1);
       expect(await pending).toEqual([]);
     } finally {
       vi.useRealTimers();

@@ -1,4 +1,3 @@
-import { RECOMMENDATION_CONFIG } from "../config.js";
 import type { Rule } from "../types.js";
 import { todaysRun, isHardRun } from "./shared.js";
 
@@ -6,8 +5,8 @@ import { todaysRun, isHardRun } from "./shared.js";
  * an upcoming quality one. It's a two-way swap, not a one-way move — writing only the hard
  * run's new time (which is what this rule used to do) left today's easy run sitting at the
  * exact same instant, stacking two runs on top of each other. */
-export const greenRecoveryEasyDay: Rule = ({ snapshot, upcoming, timeZone, now }) => {
-  if (snapshot.recoveryScore == null || snapshot.recoveryScore <= RECOMMENDATION_CONFIG.recovery.yellowMax) {
+export const greenRecoveryEasyDay: Rule = ({ snapshot, upcoming, timeZone, now, thresholds }) => {
+  if (snapshot.recoveryScore == null || snapshot.recoveryScore <= thresholds.recoveryYellowMax) {
     return null;
   }
   const today = todaysRun(upcoming, timeZone, now);

@@ -4,6 +4,7 @@ import type { ConnectionStatus, UserSettings } from "@run-far/shared";
 import { AI_MODEL_OPTIONS, MIN_PASSWORD_LENGTH } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
 import { useAuth, useLogout, type Entitlement } from "../lib/auth.js";
+import { ThresholdsCard } from "../components/ThresholdsCard.js";
 
 interface BillingStatus {
   entitlement: Entitlement;
@@ -695,6 +696,7 @@ export function Settings() {
       />
       <EmailSignInCard />
       <LocationCard />
+      <ThresholdsCard />
       <AiModelsCard />
       <DangerZoneCard />
     </div>

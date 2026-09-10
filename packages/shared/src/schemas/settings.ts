@@ -30,6 +30,17 @@ export const userSettingsSchema = z.object({
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
+/** What the thresholds screen needs: the shipped defaults, whatever this athlete has actually
+ * overridden, and the two merged. Sending all three rather than only the resolved values is what
+ * lets the UI show "default" against a slider the athlete has never touched, and offer a reset
+ * that means something. */
+export const ruleThresholdSettingsSchema = z.object({
+  defaults: z.record(z.string(), z.number()),
+  overrides: z.record(z.string(), z.number()),
+  resolved: z.record(z.string(), z.number()),
+});
+export type RuleThresholdSettings = z.infer<typeof ruleThresholdSettingsSchema>;
+
 export const updateUserSettingsSchema = z.object({
   assistantModel: aiModelSchema.nullable().optional(),
   planModel: aiModelSchema.nullable().optional(),

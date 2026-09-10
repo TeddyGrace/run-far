@@ -16,7 +16,8 @@ import { getAthleteLocation } from "../lib/athleteLocation.js";
 import { pushPlannedRunToGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
 import { env } from "../env.js";
-import { RECOMMENDATION_CONFIG } from "./config.js";
+import { ENGINE_CONFIG } from "./config.js";
+import { getRuleThresholds } from "../lib/ruleThresholds.js";
 import type { ProposedChange, RecoverySnapshot } from "@run-far/shared";
 import { isChangeStale } from "./changeStaleness.js";
 import { buildTrainingContext } from "./trainingContext.js";
@@ -94,7 +95,7 @@ async function persistGroup(args: {
   // a card suppressed that exact content forever, so a legitimately recurring situation (the same
   // recurring meeting conflicting with the same run months later) could never surface again.
   const suppressionCutoff = new Date(
-    now.getTime() - RECOMMENDATION_CONFIG.suppression.windowDays * 24 * 60 * 60 * 1000,
+    now.getTime() - ENGINE_CONFIG.suppression.windowDays * 24 * 60 * 60 * 1000,
   );
   const fingerprinted = cards.map((card) => ({ card, fingerprint: fingerprintOf(card) }));
   const resolvedKeys = fingerprinted.length
@@ -279,7 +280,16 @@ export async function generateRecommendations(
     );
   }
 
-  const ctx: RuleContext = { snapshot, upcoming, busyPeriods, weatherForecast, timeZone, now };
+  const thresholds = await getRuleThresholds(userId);
+  const ctx: RuleContext = {
+    snapshot,
+    upcoming,
+    busyPeriods,
+    weatherForecast,
+    timeZone,
+    now,
+    thresholds,
+  };
   const plan = planSources({
     modelRendered: await isModelRenderedFor(userId),
     ingestion: opts.ingestion ?? false,

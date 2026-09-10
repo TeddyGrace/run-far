@@ -137,6 +137,21 @@ today's recovery doesn't match what the plan expects.
   off for the length of an outage.
   → [`integrations/weather/forecastStore.ts`](apps/api/src/integrations/weather/forecastStore.ts),
   [`integrations/google/calendarClient.ts`](apps/api/src/integrations/google/calendarClient.ts)
+- **Calibration is per athlete, and the split from engine mechanics is explicit** —
+  what counts as a red recovery day was one global constant, so every athlete
+  was reasoned about with someone else's numbers. Thresholds now resolve per
+  athlete: shipped defaults with a *sparse* override merged over them, so a
+  field the athlete never touched keeps tracking a future improvement to the
+  default rather than freezing today's value at signup, and `null` (distinct
+  from omitting) is how you opt back in. Rules read the resolved set off their
+  context and never reach for the defaults themselves, which keeps them pure
+  functions of their input. The tunables are deliberately only the judgement
+  calls — the suppression window, the source timeout, ACWR's data-sufficiency
+  floor and the strain→load curve stay in `ENGINE_CONFIG`, because those are
+  correctness, and a slider for them would let an athlete break the engine
+  rather than tune it.
+  → [`recommendations/config.ts`](apps/api/src/recommendations/config.ts),
+  [`lib/ruleThresholds.ts`](apps/api/src/lib/ruleThresholds.ts)
 - **Runtime switches, not redeploys** — whether athletes see model-sourced
   recommendations is a backoffice toggle with a global default and per-account
   overrides, resolved in one place. The model runs and is scored either way;
@@ -283,6 +298,15 @@ Coverage as of this writing:
   the requested window isn't contained by the cached one (a narrower window
   would read as "nothing scheduled"), per-user isolation, and explicit
   invalidation on reconnect.
+- Per-athlete thresholds (`lib/ruleThresholds.test.ts`) — sparse overrides
+  leaving untouched fields tracking the default, a stored null reading as
+  absent rather than as zero (which would silently switch the red-zone rule
+  off), a malformed or out-of-range stored row degrading to defaults instead
+  of failing the read, `null` clearing an override, red-below-yellow validated
+  against the *resolved* pair rather than the patch, and per-athlete isolation.
+  Their effect on the engine is covered in `evaluate.test.ts`: the same
+  physiology producing a different verdict for a differently-tuned athlete, and
+  cards quoting the athlete's own threshold back to them.
 - Timezone helpers (`lib/zonedTime.test.ts`) — wall-clock conversion, and
   `addLocalDays` preserving the athlete's clock time across both DST boundaries.
 - Recommendation fingerprinting (`recommendations/fingerprint.test.ts`) —

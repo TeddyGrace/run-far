@@ -1,10 +1,9 @@
-import { RECOMMENDATION_CONFIG } from "../config.js";
 import type { Rule } from "../types.js";
 import { todaysRun, isHardRun } from "./shared.js";
 
 /** Recovery is in the yellow zone and a hard session is next: trim volume/intensity, keep the type. */
-export const yellowRecoveryHardSession: Rule = ({ snapshot, upcoming, timeZone, now }) => {
-  const { redMax, yellowMax } = RECOMMENDATION_CONFIG.recovery;
+export const yellowRecoveryHardSession: Rule = ({ snapshot, upcoming, timeZone, now, thresholds }) => {
+  const { recoveryRedMax: redMax, recoveryYellowMax: yellowMax } = thresholds;
   if (
     snapshot.recoveryScore == null ||
     snapshot.recoveryScore <= redMax ||
@@ -15,7 +14,7 @@ export const yellowRecoveryHardSession: Rule = ({ snapshot, upcoming, timeZone, 
   const run = todaysRun(upcoming, timeZone, now);
   if (!isHardRun(run) || !run) return null;
 
-  const pct = RECOMMENDATION_CONFIG.volumeReduction.yellowPct;
+  const pct = thresholds.volumeReductionYellowPct;
   const newDuration = run.durationMin != null ? Math.round(run.durationMin * (1 - pct)) : null;
   const newDistance = run.distanceM != null ? Math.round(run.distanceM * (1 - pct)) : null;
 

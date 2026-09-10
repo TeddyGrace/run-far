@@ -1,4 +1,9 @@
-import type { RecoverySnapshot, RecommendationSeverity, ProposedChange } from "@run-far/shared";
+import type {
+  RecoverySnapshot,
+  RecommendationSeverity,
+  ProposedChange,
+  ResolvedRuleThresholds,
+} from "@run-far/shared";
 import type { plannedRuns } from "../db/schema.js";
 import type { DailyForecast } from "../integrations/weather/weatherClient.js";
 
@@ -32,6 +37,11 @@ export interface RuleContext {
   /** The instant the engine is evaluating "now" at. Passed in rather than read from the clock
    * inside a rule, so rules stay pure functions of their input and "today" is fixture-testable. */
   now: Date;
+  /** This athlete's tunable thresholds, already resolved against the shipped defaults (see
+   * lib/ruleThresholds.ts). Passed in for the same reason `timeZone` and `now` are: a rule that
+   * reached for DEFAULT_RULE_THRESHOLDS itself would silently ignore whatever the athlete had
+   * set, and would stop being a pure function of its input. */
+  thresholds: ResolvedRuleThresholds;
 }
 
 export interface RuleOutput {

@@ -3,6 +3,7 @@ import { weatherAdvisory } from "./weatherAdvisory.js";
 import type { RuleContext, PlannedRunRow } from "../types.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import type { DailyForecast } from "../../integrations/weather/weatherClient.js";
+import { DEFAULT_RULE_THRESHOLDS } from "../config.js";
 
 const baseSnapshot: RecoverySnapshot = {
   date: "2026-08-12",
@@ -76,6 +77,9 @@ function makeContext(overrides: Partial<RuleContext> = {}): RuleContext {
     upcoming: [],
     busyPeriods: [],
     weatherForecast: [],
+    // The shipped defaults, so these fixtures keep asserting against the calibration the engine
+    // actually ships with. A test that needs a differently-tuned athlete overrides this field.
+    thresholds: DEFAULT_RULE_THRESHOLDS,
     timeZone: "America/New_York",
     now: new Date("2026-08-12T12:00:00Z"),
     ...overrides,

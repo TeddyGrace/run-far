@@ -2,7 +2,7 @@ import type { RuleContext } from "../types.js";
 import type { RecommendationSource, SourcedOutput } from "./types.js";
 import { rulesSource } from "./rulesSource.js";
 import { modelSource } from "./modelSource.js";
-import { RECOMMENDATION_CONFIG } from "../config.js";
+import { ENGINE_CONFIG } from "../config.js";
 import { logger } from "../../lib/logger.js";
 
 export type { RecommendationSource, SourcedOutput } from "./types.js";
@@ -73,7 +73,7 @@ export async function gather(
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`source '${source.id}' timed out`)),
-          RECOMMENDATION_CONFIG.sources.timeoutMs,
+          ENGINE_CONFIG.sources.timeoutMs,
         );
       }),
     ]);
