@@ -4,9 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AssistantChat } from "./AssistantChat.js";
 
 /**
- * The coach panel is remounted whenever the athlete switches tabs — "/" and the other routes
- * render separate `Layout` instances — so its open state, thread and size live in
- * localStorage. These tests pin that, plus the drag-to-resize behaviour.
+ * The coach panel's open state, thread and size live in localStorage so a reload brings it
+ * back as it was. (Tab switches don't remount it — every signed-in route shares one `Layout`;
+ * see App.test.tsx.) These tests pin that, plus the drag-to-resize behaviour.
  */
 
 const PREFS_KEY = "runfar.coach.panel";
@@ -54,7 +54,7 @@ describe("AssistantChat", () => {
     expect(readStoredPrefs().open).toBe(true);
   });
 
-  it("reopens on the stored thread after a remount, the way a tab switch causes", () => {
+  it("reopens on the stored thread after a remount, the way a reload causes", () => {
     window.localStorage.setItem(
       PREFS_KEY,
       JSON.stringify({ open: true, sessionId: "session-7", size: { width: 500, height: 600 } }),
