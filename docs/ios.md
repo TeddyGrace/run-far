@@ -180,6 +180,35 @@ data from an athlete still on Whoop is stored rather than refused, so you arrive
 with history already there instead of an empty dashboard and a month's wait for a baseline. The
 Settings card tells you when data is syncing but not yet being read.
 
+## Building without a local Mac: GitHub Actions
+
+`.github/workflows/ios.yml` builds the app on a GitHub-hosted Mac, so Xcode never needs to be
+installed locally. The generated Xcode project (`apps/web/ios/`) is committed with HealthKit,
+Background Delivery and the Info.plist purpose strings already set (steps 4 and 5 above are done).
+
+**Unsigned compile, on every push touching the app.** No Apple account, no secrets. This is the
+loop for fixing Swift compile errors.
+
+**TestFlight upload, on demand.** Actions → iOS → Run workflow → tick *testflight*. Requires the
+paid account (a free Personal Team cannot issue API keys or distribution certificates), plus,
+once:
+
+1. Developer portal → Identifiers → register App ID `app.runfar.ios` with **HealthKit** enabled.
+2. App Store Connect → Apps → **+** → New App, bundle ID `app.runfar.ios`. The API cannot create
+   the app record; this step is manual.
+3. App Store Connect → Users and Access → Integrations → App Store Connect API → generate a
+   **Team key with the Admin role**. Admin is what lets CI create the cloud-managed distribution
+   certificate and provisioning profile. Download the `.p8` (only downloadable once).
+4. Add repository secrets (Settings → Secrets and variables → Actions):
+   - `APP_STORE_CONNECT_KEY_ID` — the key's ID
+   - `APP_STORE_CONNECT_ISSUER_ID` — shown above the keys table
+   - `APP_STORE_CONNECT_KEY_P8` — the full contents of the `.p8` file
+   - `APPLE_TEAM_ID` — Membership details in the developer portal
+
+The build number is the workflow run number, so every upload is accepted. Once processing
+finishes (usually 10–30 minutes), install the TestFlight app on the phone, signed in with the same
+Apple ID, and the build appears under internal testing with no App Review.
+
 ## What to expect from the data
 
 **No recovery score for the first two weeks.** Apple publishes no recovery score, so run-far

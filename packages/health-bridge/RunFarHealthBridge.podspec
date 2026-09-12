@@ -3,7 +3,7 @@ require 'json'
 package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
 
 Pod::Spec.new do |s|
-  s.name = 'HealthBridge'
+  s.name = 'RunFarHealthBridge'
   s.version = package['version']
   s.summary = 'Reads Apple Health (HealthKit) on-device and pushes it to the run-far API.'
   s.license = 'UNLICENSED'

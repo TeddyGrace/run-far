@@ -13,7 +13,7 @@
   "files": [
     "src",
     "ios",
-    "HealthBridge.podspec"
+    "RunFarHealthBridge.podspec"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
