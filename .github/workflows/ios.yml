@@ -1,0 +1,135 @@
+name: iOS
+
+# Builds the Capacitor iOS app on a GitHub-hosted Mac, so nobody needs Xcode locally.
+#
+# Two modes:
+# - Every push that touches the app: an unsigned compile. Needs no Apple account and no
+#   secrets, and is how Swift errors in packages/health-bridge get caught.
+# - Manual run with "testflight" ticked: a signed archive uploaded to TestFlight. Needs the paid
+#   Apple Developer account and the secrets described in docs/ios.md.
+
+on:
+  push:
+    paths:
+      - apps/web/**
+      - packages/health-bridge/**
+      - packages/shared/**
+      - pnpm-lock.yaml
+      - .github/workflows/ios.yml
+  workflow_dispatch:
+    inputs:
+      testflight:
+        description: Sign and upload to TestFlight
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    env:
+      # Public origin, not a secret. Set explicitly here rather than defaulted in
+      # capacitor.config.ts, which deliberately refuses to build without it.
+      RUNFAR_IOS_ORIGIN: https://run-far.cc
+      LANG: en_US.UTF-8
+
+    defaults:
+      run:
+        working-directory: apps/web/ios/App
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.8.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install and build web
+        working-directory: .
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @run-far/web build
+
+      - name: Capacitor sync (runs pod install)
+        working-directory: .
+        run: pnpm --filter @run-far/web exec cap sync ios
+
+      - name: Compile (unsigned)
+        if: ${{ !inputs.testflight }}
+        run: |
+          xcodebuild -version
+          set -o pipefail
+          xcodebuild build \
+            -workspace App.xcworkspace -scheme App -configuration Release \
+            -destination generic/platform=iOS \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --renderer github-actions
+
+      - name: Write App Store Connect API key
+        if: ${{ inputs.testflight }}
+        env:
+          ASC_KEY_P8: ${{ secrets.APP_STORE_CONNECT_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/key.p8"
+
+      - name: Archive (signed)
+        if: ${{ inputs.testflight }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -workspace App.xcworkspace -scheme App -configuration Release \
+            -destination generic/platform=iOS \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/key.p8" \
+            -authenticationKeyID "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            | xcbeautify --renderer github-actions
+
+      - name: Upload to TestFlight
+        if: ${{ inputs.testflight }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+          </dict>
+          </plist>
+          EOF
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/key.p8" \
+            -authenticationKeyID "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}" \
+            | xcbeautify --renderer github-actions
+
+      - name: Remove API key
+        if: ${{ always() && inputs.testflight }}
+        run: rm -rf "$RUNNER_TEMP/asc"
