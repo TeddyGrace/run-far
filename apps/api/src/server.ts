@@ -182,9 +182,31 @@ export async function buildServer() {
 
 async function main() {
   const app = await buildServer();
+
+  // Migrate before listening.
+  //
+  // This used to be the other way round, so the platform health check would pass immediately
+  // and a slow migration couldn't fail a deploy. That was safe for as long as every migration
+  // was additive: new code against the old schema only missed columns it was about to gain.
+  //
+  // It stopped being safe once a migration renamed something. `/health` does not touch the
+  // database, so it passes the moment the port is bound — which let the platform route traffic
+  // to a new container whose code queries `workouts` while the table was still
+  // `whoop_workouts`, for however long the migration took. Every dashboard read in that window
+  // is a 500, and the deploy looks healthy throughout.
+  //
+  // A migration failure still must not take the API down — that property was the point of the
+  // original ordering and is kept: the error is logged and the server starts anyway, serving
+  // whatever schema is actually there. What changes is that the *successful* case is now
+  // ordered correctly, which is the case that happens on every deploy.
   try {
-    // Listen before migrating so the platform health check passes immediately; a slow or
-    // failing migration then shows up as a logged error instead of a failed deploy.
+    await runMigrations();
+    logger.info("migrations applied");
+  } catch (err) {
+    logger.error({ err }, "migrations failed — starting anyway; the schema may be stale");
+  }
+
+  try {
     await app.listen({ port: env.listenPort, host: "0.0.0.0" });
     logger.info(`API listening on http://0.0.0.0:${env.listenPort}`);
   } catch (err) {
@@ -193,12 +215,10 @@ async function main() {
   }
 
   try {
-    await runMigrations();
-    logger.info("migrations applied");
     // After migrations, so a fresh database has the users table to reconcile against.
     await reconcileAdminEmails();
   } catch (err) {
-    logger.error({ err }, "migrations failed — API is up but the schema may be stale");
+    logger.error({ err }, "admin email reconciliation failed");
   }
 
   startWhoopNightlySync();
