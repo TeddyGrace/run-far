@@ -5,6 +5,7 @@ import { AI_MODEL_OPTIONS, MIN_PASSWORD_LENGTH } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
 import { useAuth, useLogout, type Entitlement } from "../lib/auth.js";
 import { ThresholdsCard } from "../components/ThresholdsCard.js";
+import { HealthSourceCard } from "../components/HealthSourceCard.js";
 
 interface BillingStatus {
   entitlement: Entitlement;
@@ -663,6 +664,7 @@ export function Settings() {
       <h1 className="mb-2 font-display text-xl font-semibold text-ink-primary">Settings</h1>
       <AccountCard />
       <BillingCard />
+      <HealthSourceCard />
       <ConnectionCard
         title="Whoop"
         description="Recovery, HRV, sleep, and workout data driving today's recommendation. Until Whoop webhooks are hosted live, use Sync now to pull the last 90 days."

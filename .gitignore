@@ -43,3 +43,16 @@ apps/api/uploads/
 
 # Local Postgres data directory (dev convenience; not portable, not source)
 .pgdata/
+
+# iOS (Capacitor). The generated Xcode project at apps/web/ios IS committed
+# intentionally — it carries the HealthKit capability and the Info.plist purpose
+# strings, which are hand-edited and can't be regenerated (see docs/ios.md).
+# What's excluded is everything derived from it or from `cap sync`.
+apps/web/ios/App/Pods/
+apps/web/ios/App/Podfile.lock
+apps/web/ios/App/App/public/
+apps/web/ios/App/App/capacitor.config.json
+apps/web/ios/App/public/
+apps/web/DerivedData/
+*.xcuserstate
+xcuserdata/

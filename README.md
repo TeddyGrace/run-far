@@ -1,10 +1,11 @@
 # run-far
 
 **A running training-log and recovery assistant.** It pulls recovery/sleep
-data from Whoop, imports a training plan from TrainingPeaks (or has Claude
-build one from a conversation), keeps it two-way synced with Google Calendar,
-and runs a deterministic rules engine that proposes schedule changes when
-today's recovery doesn't match what the plan expects.
+data from Whoop **or Apple Health**, imports a training plan from
+TrainingPeaks (or has Claude build one from a conversation), keeps it two-way
+synced with Google Calendar, and runs a deterministic rules engine that
+proposes schedule changes when today's recovery doesn't match what the plan
+expects.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
@@ -21,8 +22,8 @@ today's recovery doesn't match what the plan expects.
 
 ## What it does
 
-- **Recovery-aware scheduling** — reads Whoop recovery, HRV, sleep, and
-  strain data and compares it against the active plan; a rules engine
+- **Recovery-aware scheduling** — reads recovery, HRV, sleep, and strain data
+  from the athlete's wearable and compares it against the active plan; a rules engine
   proposes concrete edits (downgrade a hard session, push a session out a
   day, swap it with an easy one) rather than just flagging a problem. Rules
   are arbitrated down to one card per run, so no two suggestions can propose
@@ -34,7 +35,13 @@ today's recovery doesn't match what the plan expects.
   timed commitments on the athlete's primary calendar (declined invites,
   all-day events, and "Free"-marked events are filtered out) and proposes
   the nearest open slot.
-- **Planned vs. actual reconciliation** — matches the workouts Whoop synced
+- **Whoop or Apple Health, switchable** — one active source per athlete, with
+  the other's history retained but unread. Apple publishes no recovery score,
+  so run-far derives one from the athlete's own HRV/resting-HR/sleep baselines
+  and says, on every row, that the score is derived rather than reported.
+  Apple Health data reaches the app from the iOS build, which reads HealthKit
+  on the device — see [docs/ios.md](docs/ios.md).
+- **Planned vs. actual reconciliation** — matches the workouts the wearable synced
   against the sessions the plan asked for, so the app can say whether the
   plan is actually being followed rather than only what was intended. Runs
   reconcile to completed or missed on their own, and the athlete can correct
@@ -45,6 +52,58 @@ today's recovery doesn't match what the plan expects.
 
 ## Engineering highlights
 
+- **One wearable at a time, because the metrics aren't interchangeable** — the
+  recovery/sleep/cycle/workout tables carry a provider and that provider's own
+  id, and every read is filtered to the one source the athlete has active.
+  That filter is correctness, not tidiness. Whoop reports HRV as RMSSD and
+  Apple Watch reports SDNN — different computations with different scales — so
+  a 30-day baseline mixing them has a mean and an SD that describe neither, and
+  every rule phrased as "N SDs below baseline" would compare a reading against a
+  distribution it isn't drawn from. Likewise a dual-wearing athlete's run would
+  otherwise produce two workout rows for one run: inflated mileage, inflated
+  acute load, and two candidates handed to the reconciliation matcher for one
+  session. Switching is not a migration — the other provider's rows stay,
+  unread, and reading resumes on switching back.
+  → [`lib/healthProvider.ts`](apps/api/src/lib/healthProvider.ts)
+- **A recovery score for Apple Health, stated as derived** — Whoop ships a
+  0-100 score and the engine's thresholds are phrased against it; HealthKit
+  exposes the inputs and nothing that combines them. run-far computes a
+  weighted composite of how far each reading sits from *this athlete's own*
+  trailing baseline, in SDs. The z-score construction is what makes a
+  self-invented score defensible: it has no opinion about what a good HRV is,
+  only what is normal for this athlete, so a 30ms-SDNN athlete and a 90ms one
+  score identically on an ordinary day. The 0-100 mapping is *solved through*
+  the thresholds it feeds rather than tuned by feel — a composite 0.75 SD down
+  is the yellow boundary and 1.5 SD down is red, by construction. Below 14 days
+  of baseline it returns no score at all, because one built on a 3-day SD
+  swings on ordinary variation, and for a new athlete that means a red-recovery
+  card telling them to abandon a real session out of noise; the rules read a
+  null score as "no opinion" and stay silent. Every row records
+  `recovery_score_source`, so a derived score can never be read as a wearable's
+  own.
+  → [`integrations/appleHealth/recoveryScore.ts`](apps/api/src/integrations/appleHealth/recoveryScore.ts)
+- **Synthesizing the concept Apple doesn't have** — the snapshot resolves
+  "today" through the current physiological cycle rather than a calendar date,
+  and the load windows count completed cycles. Apple has no cycle concept, so
+  rather than branching every consumer on provider, cycles are synthesized
+  wake-to-wake from consecutive primary sleeps — which is also why nap
+  classification is re-derived server-side instead of trusted from the device,
+  since a nap promoted to primary would report a 25-minute night. ACWR then
+  works unchanged: `cycleLoad` prefers kilojoules, and an Apple cycle always has
+  them, so it never touches the Whoop-calibrated strain approximation. Strain
+  itself stays null — inventing one on a log scale whose shape we don't know
+  would be a fabrication.
+  → [`integrations/appleHealth/cycles.ts`](apps/api/src/integrations/appleHealth/cycles.ts)
+- **The one credential that never expires, gated where everything else is** —
+  HealthKit background delivery wakes native code with no WebView, so a device
+  holds a bearer token in the iOS Keychain rather than using the session
+  cookie. Because such a token has no expiry, it is resolved in the global
+  `activeUserGuard` rather than only in the ingest route: a guard that
+  understood only cookies would let a disabled or lapsed account's phone push
+  indefinitely, and the single place that decides what "active" means would
+  quietly not apply to the one credential that never ages out.
+  → [`lib/activeUser.ts`](apps/api/src/lib/activeUser.ts),
+  [`integrations/appleHealth/devices.ts`](apps/api/src/integrations/appleHealth/devices.ts)
 - **Two-way calendar sync with conflict resolution** — inbound and outbound
   Google Calendar sync avoid update loops via a sync-origin marker, and when
   both the app and Google changed the same run since the last sync, the
@@ -225,17 +284,27 @@ today's recovery doesn't match what the plan expects.
 ```
 apps/
   web/          Vite + React + TypeScript + Tailwind + TanStack Query + dnd-kit
+                (+ Capacitor shell for the iOS build)
   api/          Fastify + TypeScript + Drizzle ORM → Postgres
 packages/
   shared/       Zod schemas + inferred types shared by web and api
+  health-bridge/ Capacitor plugin (Swift) reading HealthKit on-device
 ```
 
 `packages/shared` is the contract between the two apps — every API route
 validates with the same Zod schema the SPA imports, so request/response
-shapes can't drift silently. Data flows one way in: Whoop and TrainingPeaks
+shapes can't drift silently. Data flows one way in: wearable and TrainingPeaks
 data land in Postgres, the rules engine reads a snapshot of it, and
 proposed changes are applied back to `planned_runs` (then pushed out to
 Google) only when the athlete accepts them.
+
+Apple Health is the one source that inverts that flow. HealthKit has no cloud
+API — the data lives on the device — so the iOS app reads it and pushes to
+`POST /api/apple-health/ingest`, authenticated by a per-device bearer token
+rather than the session cookie, because HealthKit background delivery wakes
+native code with no WebView alive. That wake is the point of the iOS build: it
+is what puts this morning's recovery on the dashboard before the athlete opens
+anything. See [docs/ios.md](docs/ios.md).
 
 ## Quickstart
 
@@ -435,6 +504,19 @@ provider's own developer console.
 
 Once connected (Settings → Whoop → Connect), the app backfills 90 days of
 recovery, sleep, and workout data automatically.
+
+### Apple Health
+
+Nothing to register with Apple for the *data* — HealthKit has no OAuth app and
+no cloud API. What it needs instead is the iOS build, because the data is only
+readable by an app running on the device. That means an Apple Developer account
+($99/yr) for the HealthKit entitlement, an Xcode project generated by
+Capacitor, and two Info.plist purpose strings.
+
+The full runbook — what the developer account buys at each step, the
+capabilities to tick (Background Delivery is the one whose absence looks like a
+bug), App Review notes, and what the data does and doesn't include compared
+with Whoop — is in [docs/ios.md](docs/ios.md).
 
 ### Google (Sign-In + Calendar)
 
