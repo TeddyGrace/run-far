@@ -13,6 +13,7 @@ import { logger } from "./lib/logger.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { whoopRoutes } from "./routes/whoop.js";
+import { appleHealthRoutes } from "./routes/appleHealth.js";
 import { planRoutes } from "./routes/plans.js";
 import { runRoutes } from "./routes/runs.js";
 import { googleRoutes } from "./routes/google.js";
@@ -113,6 +114,7 @@ export async function buildServer() {
   await app.register(authRoutes);
   await app.register(whoopRoutes);
   await app.register(whoopWebhookRoutes);
+  await app.register(appleHealthRoutes);
   await app.register(planRoutes);
   await app.register(runRoutes);
   await app.register(googleRoutes);

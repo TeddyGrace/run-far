@@ -7,6 +7,7 @@ import { users, oauthConnections, trainingPlans } from "../db/schema.js";
 import { env } from "../env.js";
 import { logger } from "../lib/logger.js";
 import { invalidateForecasts } from "../integrations/weather/forecastStore.js";
+import { getHealthProviderAvailability } from "../lib/healthProvider.js";
 import { DEFAULT_RULE_THRESHOLDS } from "../recommendations/config.js";
 import { generateRecommendationsSafe } from "../recommendations/service.js";
 import {
@@ -39,6 +40,7 @@ export async function settingsRoutes(app: FastifyInstance) {
         locationLon: users.locationLon,
         locationUpdatedAt: users.locationUpdatedAt,
         timezone: users.timezone,
+        activeHealthProvider: users.activeHealthProvider,
       })
       .from(users)
       .where(eq(users.id, userId));
@@ -59,6 +61,10 @@ export async function settingsRoutes(app: FastifyInstance) {
       locationLon: user.locationLon,
       locationUpdatedAt: user.locationUpdatedAt?.toISOString() ?? null,
       timezone: user.timezone,
+      activeHealthProvider: user.activeHealthProvider,
+      // Sent alongside the choice so the picker can warn that switching would leave the
+      // dashboard empty, rather than letting the athlete find that out by switching.
+      healthProviderAvailability: await getHealthProviderAvailability(userId),
     };
   });
 
@@ -84,6 +90,13 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
 
     const settingLocation = "locationLat" in body || "locationLon" in body;
+    const [before] = await db
+      .select({ activeHealthProvider: users.activeHealthProvider })
+      .from(users)
+      .where(eq(users.id, userId));
+    const switchedProvider =
+      body.activeHealthProvider != null &&
+      body.activeHealthProvider !== before?.activeHealthProvider;
     const returning = {
       assistantModel: users.assistantModel,
       planModel: users.planModel,
@@ -91,6 +104,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       locationLon: users.locationLon,
       locationUpdatedAt: users.locationUpdatedAt,
       timezone: users.timezone,
+      activeHealthProvider: users.activeHealthProvider,
     };
     const fields = {
       ...(isAdmin && "assistantModel" in body ? { assistantModel: body.assistantModel ?? null } : {}),
@@ -99,6 +113,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       ...("locationLon" in body ? { locationLon: body.locationLon ?? null } : {}),
       ...(settingLocation ? { locationUpdatedAt: body.locationLat != null ? new Date() : null } : {}),
       ...("timezone" in body ? { timezone: body.timezone ?? null } : {}),
+      ...(body.activeHealthProvider ? { activeHealthProvider: body.activeHealthProvider } : {}),
     };
     // A non-admin sending only assistantModel/planModel leaves `fields` empty once those are
     // stripped above — .update().set({}) would otherwise throw, so that case is just a no-op
@@ -122,6 +137,22 @@ export async function settingsRoutes(app: FastifyInstance) {
       );
     }
 
+    // Switching wearable changes every input the engine reads, so the cards on screen were
+    // computed from data that is no longer the athlete's active data. Regenerating immediately
+    // is what stops the dashboard showing a Whoop-derived red-recovery card next to an Apple
+    // Health recovery number that disagrees with it. Best-effort and fire-and-forget, like the
+    // forecast invalidation above: the setting is already saved, and the next dashboard read
+    // regenerates anyway.
+    if (switchedProvider) {
+      logger.info(
+        { userId, provider: body.activeHealthProvider },
+        "active health provider changed",
+      );
+      generateRecommendationsSafe(userId).catch(() => {
+        /* generateRecommendationsSafe already logs; it never throws. */
+      });
+    }
+
     return {
       assistantModel: isAdmin ? updated.assistantModel : null,
       planModel: isAdmin ? updated.planModel : null,
@@ -132,6 +163,8 @@ export async function settingsRoutes(app: FastifyInstance) {
       locationLon: updated.locationLon,
       locationUpdatedAt: updated.locationUpdatedAt?.toISOString() ?? null,
       timezone: updated.timezone,
+      activeHealthProvider: updated.activeHealthProvider,
+      healthProviderAvailability: await getHealthProviderAvailability(userId),
     };
   });
 

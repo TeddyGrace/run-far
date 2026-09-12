@@ -782,6 +782,46 @@ export const aiUsage = pgTable(
 // Idempotency ledger for the Stripe webhook (integrations/stripe/webhooks.ts). Stripe retries
 // delivery and can also send events out of order, so every handler inserts the event id here
 // before acting; a unique-violation on insert means "already processed" and the handler no-ops.
+/**
+ * Devices authorized to push Apple Health data for an athlete.
+ *
+ * Everything else in the app authenticates with the signed session cookie, and inside the
+ * Capacitor WebView that keeps working unchanged. This table exists for the half of the iOS
+ * app that runs *outside* the WebView: HealthKit background delivery wakes the native app when
+ * new data lands, often with no WebView alive and the athlete's phone in their pocket. That
+ * wake is the entire point of the iOS app — it is what makes this morning's recovery already
+ * be there — and native Swift has no access to the WebView's cookie jar.
+ *
+ * So a device holds its own long-lived bearer token in the iOS Keychain. Only the SHA-256 hash
+ * is stored here, the same treatment auth_tokens gives emailed links: a database copy is not
+ * enough to push data as the athlete. Unlike those, this token is reusable and has no expiry —
+ * it is a device registration, not a one-shot link — which is why it needs to be revocable
+ * per-device from Settings, and why lastSeenAt is recorded, so an athlete can tell which
+ * registration is the phone in their hand and which is the one they sold.
+ */
+export const healthIngestDevices = pgTable(
+  "health_ingest_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // Device-reported label ("iPhone 15 Pro"), shown in Settings so a revoke targets the right
+    // one. Cosmetic and untrusted: it comes from the device and is never matched on.
+    label: text("label"),
+    tokenHash: text("token_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // Last successful push. Null until the device's first one — which distinguishes "registered
+    // but HealthKit permission was never granted" from "syncing fine".
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("health_ingest_devices_token_hash_idx").on(t.tokenHash),
+    index("health_ingest_devices_user_idx").on(t.userId),
+  ],
+);
+
 export const processedWebhookEvents = pgTable("processed_webhook_events", {
   id: text("id").primaryKey(), // the provider's event id, e.g. Stripe's evt_...
   provider: text("provider").notNull(), // "stripe" today; free-text so a future provider needs no migration

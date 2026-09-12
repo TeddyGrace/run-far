@@ -5,6 +5,7 @@ import { users } from "../db/schema.js";
 import { SESSION_COOKIE } from "./session.js";
 import { cookieOpts } from "./cookies.js";
 import { resolveEntitlement } from "./entitlement.js";
+import { resolveDeviceToken } from "../integrations/appleHealth/devices.js";
 
 // Routes a signed-in-but-unentitled user still needs: checking their own status, subscribing
 // or managing billing, and exporting or closing their own account. Everything else is closed
@@ -44,6 +45,38 @@ function isUnentitledAllowed(url: string): boolean {
 }
 
 /**
+ * The athlete a request is acting as, by either credential the app can present.
+ *
+ * The session cookie is the normal case. The bearer token is an Apple Health push from a
+ * device's native background wake, which has no WebView and therefore no cookies (see
+ * integrations/appleHealth/devices.ts).
+ *
+ * Resolving both *here*, in the global guard, rather than only in the ingest route is the
+ * point: a device token is a long-lived credential with no expiry, so if the guard only
+ * understood cookies, a disabled account's phone — or one whose subscription lapsed months ago
+ * — would go on pushing data indefinitely, and the single place that decides what "active"
+ * means would quietly not apply to the one credential that never ages out.
+ */
+async function requestUserId(request: FastifyRequest): Promise<string | null> {
+  const raw = request.cookies[SESSION_COOKIE];
+  if (raw) {
+    const unsigned = request.unsignCookie(raw);
+    if (!unsigned.valid || !unsigned.value) return null; // requireUserId reports the bad session
+    return unsigned.value;
+  }
+
+  const header = request.headers.authorization;
+  if (header?.startsWith("Bearer ")) {
+    const resolved = await resolveDeviceToken(header.slice("Bearer ".length).trim());
+    // An unknown or revoked token is the route's 401 to send, not the guard's: the guard only
+    // has an opinion about accounts it can identify.
+    return resolved?.userId ?? null;
+  }
+
+  return null;
+}
+
+/**
  * Kills a live session the moment its account is disabled from the backoffice, rather than
  * letting the (30-day) session cookie ride until it expires. Also blocks all but a small
  * allowlist of routes while the account has no active entitlement — see lib/entitlement.ts,
@@ -68,10 +101,8 @@ export async function activeUserGuard(
   // their own cookie via /api/auth/logout.
   if (PUBLIC_AUTH_PATHS.has(url)) return;
 
-  const raw = request.cookies[SESSION_COOKIE];
-  if (!raw) return;
-  const unsigned = request.unsignCookie(raw);
-  if (!unsigned.valid || !unsigned.value) return; // requireUserId reports the bad session
+  const userId = await requestUserId(request);
+  if (!userId) return; // no credentials, or a bad session the route itself will report
 
   const [user] = await db
     .select({
@@ -82,9 +113,11 @@ export async function activeUserGuard(
       entitlementExpiresAt: users.entitlementExpiresAt,
     })
     .from(users)
-    .where(eq(users.id, unsigned.value));
+    .where(eq(users.id, userId));
 
   if (user?.disabledAt) {
+    // Harmless on a bearer-token request (there is no cookie to clear); the 401 is what stops
+    // the device, and the app treats a 401 as "stop retrying, ask the athlete to reconnect".
     reply.clearCookie(SESSION_COOKIE, cookieOpts());
     await reply.status(401).send({
       error: { message: "Account disabled", code: "ACCOUNT_DISABLED" },
