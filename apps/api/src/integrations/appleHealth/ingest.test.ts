@@ -205,6 +205,41 @@ describe("ingestAppleHealth", () => {
     expect(rescored?.score).toBeLessThan(earlyRow!.score!);
   });
 
+  it("counts a morning run toward the day it happened, not the day before", async () => {
+    // The cycle boundary is the athlete's actual waking. A boundary placed at a convenient hour
+    // instead — local noon, say — puts every pre-noon run in the *previous* cycle, which
+    // silently mis-attributes the load figure ACWR and the per-day load readout are built from.
+    const userId = await seedUser();
+    const now = new Date("2026-09-12T18:00:00Z");
+    const payload = buildPayload(now, 3);
+    // Wakings in this fixture are 11:00Z (07:00 New York). A run at 12:00Z is 08:00 local:
+    // after that morning's waking, and hours before noon.
+    payload.workouts.push({
+      externalId: "morning-run",
+      activityType: "running",
+      indoor: false,
+      startedAt: "2026-09-12T12:00:00Z",
+      endedAt: "2026-09-12T13:00:00Z",
+      durationMin: 60,
+      distanceM: 10000,
+      activeEnergyKj: 2500,
+      avgHr: 145,
+      maxHr: 165,
+      elevationAscendedM: null,
+    });
+
+    await ingestAppleHealth(userId, payload, { now });
+
+    const cycleRows = await db
+      .select({ externalId: cycles.externalId, kilojoule: cycles.kilojoule })
+      .from(cycles)
+      .where(and(eq(cycles.userId, userId), eq(cycles.provider, "apple_health")));
+    const byId = new Map(cycleRows.map((c) => [c.externalId, c.kilojoule]));
+
+    expect(byId.get("wake-2026-09-12")).toBe(2500);
+    expect(byId.get("wake-2026-09-11")).toBeNull();
+  });
+
   it("classifies a nap as a nap and does not let it become the night", async () => {
     const userId = await seedUser();
     const now = new Date("2026-09-12T18:00:00Z");

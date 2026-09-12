@@ -215,6 +215,10 @@ async function upsertSleepSessions(
     const row = {
       cycleId: null as string | null, // linked by rebuildCycles once cycles exist
       nap: napByExternalId.get(s.externalId) ?? false,
+      // The real instants, kept because a cycle boundary is a waking — see the schema comment
+      // on sleep_records.endedAt for what goes wrong without them.
+      startedAt: s.startedAt,
+      endedAt: s.endedAt,
       durationMin: asleep,
       efficiencyPct,
       // Whoop's "sleep performance" is its own score against its own need model. Nothing in
@@ -287,20 +291,20 @@ async function rebuildCycles(userId: string, timeZone: string, now: Date): Promi
   // The primary-sleep set is taken from the stored `nap` flag, which upsertSleepSessions just
   // re-derived — so cycles and the nap classification can't disagree.
   //
-  // `sleep_records` stores a local date rather than the sleep's instants, so the cycle boundary
-  // is reconstructed from that date: a cycle opens at the waking that ended that night's sleep.
-  // Local noon stands in for the waking instant. Noon, not midnight, because the cycle's
-  // synthetic id is derived from this instant's local date — a midnight anchor lands on the
-  // previous day under any positive UTC offset and would mint a second cycle for the same
-  // night. The instant itself is never shown to the athlete; only its date and the ordering
-  // between cycles are read.
+  // The cycle boundary is the athlete's actual waking, `endedAt`. That precision matters: the
+  // boundary decides which cycle a workout's energy counts toward, so a boundary placed at a
+  // convenient hour instead of the real one attributes every morning run to the previous
+  // cycle. Rows written before endedAt existed fall back to local noon — wrong by hours, but
+  // it keeps the cycle's local date (and therefore its synthetic id) stable, which a midnight
+  // fallback would not: midnight lands on the previous day under any positive UTC offset and
+  // would mint a second cycle for the same night.
   const boundaries = sleepRows
     .filter((r) => !r.nap)
     .map((r) => {
-      const wakeInstant = localNoon(r.date, timeZone);
+      const wakeInstant = r.endedAt ?? localNoon(r.date, timeZone);
       return {
         externalId: r.externalId,
-        startedAt: wakeInstant,
+        startedAt: r.startedAt ?? wakeInstant,
         endedAt: wakeInstant,
         asleepMin: r.durationMin,
         wakeLocalDate: r.date,

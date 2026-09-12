@@ -119,6 +119,8 @@ async function upsertSleep(userId: string, s: WhoopSleep, tz: string): Promise<v
       cycleId: String(s.cycle_id),
       nap: s.nap ?? false,
       date: toLocalDateOnly(s.start, tz),
+      startedAt: new Date(s.start),
+      endedAt: new Date(s.end),
       durationMin,
       efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
       performancePct,
@@ -130,6 +132,8 @@ async function upsertSleep(userId: string, s: WhoopSleep, tz: string): Promise<v
       set: {
         cycleId: String(s.cycle_id),
         nap: s.nap ?? false,
+        startedAt: new Date(s.start),
+        endedAt: new Date(s.end),
         durationMin,
         efficiencyPct: s.score?.stage_summary.sleep_efficiency_percentage ?? null,
         performancePct,

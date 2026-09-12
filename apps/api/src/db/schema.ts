@@ -394,6 +394,16 @@ export const sleepRecords = pgTable(
     // right row when a cycle has both — see buildRecoverySnapshot's sleepDebtMinToday lookup.
     nap: boolean("nap").notNull().default(false),
     date: date("date").notNull(),
+    // When the sleep actually began and ended. `date` alone (the local date of waking) is
+    // enough to file a night under a day, but not to place a cycle boundary: a cycle runs from
+    // one waking to the next, so the *instant* of waking is what decides which cycle a workout
+    // falls in. Deriving that instant from the date instead — local midnight, or noon — puts
+    // the boundary hours away from the real waking and silently attributes a morning run to the
+    // previous cycle. Nullable because rows written before this column existed have no instants
+    // to backfill from; Apple Health synthesis falls back to a noon approximation for those and
+    // says so at the call site.
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
     durationMin: doublePrecision("duration_min"),
     efficiencyPct: doublePrecision("efficiency_pct"),
     // Whoop "Sleep performance" — % of sleep needed that was achieved (the Sleep score).
