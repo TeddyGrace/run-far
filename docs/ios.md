@@ -27,15 +27,34 @@ own bearer token (below).
 
 | You want | Needs the paid account? |
 | --- | --- |
-| Run the app on your own iPhone from Xcode | No — free Apple ID works, but the build expires after 7 days |
-| HealthKit entitlement | **Yes** |
-| TestFlight (share with other people) | **Yes** |
-| App Store release | **Yes** |
-| Push notifications | **Yes** |
+| Run a plain app on your own iPhone from Xcode | No — a free Apple ID works, but the build expires after 7 days |
+| **HealthKit entitlement** | **Probably — verify first, see below** |
+| TestFlight (share with other people) | Yes |
+| App Store release | Yes |
+| Push notifications | Yes |
 
-A free Apple ID is enough to *try* this: you can build to your own phone and confirm the
-HealthKit read works end to end. It stops being enough the moment you want the build to survive
-a week, or anyone else to use it.
+### Verify the HealthKit/free-account question before planning around it
+
+Apple's free "Personal Team" provisioning supports only a subset of capabilities, and the
+restricted list has changed across Xcode versions. HealthKit is widely reported to be
+unavailable to free accounts, but this is worth **checking rather than trusting** — including
+over this document, which is not authoritative on it.
+
+The check takes two minutes and costs nothing, and it is worth doing as step zero because the
+answer decides whether you can validate before paying:
+
+1. Do steps 3 and 4 below (generate the Xcode project, open it).
+2. In the app target → Signing & Capabilities, select your **personal team** (your plain Apple
+   ID) under Team.
+3. Click **+ Capability** and add **HealthKit**.
+
+If Xcode accepts it, you can validate on your own phone for free. If it refuses — the usual
+wording is along the lines of the capability being unsupported for your team, or a provisioning
+profile failing to generate — then HealthKit needs the paid account, and there is no way around
+that. Buy it and carry on from step 1.
+
+Either way the rest of the app builds and runs on your phone for free; it is only the HealthKit
+read that is in question.
 
 ## Architecture
 
@@ -82,15 +101,25 @@ On a Mac, with Xcode and CocoaPods installed:
 
 ```bash
 pnpm install
-RUNFAR_IOS_ORIGIN=https://your-deployed-origin pnpm --filter @run-far/web build
+export RUNFAR_IOS_ORIGIN=https://your-deployed-origin   # e.g. your Railway URL
+pnpm --filter @run-far/web build
 pnpm --filter @run-far/web exec cap add ios
 pnpm --filter @run-far/web exec cap sync ios
 pnpm --filter @run-far/web exec cap open ios
 ```
 
-`RUNFAR_IOS_ORIGIN` is required and has no default. It is the origin the WebView loads from and
-the origin the session cookie is scoped to. A wrong default would silently ship a build talking
-to the wrong backend, which is worse than a build that refuses to start.
+`RUNFAR_IOS_ORIGIN` is required and has no default — the config throws without it. Every command
+above that reads the Capacitor config needs it in the environment, which is why it is `export`ed
+rather than prefixed onto one line.
+
+**What that origin does:** the WebView loads the deployed app from it (`server.url`). The app's
+origin *is* your backend's origin, so `/api/...` is same-origin exactly as in Safari and the
+existing session cookie works with no CORS entry and no SameSite change. The trade is that the
+app needs a network connection to start and has no offline shell.
+
+Use an **https** origin. Pointing this at a plain-http dev server on a LAN address also needs an
+App Transport Security exception in Info.plist — a foot-gun to leave in a project you will later
+submit.
 
 `cap add ios` generates `apps/web/ios/`, which is a real Xcode project you will hand-edit (for
 capabilities and Info.plist). Commit it.
@@ -123,11 +152,28 @@ what the plan expects.</string>
 run-far requests read access only — `requestAuthorization(toShare: [], read:)` — so the update
 string is there because Apple requires it if the entitlement is present, and it says so plainly.
 
-### 6. Connect it
+### 6. Build to your iPhone
 
-Build to a real device (HealthKit does not exist in the simulator — it will report unavailable,
-which is the plugin behaving correctly, not a bug). Then: sign in → Settings → **Recovery data
-source** → Connect Apple Health → grant the permissions → the first sync backfills 90 days.
+In Xcode: plug the phone in, select it in the device dropdown (top bar), press ▶.
+
+- **Trust the certificate.** The first run of a build signed with a personal team fails to launch
+  with an untrusted-developer error. On the phone: Settings → General → VPN & Device Management →
+  tap your developer profile → Trust. Then press ▶ again.
+- **A real device, not the simulator.** HealthKit does not exist in the simulator; the plugin
+  reports it unavailable, which is correct behaviour rather than a bug.
+- **A free-team build expires after 7 days** and must be re-run from Xcode. A paid one lasts a
+  year.
+
+### 7. Connect it
+
+Sign in → Settings → **Recovery data source** → Connect Apple Health → grant the permissions →
+the first sync backfills 90 days.
+
+**Signing in: use email and password, not Google.** Google blocks its OAuth flow inside embedded
+web views, so "Continue with Google" will likely be refused in the app. If your account is
+Google-only, set a password first from the website (Settings → the email sign-in card), then use
+email + password in the app. This is a genuine limitation of the WebView approach, and the reason
+native apps use a system browser for OAuth — worth fixing before anyone else uses the app.
 
 Then switch **Recovery data source** to Apple Health. These are two separate steps on purpose:
 data from an athlete still on Whoop is stored rather than refused, so you arrive at Apple Health
@@ -174,6 +220,20 @@ offering a button that cannot work.
 - **Sign in with Apple.** Required if you offer other third-party sign-in. run-far offers Google
   sign-in, so **this is likely to be required** before release. It is not implemented yet.
 - **Subscriptions.** Not wired into the app deliberately (see below).
+
+## Known rough edges of the WebView approach
+
+**Remote-loaded, not bundled.** `server.url` points the WebView at the deployed site, which is
+what makes the session cookie work with no backend changes. Before an App Store release, consider
+switching to a bundled build: it starts offline, loads faster, and reads less like a wrapped
+website to a reviewer. The cost is real, though — the web app would need an absolute API base URL
+instead of relative `/api`, the API would need the capacitor origin in its CORS allowlist, and the
+session cookie would need `SameSite=None; Secure`, which is a meaningfully weaker cookie posture
+than the current `lax`.
+
+**Google sign-in doesn't work in the WebView** (see step 7). The fix is a native OAuth flow via
+`ASWebAuthenticationSession`, which is also roughly the machinery Sign in with Apple needs — so
+these two are worth doing together.
 
 ## Deliberately not done yet
 
