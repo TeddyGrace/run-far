@@ -3,8 +3,9 @@ import { isRunSport } from "@run-far/shared";
 import { and, asc, eq, gte, lt, sql } from "drizzle-orm";
 
 import { db } from "../db/client.js";
-import { plannedRuns, whoopWorkouts } from "../db/schema.js";
+import { plannedRuns, workouts } from "../db/schema.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
+import { getActiveHealthProvider, providerFilter } from "../lib/healthProvider.js";
 import { addLocalDays, dateYmdInZone, zonedLocalToIso } from "../lib/zonedTime.js";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 
@@ -30,6 +31,10 @@ export async function buildAdherence(
 ): Promise<AdherenceResponse> {
   const now = opts.now ?? new Date();
   const timeZone = await getAthleteTimezone(userId);
+  // Same provider scope as the sweep that produced these matches (reconciliation/service.ts):
+  // the unmatched-workout list below is "runs we saw that the plan didn't ask for", and an
+  // inactive provider's duplicate of an already-matched run would show up as exactly that.
+  const provider = await getActiveHealthProvider(userId);
 
   const todayYmd = dateYmdInZone(now, timeZone);
   const fromYmd = dateYmdInZone(addLocalDays(now, -(opts.windowDays - 1), timeZone), timeZone);
@@ -48,17 +53,17 @@ export async function buildAdherence(
       plannedDurationMin: plannedRuns.durationMin,
       matchSource: plannedRuns.matchSource,
       reconciledAt: plannedRuns.reconciledAt,
-      workoutId: whoopWorkouts.id,
-      workoutDate: whoopWorkouts.date,
-      workoutStartedAt: whoopWorkouts.startedAt,
-      workoutSport: whoopWorkouts.sport,
-      workoutDurationMin: whoopWorkouts.durationMin,
-      workoutDistanceM: whoopWorkouts.distanceM,
-      workoutStrain: whoopWorkouts.strain,
-      workoutAvgHr: whoopWorkouts.avgHr,
+      workoutId: workouts.id,
+      workoutDate: workouts.date,
+      workoutStartedAt: workouts.startedAt,
+      workoutSport: workouts.sport,
+      workoutDurationMin: workouts.durationMin,
+      workoutDistanceM: workouts.distanceM,
+      workoutStrain: workouts.strain,
+      workoutAvgHr: workouts.avgHr,
     })
     .from(plannedRuns)
-    .leftJoin(whoopWorkouts, eq(plannedRuns.actualWorkoutId, whoopWorkouts.id))
+    .leftJoin(workouts, eq(plannedRuns.actualWorkoutId, workouts.id))
     .where(
       and(
         visibleRunsSql(userId, activePlanId),
@@ -135,15 +140,15 @@ export async function buildAdherence(
   const matchedWorkoutIds = new Set(runs.map((r) => r.actual?.id).filter(Boolean));
   const workoutRows = await db
     .select()
-    .from(whoopWorkouts)
+    .from(workouts)
     .where(
       and(
-        eq(whoopWorkouts.userId, userId),
-        gte(whoopWorkouts.date, fromYmd),
-        sql`${whoopWorkouts.date} <= ${todayYmd}`,
+        providerFilter.workouts(userId, provider),
+        gte(workouts.date, fromYmd),
+        sql`${workouts.date} <= ${todayYmd}`,
       ),
     )
-    .orderBy(asc(whoopWorkouts.date));
+    .orderBy(asc(workouts.date));
 
   const unmatchedWorkouts: ActualWorkout[] = workoutRows
     .filter((w) => isRunSport(w.sport) && !matchedWorkoutIds.has(w.id))

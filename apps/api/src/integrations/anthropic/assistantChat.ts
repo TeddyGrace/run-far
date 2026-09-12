@@ -8,7 +8,7 @@ import {
 import { env } from "../../env.js";
 import { logger } from "../../lib/logger.js";
 import { db } from "../../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, plannedRuns, recommendations, users } from "../../db/schema.js";
+import { recoveryMetrics, sleepRecords, workouts, plannedRuns, recommendations, users } from "../../db/schema.js";
 import { getAthleteContext } from "../../plans/athleteContext.js";
 import { getActivePlanSnapshot } from "../../plans/activePlan.js";
 import { getActivePlanId, visibleRunsSql } from "../../plans/lifecycle.js";
@@ -21,12 +21,13 @@ import { listPrimaryEvents } from "../google/calendarClient.js";
 import { getForecastForRange } from "../weather/weatherClient.js";
 import { getAthleteLocation } from "../../lib/athleteLocation.js";
 import { getAthleteTimezone } from "../../lib/athleteTimezone.js";
+import { getActiveHealthProvider, providerFilter } from "../../lib/healthProvider.js";
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 import { AiUsageAccumulator } from "../../lib/aiCost.js";
 
 const MAX_TOOL_ITERATIONS = 8;
 
-// recoveryMetrics/sleepRecords/whoopWorkouts store the athlete-local date (see
+// recoveryMetrics/sleepRecords/workouts store the athlete-local date (see
 // integrations/whoop/sync.ts), so window bounds must be computed the same way — a UTC slice
 // here would drift the window off by a day for evening activity, same as the bug fixed there.
 function isoDate(d: Date, tz: string): string {
@@ -264,6 +265,11 @@ async function executeTool(
       return getAthleteContext(userId, trailingWeeks);
     }
     case "get_recovery_history": {
+      // Scoped to the athlete's active wearable, like every other read of these tables. The
+      // assistant reasons in prose over whatever it is handed, so an unfiltered window would
+      // have it comparing a Whoop RMSSD reading against an Apple SDNN one as if they were the
+      // same series, and saying so confidently.
+      const provider = await getActiveHealthProvider(userId);
       const windowDays = Math.min(Math.max(Number(input.days) || 14, 1), 90);
       const startIso = isoDate(new Date(Date.now() - (windowDays - 1) * 86_400_000), tz);
       const endIso = isoDate(new Date(), tz);
@@ -271,32 +277,61 @@ async function executeTool(
         db
           .select()
           .from(recoveryMetrics)
-          .where(and(eq(recoveryMetrics.userId, userId), gte(recoveryMetrics.date, startIso), lte(recoveryMetrics.date, endIso)))
+          .where(
+            and(
+              providerFilter.recovery(userId, provider),
+              gte(recoveryMetrics.date, startIso),
+              lte(recoveryMetrics.date, endIso),
+            ),
+          )
           .orderBy(desc(recoveryMetrics.date)),
         db
           .select()
           .from(sleepRecords)
-          .where(and(eq(sleepRecords.userId, userId), gte(sleepRecords.date, startIso), lte(sleepRecords.date, endIso)))
+          .where(
+            and(
+              providerFilter.sleep(userId, provider),
+              gte(sleepRecords.date, startIso),
+              lte(sleepRecords.date, endIso),
+            ),
+          )
           .orderBy(desc(sleepRecords.date)),
         db
-          .select({ date: whoopWorkouts.date, strain: whoopWorkouts.strain, sport: whoopWorkouts.sport })
-          .from(whoopWorkouts)
-          .where(and(eq(whoopWorkouts.userId, userId), gte(whoopWorkouts.date, startIso), lte(whoopWorkouts.date, endIso)))
-          .orderBy(desc(whoopWorkouts.date)),
+          .select({ date: workouts.date, strain: workouts.strain, sport: workouts.sport })
+          .from(workouts)
+          .where(
+            and(
+              providerFilter.workouts(userId, provider),
+              gte(workouts.date, startIso),
+              lte(workouts.date, endIso),
+            ),
+          )
+          .orderBy(desc(workouts.date)),
       ]);
-      return { startIso, endIso, recovery: recoveryRows, sleep: sleepRows, workouts: workoutRows };
+      // `provider` and the HRV metric ride along so the assistant states what the numbers are
+      // rather than inferring it: an SDNN figure narrated as RMSSD is a confident falsehood.
+      return {
+        provider,
+        hrvMetric: provider === "apple_health" ? "sdnn" : "rmssd",
+        startIso,
+        endIso,
+        recovery: recoveryRows,
+        sleep: sleepRows,
+        workouts: workoutRows,
+      };
     }
     case "get_recent_activities": {
       const limit = Math.min(Math.max(Number(input.limit) || 10, 1), 50);
-      const conditions = [eq(whoopWorkouts.userId, userId)];
+      const activityProvider = await getActiveHealthProvider(userId);
+      const conditions = [providerFilter.workouts(userId, activityProvider)];
       if (typeof input.sport === "string" && input.sport.trim()) {
-        conditions.push(eq(whoopWorkouts.sport, input.sport.trim()));
+        conditions.push(eq(workouts.sport, input.sport.trim()));
       }
       const rows = await db
         .select()
-        .from(whoopWorkouts)
+        .from(workouts)
         .where(and(...conditions))
-        .orderBy(desc(whoopWorkouts.date), desc(whoopWorkouts.createdAt))
+        .orderBy(desc(workouts.date), desc(workouts.createdAt))
         .limit(limit);
       return rows.map((r) => ({
         ...r,

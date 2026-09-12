@@ -1,8 +1,10 @@
 import { and, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 
 import { db } from "../db/client.js";
-import { plannedRuns, recommendations, recoveryMetrics, whoopWorkouts } from "../db/schema.js";
+import { plannedRuns, recommendations, recoveryMetrics, workouts } from "../db/schema.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
+import { providerFilter } from "../lib/healthProvider.js";
+import type { HealthProvider } from "@run-far/shared";
 
 /**
  * What became of the advice, rather than what became of the card.
@@ -90,9 +92,14 @@ function targetRunIds(proposedChanges: unknown): string[] {
  */
 export async function recordSettledOutcomes(
   userId: string,
-  opts: { now?: Date; timeZone: string },
+  // `provider` is passed in rather than resolved here: this runs inside the reconciliation
+  // sweep, which already resolved it, and one sweep must not straddle two providers — a
+  // mid-sweep switch would attach the new wearable's next-morning recovery to matches made
+  // against the old one's workouts.
+  opts: { now?: Date; timeZone: string; provider: HealthProvider },
 ): Promise<number> {
   const now = opts.now ?? new Date();
+  const provider = opts.provider;
   const todayYmd = dateYmdInZone(now, opts.timeZone);
 
   const candidates = await db
@@ -136,13 +143,13 @@ export async function recordSettledOutcomes(
         reconciledAt: plannedRuns.reconciledAt,
         plannedDistanceM: plannedRuns.distanceM,
         plannedDurationMin: plannedRuns.durationMin,
-        actualDistanceM: whoopWorkouts.distanceM,
-        actualDurationMin: whoopWorkouts.durationMin,
-        actualStrain: whoopWorkouts.strain,
-        actualAvgHr: whoopWorkouts.avgHr,
+        actualDistanceM: workouts.distanceM,
+        actualDurationMin: workouts.durationMin,
+        actualStrain: workouts.strain,
+        actualAvgHr: workouts.avgHr,
       })
       .from(plannedRuns)
-      .leftJoin(whoopWorkouts, eq(plannedRuns.actualWorkoutId, whoopWorkouts.id))
+      .leftJoin(workouts, eq(plannedRuns.actualWorkoutId, workouts.id))
       .where(and(eq(plannedRuns.userId, userId), inArray(plannedRuns.id, allRunIds)));
     for (const r of rows) runsById.set(r.id, r);
   }
@@ -156,7 +163,9 @@ export async function recordSettledOutcomes(
       hrvRmssdMs: recoveryMetrics.hrvRmssdMs,
     })
     .from(recoveryMetrics)
-    .where(and(eq(recoveryMetrics.userId, userId), inArray(recoveryMetrics.date, nextDays)));
+    .where(
+      and(providerFilter.recovery(userId, provider), inArray(recoveryMetrics.date, nextDays)),
+    );
   for (const r of recoveryRows) recoveryByDate.set(r.date, r);
 
   let written = 0;

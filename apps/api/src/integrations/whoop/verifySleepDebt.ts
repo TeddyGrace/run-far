@@ -34,7 +34,15 @@ async function main(): Promise<void> {
   const [row] = await db
     .select()
     .from(sleepRecords)
-    .where(and(eq(sleepRecords.userId, user.id), eq(sleepRecords.nap, false)))
+    .where(
+      and(
+        eq(sleepRecords.userId, user.id),
+        // This script compares a stored row against the live Whoop API, so it only has
+        // anything to say about Whoop rows.
+        eq(sleepRecords.provider, "whoop"),
+        eq(sleepRecords.nap, false),
+      ),
+    )
     .orderBy(desc(sleepRecords.date), desc(sleepRecords.createdAt));
 
   if (!row) {
@@ -42,7 +50,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const live = await whoopGet<WhoopSleep>(user.id, `/v2/activity/sleep/${row.whoopSleepId}`);
+  const live = await whoopGet<WhoopSleep>(user.id, `/v2/activity/sleep/${row.externalId}`);
   const liveDebtMin =
     live.score?.sleep_needed.need_from_sleep_debt_milli != null
       ? live.score.sleep_needed.need_from_sleep_debt_milli / 60_000
@@ -53,7 +61,7 @@ async function main(): Promise<void> {
 
   console.log(`user:            ${email} (${user.id})`);
   console.log(`sleep date:      ${row.date}${row.date === todayIso ? " (today)" : ""}`);
-  console.log(`whoop sleep id:  ${row.whoopSleepId}`);
+  console.log(`whoop sleep id:  ${row.externalId}`);
   console.log(`row updatedAt:   ${row.updatedAt.toISOString()}`);
   console.log(`stored debt:     ${fmt(row.sleepDebtMin)}`);
   console.log(`live whoop debt: ${fmt(liveDebtMin)}`);

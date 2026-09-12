@@ -43,25 +43,25 @@ describe("buildRecoverySnapshot sleep debt (cycle-aware 'today')", () => {
     const todayIso = isoDate(new Date());
     await db.insert(cycles).values({
       userId,
-      whoopCycleId: `cycle-${randomUUID()}`,
+      externalId: `cycle-${randomUUID()}`,
       start: new Date(),
       end: null,
     });
     const [cycleRow] = await db.select().from(cycles).where(eq(cycles.userId, userId));
-    const whoopCycleId = cycleRow!.whoopCycleId;
+    const externalId = cycleRow!.externalId;
 
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-main-${randomUUID()}`,
-      cycleId: whoopCycleId,
+      externalId: `sleep-main-${randomUUID()}`,
+      cycleId: externalId,
       nap: false,
       date: todayIso,
       sleepDebtMin: 107, // 1h47m — the value that should win
     });
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-nap-${randomUUID()}`,
-      cycleId: whoopCycleId,
+      externalId: `sleep-nap-${randomUUID()}`,
+      cycleId: externalId,
       nap: true,
       date: todayIso,
       sleepDebtMin: 9999, // deliberately wrong — must never be picked
@@ -75,17 +75,17 @@ describe("buildRecoverySnapshot sleep debt (cycle-aware 'today')", () => {
     const yesterdayIso = isoDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
     await db.insert(cycles).values({
       userId,
-      whoopCycleId: `cycle-${randomUUID()}`,
+      externalId: `cycle-${randomUUID()}`,
       start: new Date(),
       end: null,
     });
     const [cycleRow] = await db.select().from(cycles).where(eq(cycles.userId, userId));
-    const whoopCycleId = cycleRow!.whoopCycleId;
+    const externalId = cycleRow!.externalId;
 
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-main-${randomUUID()}`,
-      cycleId: whoopCycleId,
+      externalId: `sleep-main-${randomUUID()}`,
+      cycleId: externalId,
       nap: false,
       date: yesterdayIso, // sleep started before local midnight, but it's still the current cycle
       sleepDebtMin: 62,
@@ -99,7 +99,7 @@ describe("buildRecoverySnapshot sleep debt (cycle-aware 'today')", () => {
     const todayIso = isoDate(new Date());
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-main-${randomUUID()}`,
+      externalId: `sleep-main-${randomUUID()}`,
       date: todayIso,
       sleepDebtMin: 30,
     });
@@ -121,7 +121,7 @@ async function insertCompletedCycle(
   const end = new Date(start.getTime() + DAY_MS);
   await db.insert(cycles).values({
     userId,
-    whoopCycleId: `cycle-completed-${randomUUID()}`,
+    externalId: `cycle-completed-${randomUUID()}`,
     start,
     end,
     strain: fields.strain ?? null,
@@ -138,7 +138,7 @@ describe("buildRecoverySnapshot cycle strain/load aggregation", () => {
     // still-accumulating (necessarily lower) strain.
     await db.insert(cycles).values({
       userId,
-      whoopCycleId: `cycle-open-${randomUUID()}`,
+      externalId: `cycle-open-${randomUUID()}`,
       start: new Date(),
       end: null,
       strain: 2,

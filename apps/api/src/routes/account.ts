@@ -9,7 +9,7 @@ import {
   plannedRuns,
   recoveryMetrics,
   sleepRecords,
-  whoopWorkouts,
+  workouts,
   cycles,
   recommendations,
   chatSessions,
@@ -81,16 +81,19 @@ export async function accountRoutes(app: FastifyInstance) {
       runs,
       recovery,
       sleep,
-      workouts,
+      workoutRows,
       cyclesRows,
       recs,
       messages,
     ] = await Promise.all([
       db.select().from(trainingPlans).where(eq(trainingPlans.userId, userId)),
       db.select().from(plannedRuns).where(eq(plannedRuns.userId, userId)),
+      // Deliberately unfiltered by provider: this is the athlete's own data export, so it
+      // carries every wearable row we hold for them, including any provider that isn't the
+      // one the engine currently reads.
       db.select().from(recoveryMetrics).where(eq(recoveryMetrics.userId, userId)),
       db.select().from(sleepRecords).where(eq(sleepRecords.userId, userId)),
-      db.select().from(whoopWorkouts).where(eq(whoopWorkouts.userId, userId)),
+      db.select().from(workouts).where(eq(workouts.userId, userId)),
       db.select().from(cycles).where(eq(cycles.userId, userId)),
       db.select().from(recommendations).where(eq(recommendations.userId, userId)),
       sessionIds.length > 0
@@ -105,7 +108,7 @@ export async function accountRoutes(app: FastifyInstance) {
       plannedRuns: runs,
       recoveryMetrics: recovery,
       sleepRecords: sleep,
-      whoopWorkouts: workouts,
+      workouts: workoutRows,
       cycles: cyclesRows,
       recommendations: recs,
       chatSessions: sessions,

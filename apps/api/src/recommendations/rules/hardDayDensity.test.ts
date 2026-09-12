@@ -18,6 +18,9 @@ const NOW = new Date("2025-06-11T09:00:00-04:00"); // Wednesday
 
 const baseSnapshot: RecoverySnapshot = {
   date: "2025-06-11",
+  provider: "whoop",
+  hrvMetric: "rmssd",
+  recoveryScoreSource: "provider",
   recoveryScore: 80,
   hrvRmssdMs: 70,
   hrvBaselineMs: 70,

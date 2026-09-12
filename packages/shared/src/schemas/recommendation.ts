@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { healthProviderSchema, hrvMetricSchema, recoveryScoreSourceSchema } from "./recovery.js";
+
 export const recommendationSeveritySchema = z.enum(["info", "yellow", "red"]);
 export type RecommendationSeverity = z.infer<typeof recommendationSeveritySchema>;
 
@@ -17,6 +19,16 @@ export type RecommendationStatus = z.infer<typeof recommendationStatusSchema>;
 
 export const recoverySnapshotSchema = z.object({
   date: z.string(),
+  // Which wearable this snapshot was built from. Optional so snapshots persisted before the
+  // provider seam existed still parse — those are all Whoop, which is what the default says.
+  provider: healthProviderSchema.default("whoop"),
+  // What hrvRmssdMs below actually is, and who computed recoveryScore. Recorded on the snapshot
+  // because a card is read long after it was generated, possibly after the athlete switched
+  // wearables: without these, an old card's numbers would be re-interpreted under the new
+  // provider's meaning. The field is still named hrvRmssdMs for Apple SDNN readings so the
+  // thousands of already-persisted snapshots keep parsing — hrvMetric is the truth of it.
+  hrvMetric: hrvMetricSchema.default("rmssd"),
+  recoveryScoreSource: recoveryScoreSourceSchema.default("provider"),
   // IANA zone the date/aggregation fields above were bucketed in. Optional so historical rows
   // persisted before this field existed still parse.
   timeZone: z.string().optional(),

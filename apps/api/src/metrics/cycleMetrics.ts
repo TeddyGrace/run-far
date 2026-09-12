@@ -1,27 +1,38 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, isNotNull } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { cycles } from "../db/schema.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
+import { providerFilter } from "../lib/healthProvider.js";
 import { ENGINE_CONFIG } from "../recommendations/config.js";
+import type { HealthProvider } from "@run-far/shared";
 
 type Cycle = typeof cycles.$inferSelect;
 
-/** Most recent `count` cycles for a user, newest first, regardless of completion state. */
-export async function getRecentCycles(userId: string, count: number): Promise<Cycle[]> {
+/** Most recent `count` cycles for a user, newest first, regardless of completion state.
+ * Scoped to one provider: Whoop cycles and the synthesized Apple ones overlap in time, so an
+ * unfiltered window would interleave two accounts of the same nights. */
+export async function getRecentCycles(
+  userId: string,
+  provider: HealthProvider,
+  count: number,
+): Promise<Cycle[]> {
   return db
     .select()
     .from(cycles)
-    .where(eq(cycles.userId, userId))
+    .where(providerFilter.cycles(userId, provider))
     .orderBy(desc(cycles.start))
     .limit(count);
 }
 
 /** The athlete's current (most recent, possibly still-open) cycle, or null if none synced yet. */
-export async function getCurrentCycle(userId: string): Promise<Cycle | null> {
+export async function getCurrentCycle(
+  userId: string,
+  provider: HealthProvider,
+): Promise<Cycle | null> {
   const [cycle] = await db
     .select()
     .from(cycles)
-    .where(eq(cycles.userId, userId))
+    .where(providerFilter.cycles(userId, provider))
     .orderBy(desc(cycles.start))
     .limit(1);
   return cycle ?? null;
@@ -29,11 +40,15 @@ export async function getCurrentCycle(userId: string): Promise<Cycle | null> {
 
 /** Most recent `count` completed (closed) cycles, newest first. Used for rolling windows —
  * an open cycle's strain/kilojoule are still accumulating and would skew a mean/sum low. */
-export async function getRecentCompletedCycles(userId: string, count: number): Promise<Cycle[]> {
+export async function getRecentCompletedCycles(
+  userId: string,
+  provider: HealthProvider,
+  count: number,
+): Promise<Cycle[]> {
   return db
     .select()
     .from(cycles)
-    .where(and(eq(cycles.userId, userId), isNotNull(cycles.end)))
+    .where(and(providerFilter.cycles(userId, provider), isNotNull(cycles.end)))
     .orderBy(desc(cycles.start))
     .limit(count);
 }
@@ -48,7 +63,11 @@ export function strainToLoad(strain: number): number {
 }
 
 /** Linear load for a cycle: kilojoule when present (a real additive energy measure),
- * else the strainToLoad approximation. Null only when both source fields are null. */
+ * else the strainToLoad approximation. Null only when both source fields are null.
+ *
+ * This ordering is what lets ACWR work identically for both providers: Apple Health rows carry
+ * kilojoules (from HealthKit active energy) and never a strain, so they always take the first
+ * branch and never touch the Whoop-calibrated approximation below. */
 export function cycleLoad(cycle: Pick<Cycle, "kilojoule" | "strain">): number | null {
   if (cycle.kilojoule != null) return cycle.kilojoule;
   if (cycle.strain != null) return strainToLoad(cycle.strain);

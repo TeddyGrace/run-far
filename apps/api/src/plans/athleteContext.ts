@@ -1,10 +1,11 @@
 import { and, eq, gte, inArray, lte } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { trainingPlans, whoopWorkouts } from "../db/schema.js";
+import { trainingPlans, workouts } from "../db/schema.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
 import { logger } from "../lib/logger.js";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
+import { getActiveHealthProvider, providerFilter } from "../lib/healthProvider.js";
 
 const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
 const DAY_MS = 86_400_000;
@@ -30,7 +31,7 @@ export interface AthleteContext {
   dataQuality: "none" | "sparse" | "ok";
 }
 
-// whoopWorkouts.date stores the athlete-local date (see integrations/whoop/sync.ts), so
+// workouts.date stores the athlete-local date (see integrations/whoop/sync.ts), so
 // real instants (now, a window start) must resolve to a date the same way, not by slicing a
 // UTC ISO string.
 function isoDate(d: Date, tz: string): string {
@@ -52,10 +53,12 @@ function mondayKey(dateStr: string): string {
 
 /**
  * Snapshot of the athlete's recent training so the coach doesn't design in a vacuum.
- * Pulls trailing Whoop run mileage, a recovery summary, and any active plan.
+ * Pulls trailing run mileage from the athlete's active wearable, a recovery summary, and any
+ * active plan.
  */
 export async function getAthleteContext(userId: string, trailingWeeks = 8): Promise<AthleteContext> {
   const tz = await getAthleteTimezone(userId);
+  const provider = await getActiveHealthProvider(userId);
   const today = new Date();
   const todayIso = isoDate(today, tz);
   const windowStart = new Date(today.getTime() - trailingWeeks * 7 * DAY_MS);
@@ -63,16 +66,16 @@ export async function getAthleteContext(userId: string, trailingWeeks = 8): Prom
 
   const runs = await db
     .select({
-      date: whoopWorkouts.date,
-      distanceM: whoopWorkouts.distanceM,
+      date: workouts.date,
+      distanceM: workouts.distanceM,
     })
-    .from(whoopWorkouts)
+    .from(workouts)
     .where(
       and(
-        eq(whoopWorkouts.userId, userId),
-        inArray(whoopWorkouts.sport, [...RUN_SPORTS]),
-        gte(whoopWorkouts.date, windowStartIso),
-        lte(whoopWorkouts.date, todayIso),
+        providerFilter.workouts(userId, provider),
+        inArray(workouts.sport, [...RUN_SPORTS]),
+        gte(workouts.date, windowStartIso),
+        lte(workouts.date, todayIso),
       ),
     );
 

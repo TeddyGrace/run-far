@@ -1,6 +1,6 @@
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles, syncState } from "../../db/schema.js";
+import { recoveryMetrics, sleepRecords, workouts, cycles, syncState } from "../../db/schema.js";
 import { whoopGet, whoopPaginate } from "./client.js";
 import type { WhoopCycle, WhoopRecovery, WhoopSleep, WhoopWorkout } from "./types.js";
 import { logger } from "../../lib/logger.js";
@@ -34,11 +34,12 @@ async function upsertCycle(userId: string, c: WhoopCycle): Promise<void> {
     .insert(cycles)
     .values({
       userId,
-      whoopCycleId: String(c.id),
+      provider: "whoop",
+      externalId: String(c.id),
       ...row,
     })
     .onConflictDoUpdate({
-      target: [cycles.userId, cycles.whoopCycleId],
+      target: [cycles.userId, cycles.provider, cycles.externalId],
       set: { ...row, updatedAt: new Date() },
     });
 }
@@ -51,7 +52,13 @@ async function recoveryLocalDate(userId: string, r: WhoopRecovery, tz: string): 
   const [cycle] = await db
     .select({ start: cycles.start, timezoneOffset: cycles.timezoneOffset })
     .from(cycles)
-    .where(and(eq(cycles.userId, userId), eq(cycles.whoopCycleId, String(r.cycle_id))));
+    .where(
+      and(
+        eq(cycles.userId, userId),
+        eq(cycles.provider, "whoop"),
+        eq(cycles.externalId, String(r.cycle_id)),
+      ),
+    );
   if (cycle) return cycleLocalDate(cycle, tz);
   return toLocalDateOnly(r.created_at, tz);
 }
@@ -62,7 +69,8 @@ async function upsertRecovery(userId: string, r: WhoopRecovery, tz: string): Pro
     .insert(recoveryMetrics)
     .values({
       userId,
-      whoopSleepId: r.sleep_id,
+      provider: "whoop",
+      externalId: r.sleep_id,
       cycleId: String(r.cycle_id),
       date,
       recoveryScore: r.score?.recovery_score ?? null,
@@ -70,10 +78,15 @@ async function upsertRecovery(userId: string, r: WhoopRecovery, tz: string): Pro
       restingHr: r.score?.resting_heart_rate ?? null,
       spo2: r.score?.spo2_percentage ?? null,
       skinTempC: r.score?.skin_temp_celsius ?? null,
+      // Whoop computes its own recovery score, and its HRV figure is RMSSD. Both are stated
+      // rather than left to the column defaults so the row is self-describing next to an
+      // apple_health row, where the score is run-far's and the HRV is SDNN.
+      recoveryScoreSource: "provider",
+      hrvMetric: "rmssd",
       scoreState: r.score_state,
     })
     .onConflictDoUpdate({
-      target: [recoveryMetrics.userId, recoveryMetrics.whoopSleepId],
+      target: [recoveryMetrics.userId, recoveryMetrics.provider, recoveryMetrics.externalId],
       set: {
         cycleId: String(r.cycle_id),
         date,
@@ -101,7 +114,8 @@ async function upsertSleep(userId: string, s: WhoopSleep, tz: string): Promise<v
     .insert(sleepRecords)
     .values({
       userId,
-      whoopSleepId: s.id,
+      provider: "whoop",
+      externalId: s.id,
       cycleId: String(s.cycle_id),
       nap: s.nap ?? false,
       date: toLocalDateOnly(s.start, tz),
@@ -112,7 +126,7 @@ async function upsertSleep(userId: string, s: WhoopSleep, tz: string): Promise<v
       respiratoryRate: s.score?.respiratory_rate ?? null,
     })
     .onConflictDoUpdate({
-      target: [sleepRecords.userId, sleepRecords.whoopSleepId],
+      target: [sleepRecords.userId, sleepRecords.provider, sleepRecords.externalId],
       set: {
         cycleId: String(s.cycle_id),
         nap: s.nap ?? false,
@@ -151,23 +165,24 @@ async function upsertWorkout(userId: string, w: WhoopWorkout, tz: string): Promi
   };
 
   await db
-    .insert(whoopWorkouts)
+    .insert(workouts)
     .values({
       userId,
-      whoopWorkoutId: w.id,
+      provider: "whoop",
+      externalId: w.id,
       date: toLocalDateOnly(w.start, tz),
       ...row,
     })
     .onConflictDoUpdate({
-      target: [whoopWorkouts.userId, whoopWorkouts.whoopWorkoutId],
+      target: [workouts.userId, workouts.provider, workouts.externalId],
       set: {
         ...row,
         // Whoop can report a workout before scoring finishes (or never populate distance for a
         // no-GPS activity) and re-sync it later with distance still null — never let that null
         // clobber a real value, whether it came from Whoop earlier or the athlete hand-entered
         // it. A fresh non-null distance from Whoop still wins over a manual entry.
-        distanceM: distanceM != null ? distanceM : sql`${whoopWorkouts.distanceM}`,
-        distanceManual: distanceM != null ? false : sql`${whoopWorkouts.distanceManual}`,
+        distanceM: distanceM != null ? distanceM : sql`${workouts.distanceM}`,
+        distanceManual: distanceM != null ? false : sql`${workouts.distanceManual}`,
         updatedAt: new Date(),
       },
     });
@@ -248,12 +263,12 @@ export async function incrementalSyncWhoop(userId: string): Promise<void> {
  * sleep/recovery webhook handlers (both of which reference a cycle_id) — this fetches and
  * upserts just that one cycle. Best-effort: a failure here shouldn't fail the sleep/recovery
  * sync that triggered it, since a later full sync (nightly safety net) will catch it up. */
-async function syncCycleById(userId: string, whoopCycleId: number): Promise<void> {
+async function syncCycleById(userId: string, externalId: number): Promise<void> {
   try {
-    const c = await whoopGet<WhoopCycle>(userId, `/v2/cycle/${whoopCycleId}`);
+    const c = await whoopGet<WhoopCycle>(userId, `/v2/cycle/${externalId}`);
     await upsertCycle(userId, c);
   } catch (err) {
-    logger.warn({ err, userId, whoopCycleId }, "failed to refresh cycle after webhook");
+    logger.warn({ err, userId, externalId }, "failed to refresh cycle after webhook");
   }
 }
 

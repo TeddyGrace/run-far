@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { db, pool } from "./client.js";
-import { users, recoveryMetrics, sleepRecords, whoopWorkouts, cycles, plannedRuns, syncState } from "./schema.js";
+import { users, recoveryMetrics, sleepRecords, workouts, cycles, plannedRuns, syncState } from "./schema.js";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "../lib/auth.js";
 import { env } from "../env.js";
@@ -48,7 +48,7 @@ async function main() {
   const seedTzOffset = offsetStringForZone(env.ATHLETE_TIMEZONE);
   for (let i = -6; i <= 0; i++) {
     const date = isoDate(i);
-    const whoopCycleId = `seed-cycle-${date}`;
+    const externalId = `seed-cycle-${date}`;
     const cycleStrain = 6 + Math.random() * 12; // 0-21 scale
     const cycleKilojoule = 4000 + Math.random() * 4000;
 
@@ -56,7 +56,7 @@ async function main() {
       .insert(cycles)
       .values({
         userId,
-        whoopCycleId,
+        externalId,
         start: atHour(i, 7),
         end: i < 0 ? atHour(i + 1, 7) : null, // today's cycle is still open
         timezoneOffset: seedTzOffset,
@@ -73,8 +73,8 @@ async function main() {
       .insert(recoveryMetrics)
       .values({
         userId,
-        whoopSleepId: `seed-sleep-${date}`,
-        cycleId: whoopCycleId,
+        externalId: `seed-sleep-${date}`,
+        cycleId: externalId,
         date,
         recoveryScore,
         hrvRmssdMs: 45 + Math.random() * 20,
@@ -89,8 +89,8 @@ async function main() {
       .insert(sleepRecords)
       .values({
         userId,
-        whoopSleepId: `seed-sleep-${date}`,
-        cycleId: whoopCycleId,
+        externalId: `seed-sleep-${date}`,
+        cycleId: externalId,
         nap: false,
         date,
         durationMin: 380 + Math.random() * 90,
@@ -103,10 +103,10 @@ async function main() {
 
     if (i % 2 === 0) {
       await db
-        .insert(whoopWorkouts)
+        .insert(workouts)
         .values({
           userId,
-          whoopWorkoutId: `seed-workout-${date}`,
+          externalId: `seed-workout-${date}`,
           date,
           startedAt: atHour(i, 6 + Math.floor(Math.random() * 4)),
           durationMin: 30 + Math.random() * 60,

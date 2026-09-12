@@ -7,6 +7,9 @@ import { DEFAULT_RULE_THRESHOLDS } from "../config.js";
 
 const baseSnapshot: RecoverySnapshot = {
   date: "2026-08-12",
+  provider: "whoop",
+  hrvMetric: "rmssd",
+  recoveryScoreSource: "provider",
   recoveryScore: 70,
   hrvRmssdMs: 60,
   hrvBaselineMs: 60,

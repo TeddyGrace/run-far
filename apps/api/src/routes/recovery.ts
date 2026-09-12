@@ -2,11 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, gte, desc, count, sql, inArray } from "drizzle-orm";
 import { updateWorkoutDistanceSchema } from "@run-far/shared";
 import { db } from "../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts, cycles } from "../db/schema.js";
+import { recoveryMetrics, sleepRecords, workouts, cycles } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { buildRecoverySnapshot } from "../recommendations/snapshot.js";
 import { cycleLocalDate, cycleStrainAndLoad } from "../metrics/cycleMetrics.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
+import { getActiveHealthProvider, providerFilter } from "../lib/healthProvider.js";
 
 export async function recoveryRoutes(app: FastifyInstance) {
   // Today's snapshot independent of whether any recommendation rule fired — the dashboard's
@@ -31,28 +32,34 @@ export async function recoveryRoutes(app: FastifyInstance) {
     const cutoff = new Date();
     cutoff.setUTCDate(cutoff.getUTCDate() - windowDays);
     const tz = await getAthleteTimezone(userId);
+    const provider = await getActiveHealthProvider(userId);
 
     const cycleRows = await db
       .select()
       .from(cycles)
-      .where(and(eq(cycles.userId, userId), gte(cycles.start, cutoff)))
+      .where(and(providerFilter.cycles(userId, provider), gte(cycles.start, cutoff)))
       .orderBy(cycles.start);
 
     if (cycleRows.length === 0) return [];
 
-    const whoopCycleIds = cycleRows.map((c) => c.whoopCycleId);
+    const cycleExternalIds = cycleRows.map((c) => c.externalId);
     const [recoveryRows, sleepRows] = await Promise.all([
       db
         .select()
         .from(recoveryMetrics)
-        .where(and(eq(recoveryMetrics.userId, userId), inArray(recoveryMetrics.cycleId, whoopCycleIds))),
+        .where(
+          and(
+            providerFilter.recovery(userId, provider),
+            inArray(recoveryMetrics.cycleId, cycleExternalIds),
+          ),
+        ),
       db
         .select()
         .from(sleepRecords)
         .where(
           and(
-            eq(sleepRecords.userId, userId),
-            inArray(sleepRecords.cycleId, whoopCycleIds),
+            providerFilter.sleep(userId, provider),
+            inArray(sleepRecords.cycleId, cycleExternalIds),
             eq(sleepRecords.nap, false),
           ),
         ),
@@ -71,14 +78,14 @@ export async function recoveryRoutes(app: FastifyInstance) {
       // completion by cycleStrainAndLoad — see its doc comment.
       const { strain, load } = cycleStrainAndLoad(c);
       return {
-        cycleId: c.whoopCycleId,
+        cycleId: c.externalId,
         date: cycleLocalDate(c, tz),
         cycleStart: c.start.toISOString(),
         cycleEnd: c.end ? c.end.toISOString() : null,
         strain,
         load,
-        recovery: recoveryByCycle.get(c.whoopCycleId) ?? null,
-        sleep: sleepByCycle.get(c.whoopCycleId) ?? null,
+        recovery: recoveryByCycle.get(c.externalId) ?? null,
+        sleep: sleepByCycle.get(c.externalId) ?? null,
       };
     });
   });
@@ -101,48 +108,49 @@ export async function recoveryRoutes(app: FastifyInstance) {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const conditions = [eq(whoopWorkouts.userId, userId)];
-    if (sportFilters.length === 1) conditions.push(eq(whoopWorkouts.sport, sportFilters[0]!));
-    else if (sportFilters.length > 1) conditions.push(inArray(whoopWorkouts.sport, sportFilters));
+    const activityProvider = await getActiveHealthProvider(userId);
+    const conditions = [providerFilter.workouts(userId, activityProvider)];
+    if (sportFilters.length === 1) conditions.push(eq(workouts.sport, sportFilters[0]!));
+    else if (sportFilters.length > 1) conditions.push(inArray(workouts.sport, sportFilters));
     const where = and(...conditions);
 
     const [items, countRows, sportRows] = await Promise.all([
       db
         .select({
-          id: whoopWorkouts.id,
-          date: whoopWorkouts.date,
-          startedAt: whoopWorkouts.startedAt,
-          durationMin: whoopWorkouts.durationMin,
-          sport: whoopWorkouts.sport,
-          strain: whoopWorkouts.strain,
-          avgHr: whoopWorkouts.avgHr,
-          maxHr: whoopWorkouts.maxHr,
-          kilojoules: whoopWorkouts.kilojoules,
-          distanceM: whoopWorkouts.distanceM,
-          distanceManual: whoopWorkouts.distanceManual,
-          percentRecorded: whoopWorkouts.percentRecorded,
-          altitudeGainM: whoopWorkouts.altitudeGainM,
-          altitudeChangeM: whoopWorkouts.altitudeChangeM,
-          zoneDurations: whoopWorkouts.zoneDurations,
+          id: workouts.id,
+          date: workouts.date,
+          startedAt: workouts.startedAt,
+          durationMin: workouts.durationMin,
+          sport: workouts.sport,
+          strain: workouts.strain,
+          avgHr: workouts.avgHr,
+          maxHr: workouts.maxHr,
+          kilojoules: workouts.kilojoules,
+          distanceM: workouts.distanceM,
+          distanceManual: workouts.distanceManual,
+          percentRecorded: workouts.percentRecorded,
+          altitudeGainM: workouts.altitudeGainM,
+          altitudeChangeM: workouts.altitudeChangeM,
+          zoneDurations: workouts.zoneDurations,
         })
-        .from(whoopWorkouts)
+        .from(workouts)
         .where(where)
         // Start time is the real ordering within a day; createdAt only reflects sync order.
         // Rows synced before startedAt existed fall back to the end of their day.
         .orderBy(
-          desc(whoopWorkouts.date),
-          sql`${whoopWorkouts.startedAt} DESC NULLS LAST`,
-          desc(whoopWorkouts.createdAt),
+          desc(workouts.date),
+          sql`${workouts.startedAt} DESC NULLS LAST`,
+          desc(workouts.createdAt),
         )
         .limit(take)
         .offset(skip),
-      db.select({ value: count() }).from(whoopWorkouts).where(where),
+      db.select({ value: count() }).from(workouts).where(where),
       // Distinct sports for the filter chips, independent of the active sport filter.
       db
-        .selectDistinct({ sport: whoopWorkouts.sport })
-        .from(whoopWorkouts)
-        .where(eq(whoopWorkouts.userId, userId))
-        .orderBy(whoopWorkouts.sport),
+        .selectDistinct({ sport: workouts.sport })
+        .from(workouts)
+        .where(providerFilter.workouts(userId, activityProvider))
+        .orderBy(workouts.sport),
     ]);
 
     const total = Number(countRows[0]?.value ?? 0);
@@ -154,7 +162,7 @@ export async function recoveryRoutes(app: FastifyInstance) {
     };
   });
 
-  // Hand-enter distance for a workout Whoop synced with no distance (e.g. a treadmill run
+  // Hand-enter distance for a workout the provider synced with no distance (e.g. a treadmill run
   // with no GPS/footpod) — otherwise it silently contributes 0 to weekly mileage forever.
   // Marks distanceManual so a future resync won't blank it back out (see upsertWorkout).
   app.patch("/api/recovery/activities/:id", async (request, reply) => {
@@ -164,18 +172,18 @@ export async function recoveryRoutes(app: FastifyInstance) {
     const body = updateWorkoutDistanceSchema.parse(request.body);
 
     const [existing] = await db
-      .select({ id: whoopWorkouts.id })
-      .from(whoopWorkouts)
-      .where(and(eq(whoopWorkouts.id, id), eq(whoopWorkouts.userId, userId)));
+      .select({ id: workouts.id })
+      .from(workouts)
+      .where(and(eq(workouts.id, id), eq(workouts.userId, userId)));
     if (!existing) {
       reply.status(404).send({ error: { message: "Activity not found", code: "NOT_FOUND" } });
       return;
     }
 
     await db
-      .update(whoopWorkouts)
+      .update(workouts)
       .set({ distanceM: body.distanceM, distanceManual: true, updatedAt: new Date() })
-      .where(and(eq(whoopWorkouts.id, id), eq(whoopWorkouts.userId, userId)));
+      .where(and(eq(workouts.id, id), eq(workouts.userId, userId)));
 
     return { ok: true, id, distanceM: body.distanceM };
   });

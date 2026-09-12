@@ -17,7 +17,7 @@ process.env.ATHLETE_TIMEZONE ??= "America/New_York";
  * alone so Google's inbound conflict detection keeps working.
  */
 const { db } = await import("../db/client.js");
-const { users, plannedRuns, whoopWorkouts, trainingPlans, recommendations, recoveryMetrics, syncState } =
+const { users, plannedRuns, workouts, trainingPlans, recommendations, recoveryMetrics, syncState } =
   await import("../db/schema.js");
 const { reconcileUser } = await import("./service.js");
 const { buildAdherence } = await import("./adherence.js");
@@ -56,13 +56,13 @@ async function addRun(
 async function addWorkout(
   date: string,
   startedAt: Date | null,
-  overrides: Partial<typeof whoopWorkouts.$inferInsert> = {},
+  overrides: Partial<typeof workouts.$inferInsert> = {},
 ): Promise<string> {
   const [row] = await db
-    .insert(whoopWorkouts)
+    .insert(workouts)
     .values({
       userId,
-      whoopWorkoutId: randomUUID(),
+      externalId: randomUUID(),
       date,
       startedAt,
       sport: "running",
@@ -71,7 +71,7 @@ async function addWorkout(
       strain: 11.4,
       ...overrides,
     })
-    .returning({ id: whoopWorkouts.id });
+    .returning({ id: workouts.id });
   return row!.id;
 }
 
@@ -199,7 +199,7 @@ describe("reconcileUser", () => {
     await reconcileUser(userId, { now: NOW });
     expect((await readRun(runId)).status).toBe("completed");
 
-    await db.delete(whoopWorkouts).where(eq(whoopWorkouts.id, workoutId));
+    await db.delete(workouts).where(eq(workouts.id, workoutId));
     await reconcileUser(userId, { now: NOW });
 
     // Without this the run keeps reading as completed off a workout that no longer exists and
@@ -435,7 +435,7 @@ describe("recommendation outcomes", () => {
     const cardId = await addResolvedCard("2025-06-10", runId);
     await db.insert(recoveryMetrics).values({
       userId,
-      whoopSleepId: randomUUID(),
+      externalId: randomUUID(),
       date: "2025-06-11",
       recoveryScore: 72,
       hrvRmssdMs: 61.5,
@@ -511,7 +511,7 @@ describe("recommendation outcomes", () => {
     const first = (await readCard(cardId)).outcomeContext as { recordedAt: string };
 
     // Delete the workout so a re-derivation would produce a materially different record.
-    await db.delete(whoopWorkouts).where(eq(whoopWorkouts.id, workoutId));
+    await db.delete(workouts).where(eq(workouts.id, workoutId));
     await reconcileUser(userId, { now: NOW });
 
     const second = (await readCard(cardId)).outcomeContext as {
@@ -586,14 +586,14 @@ describe("route access", () => {
       })
       .returning({ id: users.id });
     const [theirWorkout] = await db
-      .insert(whoopWorkouts)
+      .insert(workouts)
       .values({
         userId: other!.id,
-        whoopWorkoutId: randomUUID(),
+        externalId: randomUUID(),
         date: "2025-06-10",
         sport: "running",
       })
-      .returning({ id: whoopWorkouts.id });
+      .returning({ id: workouts.id });
 
     const app = await buildServer();
     try {

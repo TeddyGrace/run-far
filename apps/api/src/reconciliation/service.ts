@@ -1,13 +1,15 @@
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 
 import { db } from "../db/client.js";
-import { plannedRuns, syncState, whoopWorkouts } from "../db/schema.js";
+import { plannedRuns, syncState, workouts } from "../db/schema.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
+import { getActiveHealthProvider, providerFilter, syncProviderFor } from "../lib/healthProvider.js";
 import { logger } from "../lib/logger.js";
 import { addLocalDays, dateYmdInZone, zonedLocalToIso } from "../lib/zonedTime.js";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 import { matchWorkoutsToRuns, type MatchableRun, type MatchableWorkout } from "./match.js";
 import { recordSettledOutcomes } from "./outcome.js";
+import type { HealthProvider } from "@run-far/shared";
 
 /**
  * How far back a sweep reconsiders. Long enough that a late Whoop sync, a dropped webhook, or
@@ -29,22 +31,28 @@ export interface ReconcileResult {
 /**
  * The instant through which we can trust an absence of workouts to mean an absence of running.
  *
- * Null when Whoop has never synced for this athlete. Absence of evidence is not evidence of
- * absence: without this gate, an athlete with a plan and no Whoop connected has every past run
- * marked `skipped` and is told they missed everything, when the truth is the app cannot see what
- * they did. That is wrong on the dashboard, and worse in the training record — a card targeting
- * one of those runs would record a fabricated "the athlete skipped it", which is precisely the
- * kind of unrecoverable corruption the rest of this design exists to prevent.
+ * Null when the athlete's active wearable has never synced. Absence of evidence is not evidence
+ * of absence: without this gate, an athlete with a plan and no wearable connected has every past
+ * run marked `skipped` and is told they missed everything, when the truth is the app cannot see
+ * what they did. That is wrong on the dashboard, and worse in the training record — a card
+ * targeting one of those runs would record a fabricated "the athlete skipped it", which is
+ * precisely the kind of unrecoverable corruption the rest of this design exists to prevent.
  *
  * The sync watermark is the right signal on its own, and subsumes the connection state: a dead
  * refresh token stops `lastPolledAt` advancing, so days after the token died fall outside
  * coverage without needing a separate `needsReauth` check.
+ *
+ * Reading the *active* provider's watermark is what keeps that guarantee intact across a
+ * provider switch. Apple Health's watermark only advances when the iOS app actually pushes, so
+ * an athlete who switches to Apple Health and then leaves their phone offline for a week has
+ * those days fall outside coverage — reported `untracked`, not missed. Reading Whoop's stale
+ * watermark instead would have claimed coverage over days no Apple data could have reached us.
  */
-async function workoutCoverageThrough(userId: string): Promise<Date | null> {
+async function workoutCoverageThrough(userId: string, provider: HealthProvider): Promise<Date | null> {
   const [state] = await db
     .select({ lastPolledAt: syncState.lastPolledAt })
     .from(syncState)
-    .where(and(eq(syncState.userId, userId), eq(syncState.provider, "whoop")));
+    .where(and(eq(syncState.userId, userId), eq(syncState.provider, syncProviderFor(provider))));
   return state?.lastPolledAt ?? null;
 }
 
@@ -77,6 +85,10 @@ export async function reconcileUser(
   const now = opts.now ?? new Date();
   const windowDays = opts.windowDays ?? DEFAULT_WINDOW_DAYS;
   const timeZone = await getAthleteTimezone(userId);
+  // Only the active provider's workouts are candidates. A dual-wearing athlete would otherwise
+  // offer the matcher two rows for one run, and the loser would sit unmatched in the pool
+  // looking like a second, unplanned session.
+  const provider = await getActiveHealthProvider(userId);
 
   const todayYmd = dateYmdInZone(now, timeZone);
   const fromYmd = dateYmdInZone(addLocalDays(now, -windowDays, timeZone), timeZone);
@@ -114,21 +126,21 @@ export async function reconcileUser(
 
   const workoutRows = await db
     .select({
-      id: whoopWorkouts.id,
-      date: whoopWorkouts.date,
-      startedAt: whoopWorkouts.startedAt,
-      sport: whoopWorkouts.sport,
-      distanceM: whoopWorkouts.distanceM,
-      durationMin: whoopWorkouts.durationMin,
+      id: workouts.id,
+      date: workouts.date,
+      startedAt: workouts.startedAt,
+      sport: workouts.sport,
+      distanceM: workouts.distanceM,
+      durationMin: workouts.durationMin,
     })
-    .from(whoopWorkouts)
+    .from(workouts)
     .where(
       and(
-        eq(whoopWorkouts.userId, userId),
-        gte(whoopWorkouts.date, fromYmd),
+        providerFilter.workouts(userId, provider),
+        gte(workouts.date, fromYmd),
         // `date` is a plain YYYY-MM-DD string column, so this is a lexicographic compare —
         // which is the same as a chronological one for ISO dates.
-        sql`${whoopWorkouts.date} <= ${todayYmd}`,
+        sql`${workouts.date} <= ${todayYmd}`,
       ),
     );
 
@@ -176,7 +188,7 @@ export async function reconcileUser(
    * the run's own start time instead would be wrong in the ordinary case: a run planned for 7am
    * and actually done at 8pm would look observed by a 9am poll, and get marked missed.
    */
-  const coverageThrough = await workoutCoverageThrough(userId);
+  const coverageThrough = await workoutCoverageThrough(userId, provider);
   const isObserved = (r: { scheduledAt: Date }) => {
     if (!coverageThrough) return false;
     const dayAfter = dateYmdInZone(addLocalDays(r.scheduledAt, 1, timeZone), timeZone);
@@ -263,7 +275,7 @@ export async function reconcileUser(
   // one place that can notice it. Best-effort: a lost outcome record is not a reason to lose
   // the reconciliation that produced it.
   try {
-    await recordSettledOutcomes(userId, { now, timeZone });
+    await recordSettledOutcomes(userId, { now, timeZone, provider });
   } catch (err) {
     logger.warn({ err, userId }, "failed to record recommendation outcomes after reconciliation");
   }

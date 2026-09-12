@@ -18,6 +18,27 @@ import { sql } from "drizzle-orm";
 // --- Enums ---
 
 export const oauthProviderEnum = pgEnum("oauth_provider", ["whoop", "google"]);
+// Where an athlete's recovery/sleep/workout data comes from. Distinct from oauthProviderEnum:
+// Whoop is reached by a server-side OAuth token, Apple Health has no cloud API at all and is
+// pushed to us by the iOS app from HealthKit on the device — so "apple_health" is a data
+// provider that will never appear as an oauth_connections row. Exactly one of these is active
+// per athlete at a time (users.active_health_provider); rows from the other are retained but
+// not read, because the two providers' metrics are not interchangeable (see hrvMetric below).
+export const healthProviderEnum = pgEnum("health_provider", ["whoop", "apple_health"]);
+// The union of everything sync_state tracks a watermark for: the OAuth providers plus the
+// pushed-from-device one. A separate enum rather than reusing oauthProviderEnum because
+// "apple_health" is never a valid oauth_connections.provider.
+export const syncProviderEnum = pgEnum("sync_provider", ["whoop", "google", "apple_health"]);
+// Which HRV metric a recovery row's hrvRmssdMs column actually holds. Whoop reports RMSSD;
+// Apple Watch records SDNN, a different computation over the same beat intervals with its own
+// scale and spread. They are NOT interchangeable: mixing them in one baseline produces a mean
+// and SD that describe neither, which is why every read is filtered to one provider.
+export const hrvMetricEnum = pgEnum("hrv_metric", ["rmssd", "sdnn"]);
+// Who produced a recovery score. Whoop ships its own 0-100 score; Apple Health has no
+// equivalent, so run-far derives one from HRV/RHR/sleep/respiratory-rate deviation against the
+// athlete's own baseline (see integrations/appleHealth/recoveryScore.ts). Persisted so a score
+// can never be silently attributed to a wearable that never computed it.
+export const recoveryScoreSourceEnum = pgEnum("recovery_score_source", ["provider", "derived"]);
 export const scoreStateEnum = pgEnum("score_state", ["SCORED", "PENDING_SCORE", "UNSCORABLE"]);
 export const runTypeEnum = pgEnum("run_type", [
   "easy",
@@ -124,6 +145,12 @@ export const users = pgTable(
     // lib/modelRendering.ts. Note this gates rendering only; the model source still runs and is
     // still scored in shadow regardless of what this says.
     modelRenderedOverride: boolean("model_rendered_override"),
+    // Which wearable's data the engine reads for this athlete. Never mixed: a Whoop RMSSD
+    // baseline and an Apple SDNN baseline describe different quantities, so every recovery /
+    // sleep / cycle / workout read is filtered to this one provider. Switching it does not
+    // delete the other provider's rows — they stay, unread, and reading resumes if the athlete
+    // switches back. Resolve it through lib/healthProvider.ts rather than reading the column.
+    activeHealthProvider: healthProviderEnum("active_health_provider").notNull().default("whoop"),
     // Athlete's location for NWS weather lookups, set via Settings (browser geolocation).
     // Null means weather is unavailable — see lib/athleteLocation.ts. locationUpdatedAt is
     // surfaced in Settings ("last set N ago") so a moved athlete notices it's stale and
@@ -259,7 +286,11 @@ export const weatherForecasts = pgTable(
   (t) => [uniqueIndex("weather_forecasts_user_date_idx").on(t.userId, t.date)],
 );
 
-// --- Whoop data ---
+// --- Wearable data (Whoop, or Apple Health pushed from the iOS app) ---
+//
+// These four tables are provider-agnostic: each row records which provider it came from and
+// that provider's own id for it (`externalId`). Reads are filtered to the athlete's
+// activeHealthProvider — see lib/healthProvider.ts for why mixing is never correct.
 
 export const recoveryMetrics = pgTable(
   "recovery_metrics",
@@ -268,28 +299,53 @@ export const recoveryMetrics = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    whoopSleepId: text("whoop_sleep_id").notNull(),
+    provider: healthProviderEnum("provider").notNull().default("whoop"),
+    // The provider's own id for the sleep this recovery describes: Whoop's sleep UUID, or the
+    // HKCategorySample UUID of the primary sleep Apple Health derived it from.
+    externalId: text("external_id").notNull(),
     cycleId: text("cycle_id"),
     date: date("date").notNull(),
+    // 0-100. Whoop's own score, or run-far's derived one — recoveryScoreSource says which, and
+    // is the only honest way to read this column.
     recoveryScore: doublePrecision("recovery_score"),
+    recoveryScoreSource: recoveryScoreSourceEnum("recovery_score_source").notNull().default("provider"),
+    // Heart-rate variability in ms. Holds RMSSD for Whoop and SDNN for Apple Health — the
+    // column name is kept for the persisted recommendation snapshots that already reference
+    // it; hrvMetric is what says which metric the number actually is. Compare a value only
+    // against a baseline built from the same provider.
     hrvRmssdMs: doublePrecision("hrv_rmssd_ms"),
+    hrvMetric: hrvMetricEnum("hrv_metric").notNull().default("rmssd"),
     restingHr: doublePrecision("resting_hr"),
     spo2: doublePrecision("spo2"),
+    // Whoop skin temperature / Apple Watch wrist temperature. Both are a nightly distal
+    // temperature; for Apple this is the deviation-friendly absolute value, not Apple's own
+    // "wrist temperature deviation" figure, which HealthKit does not expose.
     skinTempC: doublePrecision("skin_temp_c"),
+    // Why a derived score came out the way it did: the per-component z-scores and weights the
+    // recovery score was built from. Null for provider-scored rows (Whoop shows its own
+    // breakdown in its app and we don't recompute it). Purely explanatory — nothing reads it
+    // to make a decision, it exists so a surprising score can be accounted for after the fact.
+    scoreComponents: jsonb("score_components"),
     scoreState: scoreStateEnum("score_state").notNull().default("PENDING_SCORE"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("recovery_metrics_whoop_sleep_id_idx").on(t.userId, t.whoopSleepId),
-    index("recovery_metrics_user_date_idx").on(t.userId, t.date),
+    uniqueIndex("recovery_metrics_provider_external_id_idx").on(t.userId, t.provider, t.externalId),
+    index("recovery_metrics_user_provider_date_idx").on(t.userId, t.provider, t.date),
   ],
 );
 
-// Whoop's Physiological Cycle — the actual unit Whoop organizes a member's data around
-// (wake-to-wake, can cross midnight, can run longer than 24h), not a calendar day. `end` is
-// null while the cycle is still open/ongoing. No cycle.* webhooks exist, so this table is
-// kept fresh by polling (full sync) and by piggybacking on the sleep/recovery webhook handlers.
+// A physiological cycle — wake-to-wake, can cross midnight, can run longer than 24h. Not a
+// calendar day. `end` is null while the cycle is still open/ongoing.
+//
+// For Whoop this mirrors its own Physiological Cycle, the unit Whoop organizes a member's data
+// around; no cycle.* webhooks exist, so those rows are kept fresh by polling and by
+// piggybacking on the sleep/recovery webhook handlers. Apple Health has no such concept, so
+// for apple_health rows the cycle is *synthesized* from consecutive primary sleeps — a cycle
+// runs from one waking to the next (see integrations/appleHealth/cycles.ts). That synthesis is
+// what lets everything downstream (the snapshot's "today", the strain/load windows, ACWR) stay
+// written against one concept instead of branching per provider.
 export const cycles = pgTable(
   "cycles",
   {
@@ -297,11 +353,19 @@ export const cycles = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    whoopCycleId: text("whoop_cycle_id").notNull(),
+    provider: healthProviderEnum("provider").notNull().default("whoop"),
+    // Whoop's numeric cycle id as a string, or for apple_health the deterministic synthetic id
+    // "wake-<local date of the waking that starts it>" — deterministic so re-ingesting the same
+    // sleeps re-derives the same cycle instead of duplicating it.
+    externalId: text("external_id").notNull(),
     start: timestamp("start", { withTimezone: true }).notNull(),
     end: timestamp("end", { withTimezone: true }),
     timezoneOffset: text("timezone_offset"),
     scoreState: scoreStateEnum("score_state").notNull().default("PENDING_SCORE"),
+    // Whoop's 0-21 strain score. Always null for apple_health: Apple publishes no strain
+    // equivalent and inventing one on a log scale we don't know the shape of would be a
+    // fabrication. `kilojoule` is the additive load figure that carries ACWR for both
+    // providers — see metrics/cycleMetrics.ts cycleLoad.
     strain: doublePrecision("strain"),
     kilojoule: doublePrecision("kilojoule"),
     avgHr: integer("avg_hr"),
@@ -310,8 +374,8 @@ export const cycles = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("cycles_whoop_cycle_id_idx").on(t.userId, t.whoopCycleId),
-    index("cycles_user_start_idx").on(t.userId, t.start),
+    uniqueIndex("cycles_provider_external_id_idx").on(t.userId, t.provider, t.externalId),
+    index("cycles_user_provider_start_idx").on(t.userId, t.provider, t.start),
   ],
 );
 
@@ -322,7 +386,9 @@ export const sleepRecords = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    whoopSleepId: text("whoop_sleep_id").notNull(),
+    provider: healthProviderEnum("provider").notNull().default("whoop"),
+    // Whoop's sleep UUID, or the HKCategorySample UUID of the Apple Health sleep session.
+    externalId: text("external_id").notNull(),
     cycleId: text("cycle_id"),
     // True for a nap; false for the primary sleep that starts the cycle. Needed to pick the
     // right row when a cycle has both — see buildRecoverySnapshot's sleepDebtMinToday lookup.
@@ -332,25 +398,45 @@ export const sleepRecords = pgTable(
     efficiencyPct: doublePrecision("efficiency_pct"),
     // Whoop "Sleep performance" — % of sleep needed that was achieved (the Sleep score).
     performancePct: doublePrecision("performance_pct"),
+    // Cumulative, rolling sleep debt in minutes — NEVER re-aggregate this across days (see
+    // buildRecoverySnapshot). Whoop reports its own figure. For Apple Health run-far derives it
+    // by decaying nightly shortfalls against sleepNeedMin over a trailing window, because
+    // HealthKit has no debt concept — see integrations/appleHealth/sleepDebt.ts.
     sleepDebtMin: doublePrecision("sleep_debt_min"),
+    // The sleep need the debt above was measured against. Null for Whoop, whose need figure is
+    // internal to its own score; populated for derived rows so the debt is auditable rather
+    // than an unexplained number.
+    sleepNeedMin: doublePrecision("sleep_need_min"),
     respiratoryRate: doublePrecision("respiratory_rate"),
+    // Time in bed, distinct from durationMin (asleep). Apple Health reports inBed as its own
+    // sample category; efficiencyPct is derived from the two for apple_health rows.
+    inBedMin: doublePrecision("in_bed_min"),
+    // Per-stage minutes, when the provider breaks sleep down. Apple Watch reports core/deep/REM
+    // (mapped to light/deep/rem) plus awake; null when the athlete slept without the watch or
+    // only a bare inBed/asleep sample exists.
+    lightMin: doublePrecision("light_min"),
+    deepMin: doublePrecision("deep_min"),
+    remMin: doublePrecision("rem_min"),
+    awakeMin: doublePrecision("awake_min"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("sleep_records_whoop_sleep_id_idx").on(t.userId, t.whoopSleepId),
-    index("sleep_records_user_date_idx").on(t.userId, t.date),
+    uniqueIndex("sleep_records_provider_external_id_idx").on(t.userId, t.provider, t.externalId),
+    index("sleep_records_user_provider_date_idx").on(t.userId, t.provider, t.date),
   ],
 );
 
-export const whoopWorkouts = pgTable(
-  "whoop_workouts",
+export const workouts = pgTable(
+  "workouts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    whoopWorkoutId: text("whoop_workout_id").notNull(),
+    provider: healthProviderEnum("provider").notNull().default("whoop"),
+    // Whoop's workout UUID, or the HKWorkout UUID from Apple Health.
+    externalId: text("external_id").notNull(),
     date: date("date").notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     durationMin: doublePrecision("duration_min"),
@@ -360,12 +446,14 @@ export const whoopWorkouts = pgTable(
     maxHr: doublePrecision("max_hr"),
     kilojoules: doublePrecision("kilojoules"),
     distanceM: doublePrecision("distance_m"),
-    // True once the athlete has hand-entered distanceM (e.g. a treadmill/no-GPS workout Whoop
-    // synced with no distance). A resync only overwrites distanceM when Whoop sends a real
-    // value — see upsertWorkout — so a manual entry survives future syncs until Whoop itself
-    // reports a distance, at which point this flips back to false.
+    // True once the athlete has hand-entered distanceM (e.g. a treadmill/no-GPS workout the
+    // provider synced with no distance). A resync only overwrites distanceM when the provider
+    // sends a real value — see upsertWorkout — so a manual entry survives future syncs until
+    // the provider itself reports a distance, at which point this flips back to false.
     distanceManual: boolean("distance_manual").notNull().default(false),
-    // Full Whoop WorkoutScore extras — present for GPS sports and HR-zone breakdowns.
+    // Scoring extras. strain is Whoop-only (see cycles.strain); the rest are reported by both
+    // providers for GPS sports, with percentRecorded and zoneDurations Whoop-only —
+    // HealthKit exposes neither a recording-coverage figure nor Whoop's zone taxonomy.
     percentRecorded: doublePrecision("percent_recorded"),
     altitudeGainM: doublePrecision("altitude_gain_m"),
     altitudeChangeM: doublePrecision("altitude_change_m"),
@@ -381,8 +469,8 @@ export const whoopWorkouts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    uniqueIndex("whoop_workouts_whoop_workout_id_idx").on(t.userId, t.whoopWorkoutId),
-    index("whoop_workouts_user_date_idx").on(t.userId, t.date),
+    uniqueIndex("workouts_provider_external_id_idx").on(t.userId, t.provider, t.externalId),
+    index("workouts_user_provider_date_idx").on(t.userId, t.provider, t.date),
   ],
 );
 
@@ -438,7 +526,7 @@ export const plannedRuns = pgTable(
     // say what was intended and what happened but never that they were the same session.
     // Null means "not linked" — which, read together with `reconciled_at` and `status`, is how
     // "not looked at yet" stays distinguishable from "looked at, and nothing matched".
-    actualWorkoutId: uuid("actual_workout_id").references(() => whoopWorkouts.id, {
+    actualWorkoutId: uuid("actual_workout_id").references(() => workouts.id, {
       onDelete: "set null",
     }),
     // Who decided this link. See runMatchSourceEnum: 'auto' rows are the sweep's own guess and
@@ -590,12 +678,16 @@ export const syncState = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    provider: oauthProviderEnum("provider").notNull(),
+    // Widened beyond oauthProviderEnum to carry "apple_health", which is a data provider with
+    // no OAuth connection behind it — the iOS app pushes to us. It shares this table because
+    // lastPolledAt means the same thing for it: the watermark through which the app's view of
+    // that provider is complete, which is what the reconciliation sweep's coverage gate needs.
+    provider: syncProviderEnum("provider").notNull(),
     // Google
     syncToken: text("sync_token"),
     channelId: text("channel_id"),
     channelExpiration: timestamp("channel_expiration", { withTimezone: true }),
-    // Whoop
+    // Whoop / Apple Health
     lastPolledAt: timestamp("last_polled_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

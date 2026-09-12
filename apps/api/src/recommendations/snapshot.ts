@@ -1,8 +1,9 @@
 import { and, eq, gte, lte, desc, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { recoveryMetrics, sleepRecords, whoopWorkouts } from "../db/schema.js";
+import { recoveryMetrics, sleepRecords, workouts } from "../db/schema.js";
 import { ENGINE_CONFIG } from "./config.js";
 import { getRuleThresholds } from "../lib/ruleThresholds.js";
+import { getActiveHealthProvider, providerFilter } from "../lib/healthProvider.js";
 import type { RecoverySnapshot } from "@run-far/shared";
 import { dateYmdInZone } from "../lib/zonedTime.js";
 import { getAthleteTimezone } from "../lib/athleteTimezone.js";
@@ -17,7 +18,9 @@ import { logger } from "../lib/logger.js";
  * gap, and the TTL keeps repeated reads from hammering the Whoop API. */
 const SLEEP_FRESHNESS_TTL_MS = 10 * 60 * 1000;
 
-/** Whoop sport_name values that count as "runs" for mileage stats. */
+/** Provider sport names that count as "runs" for mileage stats. Apple Health workouts are
+ * normalized to these same keys on ingest (see integrations/appleHealth/sports.ts) precisely so
+ * this list, the reconciliation matcher, and the frontend's sport filters stay single-valued. */
 const RUN_SPORTS = ["running", "trail_running", "treadmill_running"] as const;
 
 /** How many completed cycles the rolling strain/load (acute) window looks back over. */
@@ -83,6 +86,10 @@ function startOfLocalMonth(localIso: string): string {
  */
 export async function buildRecoverySnapshot(userId: string): Promise<RecoverySnapshot> {
   const tz = await getAthleteTimezone(userId);
+  // Every wearable read below is filtered to this one provider. Mixing them would build the
+  // HRV baseline out of two different metrics (Whoop RMSSD, Apple SDNN) and count a
+  // dual-wearing athlete's runs twice — see lib/healthProvider.ts.
+  const provider = await getActiveHealthProvider(userId);
   // The HRV suppression streak below is counted against a threshold the athlete can tune, so
   // the snapshot has to resolve it too — it is the only tunable that shapes a *derived field*
   // rather than being compared against one inside a rule. Everything downstream (the hrv rule,
@@ -91,7 +98,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
   const today = new Date();
   const todayIso = localIsoDate(today, tz);
 
-  const currentCycle = await getCurrentCycle(userId);
+  const currentCycle = await getCurrentCycle(userId, provider);
 
   const baselineWindowStart = localIsoDate(daysAgo(30), tz);
   const baselineRows = await db
@@ -99,7 +106,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     .from(recoveryMetrics)
     .where(
       and(
-        eq(recoveryMetrics.userId, userId),
+        providerFilter.recovery(userId, provider),
         gte(recoveryMetrics.date, baselineWindowStart),
         lte(recoveryMetrics.date, todayIso),
       ),
@@ -107,7 +114,7 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     .orderBy(desc(recoveryMetrics.date));
 
   const todayRow =
-    (currentCycle && baselineRows.find((r) => r.cycleId === currentCycle.whoopCycleId)) ||
+    (currentCycle && baselineRows.find((r) => r.cycleId === currentCycle.externalId)) ||
     baselineRows.find((r) => r.date === todayIso);
 
   const hrvValues = baselineRows.map((r) => r.hrvRmssdMs).filter((v): v is number => v != null);
@@ -125,9 +132,9 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     const recoveryByCycleId = new Map(
       baselineRows.filter((r) => r.cycleId != null).map((r) => [r.cycleId as string, r]),
     );
-    const recentCyclesForStreak = await getRecentCycles(userId, HRV_STREAK_LOOKBACK_CYCLES);
+    const recentCyclesForStreak = await getRecentCycles(userId, provider, HRV_STREAK_LOOKBACK_CYCLES);
     for (const cycle of recentCyclesForStreak) {
-      const row = recoveryByCycleId.get(cycle.whoopCycleId);
+      const row = recoveryByCycleId.get(cycle.externalId);
       if (!row || row.hrvRmssdMs == null) break;
       const sdBelow = (hrvBaselineMs - row.hrvRmssdMs) / hrvBaselineSd;
       if (sdBelow >= thresholds.hrvSuppressedSd) {
@@ -147,8 +154,8 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
       .from(sleepRecords)
       .where(
         and(
-          eq(sleepRecords.userId, userId),
-          eq(sleepRecords.cycleId, currentCycle.whoopCycleId),
+          providerFilter.sleep(userId, provider),
+          eq(sleepRecords.cycleId, currentCycle.externalId),
           eq(sleepRecords.nap, false),
         ),
       );
@@ -160,7 +167,13 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
     [todaySleepRow] = await db
       .select()
       .from(sleepRecords)
-      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.date, todayIso), eq(sleepRecords.nap, false)))
+      .where(
+        and(
+          providerFilter.sleep(userId, provider),
+          eq(sleepRecords.date, todayIso),
+          eq(sleepRecords.nap, false),
+        ),
+      )
       .orderBy(desc(sleepRecords.createdAt));
   }
 
@@ -168,28 +181,43 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
   // that one sleep from Whoop by id (idempotent upsert) so a missed sleep.updated webhook can't
   // serve a stale sleep-debt value. Best-effort — on any failure we fall through to the stored
   // value rather than break background regeneration or the digest.
-  if (todaySleepRow && Date.now() - todaySleepRow.updatedAt.getTime() > SLEEP_FRESHNESS_TTL_MS) {
+  //
+  // Whoop-only, and not for want of generality: there is nothing to call for Apple Health. Its
+  // data lives on the device and only ever arrives by being pushed to us, so the server cannot
+  // pull a fresher copy of a sleep on demand. An Apple row is as fresh as the last time the
+  // iOS app ran, which is why the ingest route is what recomputes the derived score.
+  if (
+    provider === "whoop" &&
+    todaySleepRow &&
+    Date.now() - todaySleepRow.updatedAt.getTime() > SLEEP_FRESHNESS_TTL_MS
+  ) {
     try {
-      await syncSingleResource(userId, "sleep", todaySleepRow.whoopSleepId);
+      await syncSingleResource(userId, "sleep", todaySleepRow.externalId);
       const [refreshed] = await db
         .select()
         .from(sleepRecords)
-        .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.whoopSleepId, todaySleepRow.whoopSleepId)));
+        .where(
+          and(providerFilter.sleep(userId, provider), eq(sleepRecords.externalId, todaySleepRow.externalId)),
+        );
       if (refreshed) todaySleepRow = refreshed;
     } catch (err) {
-      logger.warn({ err, userId, whoopSleepId: todaySleepRow.whoopSleepId }, "on-read sleep refresh failed; using stored value");
+      logger.warn(
+        { err, userId, externalId: todaySleepRow.externalId },
+        "on-read sleep refresh failed; using stored value",
+      );
     }
   }
   const sleepDebtMinToday = todaySleepRow?.sleepDebtMin ?? null;
 
-  // Strain/load are read from Whoop's own per-cycle score (cycles.strain / cycles.kilojoule),
+  // Strain/load are read from the provider's own per-cycle figures (cycles.strain /
+  // cycles.kilojoule),
   // not summed from individual workouts: strain is a logarithmic 0-21 score, so adding
   // workout strains together isn't a meaningful quantity, and it ignores non-workout strain
   // entirely. The open (still-accumulating) cycle is excluded entirely — its strain is a
   // partial, necessarily-low reading with no honest interpretation until the cycle closes.
   // Pull the full chronic window (28 completed cycles) once; the acute 7-cycle figures are its
   // most-recent slice, so strain/load and ACWR all read from a single query.
-  const chronicCycles = await getRecentCompletedCycles(userId, ACWR_CHRONIC_CYCLES);
+  const chronicCycles = await getRecentCompletedCycles(userId, provider, ACWR_CHRONIC_CYCLES);
   const acuteCycles = chronicCycles.slice(0, STRAIN_WINDOW_CYCLES);
 
   const cycleStrainValues = acuteCycles
@@ -227,14 +255,14 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
   const weekStartIso = startOfLocalWeek(todayIso);
   const monthStartIso = startOfLocalMonth(todayIso);
   const runWorkouts = await db
-    .select({ date: whoopWorkouts.date, distanceM: whoopWorkouts.distanceM })
-    .from(whoopWorkouts)
+    .select({ date: workouts.date, distanceM: workouts.distanceM })
+    .from(workouts)
     .where(
       and(
-        eq(whoopWorkouts.userId, userId),
-        inArray(whoopWorkouts.sport, [...RUN_SPORTS]),
-        gte(whoopWorkouts.date, monthStartIso),
-        lte(whoopWorkouts.date, todayIso),
+        providerFilter.workouts(userId, provider),
+        inArray(workouts.sport, [...RUN_SPORTS]),
+        gte(workouts.date, monthStartIso),
+        lte(workouts.date, todayIso),
       ),
     );
 
@@ -261,6 +289,13 @@ export async function buildRecoverySnapshot(userId: string): Promise<RecoverySna
   return {
     date: todayIso,
     timeZone: tz,
+    provider,
+    // Which HRV metric hrvRmssdMs below actually is, and who computed recoveryScore. Both are
+    // taken from the row rather than inferred from `provider` so a persisted snapshot stays
+    // truthful even if the athlete later switches provider.
+    hrvMetric: todayRow?.hrvMetric ?? (provider === "apple_health" ? "sdnn" : "rmssd"),
+    recoveryScoreSource:
+      todayRow?.recoveryScoreSource ?? (provider === "apple_health" ? "derived" : "provider"),
     recoveryScore: todayRow?.recoveryScore ?? null,
     hrvRmssdMs: todayRow?.hrvRmssdMs ?? null,
     hrvBaselineMs,

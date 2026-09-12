@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { healthProviderSchema } from "./recovery.js";
+
 // Models selectable per agent. Keep in sync with what's actually available on the
 // Anthropic account — this list is intentionally short-lived and hand-maintained.
 export const AI_MODEL_OPTIONS = [
@@ -27,6 +29,16 @@ export const userSettingsSchema = z.object({
   locationLon: z.number().nullable(),
   locationUpdatedAt: z.string().nullable(),
   timezone: z.string().nullable(),
+  // Which wearable the engine reads for this athlete. Only ever one: a Whoop RMSSD baseline and
+  // an Apple SDNN baseline are different quantities, so the two are never averaged together.
+  activeHealthProvider: healthProviderSchema,
+  // Whether each provider has usable data behind it, so the picker can warn before switching to
+  // a source that would leave the dashboard empty. Apple Health arrives only from the iOS app,
+  // so appleHealth is false for an athlete who has never opened it.
+  healthProviderAvailability: z.object({
+    whoop: z.boolean(),
+    appleHealth: z.boolean(),
+  }),
 });
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
@@ -49,5 +61,6 @@ export const updateUserSettingsSchema = z.object({
   // IANA zone name, e.g. "America/New_York" — validated server-side (routes/settings.ts)
   // rather than with a regex here, since the only real check is "does Intl accept it".
   timezone: z.string().min(1).nullable().optional(),
+  activeHealthProvider: healthProviderSchema.optional(),
 });
 export type UpdateUserSettingsInput = z.infer<typeof updateUserSettingsSchema>;

@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, eq, sql } from "drizzle-orm";
 import { env } from "../../env.js";
 import { db } from "../../db/client.js";
-import { oauthConnections, recoveryMetrics, sleepRecords, whoopWorkouts } from "../../db/schema.js";
+import { oauthConnections, recoveryMetrics, sleepRecords, workouts } from "../../db/schema.js";
 import { syncSingleResource } from "./sync.js";
 import { generateRecommendationsSafe } from "../../recommendations/service.js";
 import { reconcileUserSafe } from "../../reconciliation/service.js";
@@ -102,7 +102,15 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
     case "recovery.deleted":
       await db
         .delete(recoveryMetrics)
-        .where(and(eq(recoveryMetrics.whoopSleepId, id), eq(recoveryMetrics.userId, userId)));
+        .where(
+          and(
+            eq(recoveryMetrics.userId, userId),
+            // A Whoop webhook can only ever delete a Whoop row. Without this the id
+            // match alone would be free to hit an apple_health row.
+            eq(recoveryMetrics.provider, "whoop"),
+            eq(recoveryMetrics.externalId, id),
+          ),
+        );
       return;
     case "sleep.updated":
       // Morning sleep sync is the primary cue to refresh today's recommendation.
@@ -112,7 +120,15 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
     case "sleep.deleted":
       await db
         .delete(sleepRecords)
-        .where(and(eq(sleepRecords.whoopSleepId, id), eq(sleepRecords.userId, userId)));
+        .where(
+          and(
+            eq(sleepRecords.userId, userId),
+            // A Whoop webhook can only ever delete a Whoop row. Without this the id
+            // match alone would be free to hit an apple_health row.
+            eq(sleepRecords.provider, "whoop"),
+            eq(sleepRecords.externalId, id),
+          ),
+        );
       return;
     case "workout.updated":
       // A workout landing is the only event that can turn a planned run into a completed one,
@@ -124,8 +140,16 @@ async function handleEvent(userId: string, payload: WhoopWebhookPayload): Promis
       return;
     case "workout.deleted":
       await db
-        .delete(whoopWorkouts)
-        .where(and(eq(whoopWorkouts.whoopWorkoutId, id), eq(whoopWorkouts.userId, userId)));
+        .delete(workouts)
+        .where(
+          and(
+            eq(workouts.userId, userId),
+            // A Whoop webhook can only ever delete a Whoop row. Without this the id
+            // match alone would be free to hit an apple_health row.
+            eq(workouts.provider, "whoop"),
+            eq(workouts.externalId, id),
+          ),
+        );
       // The FK clears the link on its own (ON DELETE SET NULL), but that leaves the run sitting
       // at 'completed' with nothing behind it — a deleted workout has to be able to un-complete
       // a run, or adherence permanently overstates what was done.

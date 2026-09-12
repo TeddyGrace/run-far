@@ -46,10 +46,10 @@ afterEach(async () => {
 describe("buildRecoverySnapshot on-read sleep freshness", () => {
   it("re-fetches today's sleep and serves the refreshed debt when the stored row is stale", async () => {
     const todayIso = isoDate(new Date());
-    const whoopSleepId = `sleep-stale-${randomUUID()}`;
+    const externalId = `sleep-stale-${randomUUID()}`;
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId,
+      externalId,
       date: todayIso,
       nap: false,
       sleepDebtMin: 113, // the stale value the athlete disputed
@@ -58,18 +58,18 @@ describe("buildRecoverySnapshot on-read sleep freshness", () => {
     await db
       .update(sleepRecords)
       .set({ updatedAt: new Date(Date.now() - 60 * 60 * 1000) })
-      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.whoopSleepId, whoopSleepId)));
+      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.externalId, externalId)));
 
     // Simulate Whoop's live re-score landing via the idempotent upsert.
     syncSingleResource.mockImplementation(async () => {
       await db
         .update(sleepRecords)
         .set({ sleepDebtMin: 61, updatedAt: new Date() })
-        .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.whoopSleepId, whoopSleepId)));
+        .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.externalId, externalId)));
     });
 
     const snapshot = await buildRecoverySnapshot(userId);
-    expect(syncSingleResource).toHaveBeenCalledWith(userId, "sleep", whoopSleepId);
+    expect(syncSingleResource).toHaveBeenCalledWith(userId, "sleep", externalId);
     expect(snapshot.sleepDebtMinToday).toBe(61);
   });
 
@@ -77,7 +77,7 @@ describe("buildRecoverySnapshot on-read sleep freshness", () => {
     const todayIso = isoDate(new Date());
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-fresh-${randomUUID()}`,
+      externalId: `sleep-fresh-${randomUUID()}`,
       date: todayIso,
       nap: false,
       sleepDebtMin: 61,
@@ -90,10 +90,10 @@ describe("buildRecoverySnapshot on-read sleep freshness", () => {
 
   it("falls back to the stored value if the on-read refresh throws", async () => {
     const todayIso = isoDate(new Date());
-    const whoopSleepId = `sleep-err-${randomUUID()}`;
+    const externalId = `sleep-err-${randomUUID()}`;
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId,
+      externalId,
       date: todayIso,
       nap: false,
       sleepDebtMin: 113,
@@ -101,7 +101,7 @@ describe("buildRecoverySnapshot on-read sleep freshness", () => {
     await db
       .update(sleepRecords)
       .set({ updatedAt: new Date(Date.now() - 60 * 60 * 1000) })
-      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.whoopSleepId, whoopSleepId)));
+      .where(and(eq(sleepRecords.userId, userId), eq(sleepRecords.externalId, externalId)));
 
     syncSingleResource.mockRejectedValue(new Error("whoop down"));
 
@@ -115,14 +115,14 @@ describe("buildRecoverySnapshot on-read sleep freshness", () => {
     // Fresh rows (within TTL) so no refresh fires — this isolates the fallback selection.
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-nap-${randomUUID()}`,
+      externalId: `sleep-nap-${randomUUID()}`,
       date: todayIso,
       nap: true,
       sleepDebtMin: 9999, // must never be picked
     });
     await db.insert(sleepRecords).values({
       userId,
-      whoopSleepId: `sleep-main-${randomUUID()}`,
+      externalId: `sleep-main-${randomUUID()}`,
       date: todayIso,
       nap: false,
       sleepDebtMin: 61,

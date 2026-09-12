@@ -3,13 +3,14 @@ import { eq, and, sql } from "drizzle-orm";
 import { createPlannedRunSchema, setRunActualSchema, updatePlannedRunSchema } from "@run-far/shared";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { plannedRuns, whoopWorkouts } from "../db/schema.js";
+import { plannedRuns, workouts } from "../db/schema.js";
 import { requireUserId } from "../lib/session.js";
 import { pushPlannedRunToGoogle, deletePlannedRunFromGoogle } from "../integrations/google/push.js";
 import { logger } from "../lib/logger.js";
 import { getActivePlanId, visibleRunsSql } from "../plans/lifecycle.js";
 import { buildAdherence } from "../reconciliation/adherence.js";
 import { reconcileUserSafe } from "../reconciliation/service.js";
+import { getActiveHealthProvider, providerFilter } from "../lib/healthProvider.js";
 
 const adherenceQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(28),
@@ -90,10 +91,14 @@ export async function runRoutes(app: FastifyInstance) {
     }
 
     if (body.workoutId) {
+      // Scoped to the active provider as well as the athlete: linking a run to a workout from
+      // the wearable the engine no longer reads would leave the run `completed` with an
+      // "actual" that nothing downstream — adherence, the assistant, the dashboard — can see.
+      const provider = await getActiveHealthProvider(userId);
       const [workout] = await db
-        .select({ id: whoopWorkouts.id })
-        .from(whoopWorkouts)
-        .where(and(eq(whoopWorkouts.id, body.workoutId), eq(whoopWorkouts.userId, userId)));
+        .select({ id: workouts.id })
+        .from(workouts)
+        .where(and(providerFilter.workouts(userId, provider), eq(workouts.id, body.workoutId)));
       if (!workout) {
         reply.status(404).send({ error: { message: "Workout not found", code: "NOT_FOUND" } });
         return;
