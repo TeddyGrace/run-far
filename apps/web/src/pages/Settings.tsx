@@ -1,11 +1,25 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ConnectionStatus, UserSettings } from "@run-far/shared";
+import type { ConnectionStatus, RuleThresholdSettings, UserSettings } from "@run-far/shared";
 import { AI_MODEL_OPTIONS, MIN_PASSWORD_LENGTH } from "@run-far/shared";
 import { api, ApiError } from "../lib/api.js";
 import { useAuth, useLogout, type Entitlement } from "../lib/auth.js";
 import { ThresholdsCard } from "../components/ThresholdsCard.js";
-import { HealthSourceCard } from "../components/HealthSourceCard.js";
+import { AppleHealthCard, HealthSourceCard } from "../components/HealthSourceCard.js";
+import { isNativeIos } from "../lib/appleHealth.js";
+import {
+  Badge,
+  Button,
+  ButtonLink,
+  Field,
+  FieldError,
+  FieldSuccess,
+  RowDescription,
+  SettingsActionRow,
+  SettingsGroup,
+  SettingsRow,
+  inputClass,
+} from "../components/ui/index.js";
 
 interface BillingStatus {
   entitlement: Entitlement;
@@ -15,8 +29,18 @@ interface BillingStatus {
   aiMonthlyLimitMicros: number;
 }
 
-function ConnectionCard({
-  title,
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
+/**
+ * One external connection, as the body of a row.
+ *
+ * The badge lives in the closed row rather than in here, because "is Whoop connected?" is the
+ * question people open this page to answer — having to expand something to find out was the
+ * old card stack's worst habit.
+ */
+function ConnectionBody({
   description,
   status,
   connectUrl,
@@ -25,7 +49,6 @@ function ConnectionCard({
   syncError,
   syncLabel = "Sync now",
 }: {
-  title: string;
   description: string;
   status: ConnectionStatus | undefined;
   connectUrl: string;
@@ -35,47 +58,35 @@ function ConnectionCard({
   syncLabel?: string;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="font-display font-semibold text-ink-primary">{title}</h3>
-          <p className="mt-1 text-sm text-ink-secondary">{description}</p>
-          {status?.connected && status.lastSyncedAt && (
-            <p className="mt-2 text-xs text-ink-muted">
-              Last synced {new Date(status.lastSyncedAt).toLocaleString()}
-            </p>
-          )}
-        </div>
-        <span
-          className={
-            "shrink-0 rounded-full px-2.5 py-1 text-xs font-medium " +
-            (status?.connected ? "bg-zone-good/15 text-zone-good" : "bg-surface-2 text-ink-muted")
-          }
-        >
-          {status?.connected ? "Connected" : "Not connected"}
-        </span>
-      </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+    <div>
+      <RowDescription>{description}</RowDescription>
+      {status?.connected && status.lastSyncedAt && (
+        <p className="mt-2 text-xs text-ink-muted">
+          Last synced {new Date(status.lastSyncedAt).toLocaleString()}
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         {!status?.connected && (
-          <a
-            href={connectUrl}
-            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-0 hover:opacity-90"
-          >
+          <ButtonLink href={connectUrl} variant="primary">
             Connect
-          </a>
+          </ButtonLink>
         )}
         {status?.connected && onSyncNow && (
-          <button
-            onClick={onSyncNow}
-            disabled={syncing}
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary disabled:opacity-50"
-          >
+          <Button onClick={onSyncNow} disabled={syncing}>
             {syncing ? "Syncing…" : syncLabel}
-          </button>
+          </Button>
         )}
       </div>
-      {syncError && <p className="mt-3 text-sm text-zone-red">{syncError}</p>}
+      <FieldError>{syncError}</FieldError>
     </div>
+  );
+}
+
+function connectionState(status: ConnectionStatus | undefined): ReactNode {
+  return (
+    <Badge tone={status?.connected ? "good" : "muted"}>
+      {status?.connected ? "Connected" : "Not connected"}
+    </Badge>
   );
 }
 
@@ -102,7 +113,7 @@ function ModelSelect({
         value={value ?? ""}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value || null)}
-        className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-ink-primary disabled:opacity-50"
+        className={inputClass}
       >
         <option value="">Default ({defaultModel})</option>
         {AI_MODEL_OPTIONS.map((opt) => (
@@ -115,12 +126,8 @@ function ModelSelect({
   );
 }
 
-function AiModelsCard() {
+function AiModelsBody({ settings }: { settings: UserSettings | undefined }) {
   const queryClient = useQueryClient();
-  const settingsQuery = useQuery<UserSettings>({
-    queryKey: ["settings"],
-    queryFn: () => api.get<UserSettings>("/settings"),
-  });
 
   const updateSettings = useMutation({
     mutationFn: (body: { assistantModel?: string | null; planModel?: string | null }) =>
@@ -130,46 +137,33 @@ function AiModelsCard() {
     },
   });
 
-  const settings = settingsQuery.data;
-
-  // The server also refuses a non-admin's PATCH of these fields — this just keeps the picker
-  // itself from rendering for an account that could never use it.
-  if (!settingsQuery.isLoading && !settings?.canChooseModel) return null;
-
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <h3 className="font-display font-semibold text-ink-primary">AI models</h3>
-      <p className="mt-1 text-sm text-ink-secondary">
-        Choose which Claude model powers each AI agent. Leave on default unless you have a reason to
-        change it.
-      </p>
-      {settingsQuery.isLoading ? (
-        <p className="mt-4 text-sm text-ink-muted">Loading…</p>
-      ) : (
-        <div className="mt-4 space-y-4">
-          <ModelSelect
-            label="Assistant"
-            description="The chat assistant embedded across the app (recovery, calendar, schedule changes)."
-            value={settings?.assistantModel}
-            defaultModel={settings?.defaultAssistantModel ?? "server default"}
-            disabled={updateSettings.isPending}
-            onChange={(assistantModel) => updateSettings.mutate({ assistantModel })}
-          />
-          <ModelSelect
-            label="Plan builder"
-            description="The coach that drafts and revises training plans."
-            value={settings?.planModel}
-            defaultModel={settings?.defaultPlanModel ?? "server default"}
-            disabled={updateSettings.isPending}
-            onChange={(planModel) => updateSettings.mutate({ planModel })}
-          />
-        </div>
-      )}
-      {updateSettings.isError && (
-        <p className="mt-3 text-sm text-zone-red">
-          {updateSettings.error instanceof ApiError ? updateSettings.error.message : "Failed to save"}
-        </p>
-      )}
+    <div>
+      <RowDescription>
+        Which Claude model powers each AI agent. Leave these on default unless you have a reason
+        to change them.
+      </RowDescription>
+      <div className="mt-4 space-y-4">
+        <ModelSelect
+          label="Assistant"
+          description="The chat assistant embedded across the app (recovery, calendar, schedule changes)."
+          value={settings?.assistantModel}
+          defaultModel={settings?.defaultAssistantModel ?? "server default"}
+          disabled={updateSettings.isPending}
+          onChange={(assistantModel) => updateSettings.mutate({ assistantModel })}
+        />
+        <ModelSelect
+          label="Plan builder"
+          description="The coach that drafts and revises training plans."
+          value={settings?.planModel}
+          defaultModel={settings?.defaultPlanModel ?? "server default"}
+          disabled={updateSettings.isPending}
+          onChange={(planModel) => updateSettings.mutate({ planModel })}
+        />
+      </div>
+      <FieldError>
+        {updateSettings.isError ? errorMessage(updateSettings.error, "Failed to save") : null}
+      </FieldError>
     </div>
   );
 }
@@ -198,15 +192,10 @@ function geolocationErrorMessage(err: GeolocationPositionError): string {
   }
 }
 
-function LocationCard() {
+function LocationBody({ settings }: { settings: UserSettings | undefined }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
-
-  const settingsQuery = useQuery<UserSettings>({
-    queryKey: ["settings"],
-    queryFn: () => api.get<UserSettings>("/settings"),
-  });
 
   const updateLocation = useMutation({
     mutationFn: (body: { locationLat: number; locationLon: number }) =>
@@ -215,7 +204,7 @@ function LocationCard() {
       queryClient.setQueryData(["settings"], data);
       setError(null);
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Failed to save location"),
+    onError: (err) => setError(errorMessage(err, "Failed to save location")),
   });
 
   function useMyLocation() {
@@ -238,68 +227,40 @@ function LocationCard() {
     );
   }
 
-  const settings = settingsQuery.data;
   const isSet = settings?.locationLat != null && settings?.locationLon != null;
   const busy = locating || updateLocation.isPending;
 
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <h3 className="font-display font-semibold text-ink-primary">Weather</h3>
-      <p className="mt-1 text-sm text-ink-secondary">
-        Your location powers weather on the calendar and in coaching recommendations (heat, storms,
-        rain). It's set once from your browser — the app quietly keeps it current after that if you
-        move, so you shouldn't need to touch this again.
-      </p>
-      {settingsQuery.isLoading ? (
-        <p className="mt-4 text-sm text-ink-muted">Loading…</p>
-      ) : (
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <p className="text-sm text-ink-secondary">
-            {isSet
-              ? `Location set${settings?.locationUpdatedAt ? ` — last updated ${relativeTime(settings.locationUpdatedAt)}` : ""}`
-              : "Not set — weather won't show until you set a location."}
-          </p>
-          <button
-            onClick={useMyLocation}
-            disabled={busy}
-            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary disabled:opacity-50"
-          >
-            {busy ? "Locating…" : isSet ? "Update location" : "Use my location"}
-          </button>
-        </div>
-      )}
-      {error && <p className="mt-3 text-sm text-zone-red">{error}</p>}
+    <div>
+      <RowDescription>
+        Your location powers weather on the calendar and in coaching recommendations (heat,
+        storms, rain). It's set once from your browser — the app quietly keeps it current after
+        that if you move, so you shouldn't need to touch this again.
+      </RowDescription>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button onClick={useMyLocation} disabled={busy}>
+          {busy ? "Locating…" : isSet ? "Update location" : "Use my location"}
+        </Button>
+      </div>
+      <FieldError>{error}</FieldError>
     </div>
   );
 }
 
-function AccountCard() {
-  const { user } = useAuth();
+function locationSummary(settings: UserSettings | undefined): string {
+  if (settings?.locationLat == null || settings?.locationLon == null) return "Not set";
+  return settings.locationUpdatedAt ? `Set ${relativeTime(settings.locationUpdatedAt)}` : "Set";
+}
+
+function AccountBody() {
   const logout = useLogout();
+  const { user } = useAuth();
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h3 className="font-display font-semibold text-ink-primary">Account</h3>
-          <p className="mt-1 text-sm text-ink-secondary">Signed in as {user?.email}</p>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <button
-            onClick={() => logout()}
-            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
-          >
-            Sign out
-          </button>
-          {user?.role === "admin" && (
-            <a
-              href="https://backoffice.run-far.cc"
-              className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
-            >
-              Backoffice
-            </a>
-          )}
-        </div>
-      </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <Button onClick={() => logout()}>Sign out</Button>
+      {user?.role === "admin" && (
+        <ButtonLink href="https://backoffice.run-far.cc">Backoffice</ButtonLink>
+      )}
     </div>
   );
 }
@@ -316,12 +277,13 @@ function formatUsd(micros: number): string {
   return `$${(micros / 1_000_000).toFixed(2)}`;
 }
 
-function BillingCard() {
-  const statusQuery = useQuery<BillingStatus>({
-    queryKey: ["billing", "status"],
-    queryFn: () => api.get<BillingStatus>("/billing/status"),
-  });
+function billingSummary(status: BillingStatus | undefined): string {
+  if (!status) return "Loading…";
+  if (status.entitlement.source === "comp") return "Comped";
+  return ENTITLEMENT_LABELS[status.entitlement.status];
+}
 
+function BillingBody({ status }: { status: BillingStatus | undefined }) {
   const openPortal = useMutation({
     mutationFn: () => api.post<{ url: string }>("/billing/portal"),
     onSuccess: ({ url }) => {
@@ -329,63 +291,53 @@ function BillingCard() {
     },
   });
 
-  const status = statusQuery.data;
-  if (statusQuery.isLoading || !status) {
-    return (
-      <div className="rounded-xl border border-border bg-surface-1 p-5">
-        <h3 className="font-display font-semibold text-ink-primary">Billing</h3>
-        <p className="mt-4 text-sm text-ink-muted">Loading…</p>
-      </div>
-    );
-  }
+  if (!status) return <p className="text-sm text-ink-muted">Loading…</p>;
 
   const { entitlement } = status;
   const isComped = entitlement.source === "comp";
 
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <h3 className="font-display font-semibold text-ink-primary">Billing</h3>
-      <div className="mt-3 flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm text-ink-primary">
-            {isComped ? "Comped — full access, no charge" : ENTITLEMENT_LABELS[entitlement.status]}
-          </p>
-          {entitlement.expiresAt && !isComped && (
-            <p className="mt-0.5 text-xs text-ink-muted">
-              {entitlement.status === "trialing" ? "Trial ends" : "Renews"}{" "}
-              {new Date(entitlement.expiresAt).toLocaleDateString()}
-            </p>
-          )}
-        </div>
-        {status.hasStripeCustomer && (
-          <button
-            onClick={() => openPortal.mutate()}
-            disabled={openPortal.isPending}
-            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary disabled:opacity-50"
-          >
-            {openPortal.isPending ? "Opening…" : "Manage billing"}
-          </button>
+    <div>
+      <RowDescription>
+        {isComped ? (
+          "Comped — full access, no charge."
+        ) : (
+          <>
+            {ENTITLEMENT_LABELS[entitlement.status]}
+            {entitlement.expiresAt && (
+              <>
+                {" — "}
+                {entitlement.status === "trialing" ? "ends" : "renews"}{" "}
+                {new Date(entitlement.expiresAt).toLocaleDateString()}
+              </>
+            )}
+            .
+          </>
         )}
-      </div>
-      {openPortal.isError && (
-        <p className="mt-2 text-xs text-zone-red">
-          {openPortal.error instanceof ApiError ? openPortal.error.message : "Couldn't open billing portal"}
-        </p>
+      </RowDescription>
+      <p className="mt-2 text-xs text-ink-muted">
+        AI usage this month: {formatUsd(status.aiUsageThisMonthMicros)} of{" "}
+        {formatUsd(status.aiMonthlyLimitMicros)}
+      </p>
+      {status.hasStripeCustomer && (
+        <div className="mt-3">
+          <Button onClick={() => openPortal.mutate()} disabled={openPortal.isPending}>
+            {openPortal.isPending ? "Opening…" : "Manage billing"}
+          </Button>
+        </div>
       )}
-      <div className="mt-4 border-t border-border pt-3">
-        <p className="text-xs text-ink-muted">
-          AI usage this month: {formatUsd(status.aiUsageThisMonthMicros)} of{" "}
-          {formatUsd(status.aiMonthlyLimitMicros)}
-        </p>
-      </div>
+      <FieldError>
+        {openPortal.isError
+          ? errorMessage(openPortal.error, "Couldn't open billing portal")
+          : null}
+      </FieldError>
     </div>
   );
 }
 
-function DangerZoneCard() {
+function DeleteAccountBody() {
   const { user } = useAuth();
   const logout = useLogout();
-  const [confirming, setConfirming] = useState(false);
   // The server requires a second proof of identity on DELETE /api/account (see
   // routes/account.ts) — the account password, or for Google-only accounts with no password
   // to re-enter, the athlete's own email address typed out.
@@ -401,78 +353,55 @@ function DangerZoneCard() {
   });
 
   return (
-    <div className="rounded-xl border border-zone-red/30 bg-surface-1 p-5">
-      <h3 className="font-display font-semibold text-ink-primary">Danger zone</h3>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <a
-          href="/api/account/export"
-          className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
+    <div>
+      <RowDescription>
+        This permanently deletes your data and cancels any subscription. It can&rsquo;t be undone.
+      </RowDescription>
+      <form
+        className="mt-3 flex flex-wrap items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          deleteAccount.mutate();
+        }}
+      >
+        <label htmlFor="settings-delete-challenge" className="w-full text-sm text-ink-secondary">
+          {needsPassword
+            ? "Enter your password to confirm."
+            : `Type ${user?.email ?? "your email"} to confirm.`}
+        </label>
+        <input
+          id="settings-delete-challenge"
+          type={needsPassword ? "password" : "email"}
+          autoComplete={needsPassword ? "current-password" : "off"}
+          value={challenge}
+          onChange={(e) => setChallenge(e.target.value)}
+          placeholder={needsPassword ? "Your password" : "Your email address"}
+          className={`${inputClass} min-w-0 flex-1`}
+        />
+        <Button
+          type="submit"
+          variant="dangerSolid"
+          disabled={deleteAccount.isPending || challenge.trim() === ""}
         >
-          Export my data
-        </a>
-        {!confirming ? (
-          <button
-            onClick={() => setConfirming(true)}
-            className="rounded-md border border-zone-red/40 px-3 py-1.5 text-sm text-zone-red hover:bg-zone-red/10"
-          >
-            Delete my account
-          </button>
-        ) : (
-          <form
-            className="flex w-full flex-wrap items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              deleteAccount.mutate();
-            }}
-          >
-            <span className="w-full text-sm text-ink-secondary">
-              This permanently deletes your data and cancels any subscription. It can&rsquo;t be undone.{" "}
-              {needsPassword ? "Enter your password to confirm." : `Type ${user?.email ?? "your email"} to confirm.`}
-            </span>
-            <input
-              type={needsPassword ? "password" : "email"}
-              autoComplete={needsPassword ? "current-password" : "off"}
-              value={challenge}
-              onChange={(e) => setChallenge(e.target.value)}
-              placeholder={needsPassword ? "Your password" : "Your email address"}
-              className="min-w-0 flex-1 rounded-md border border-border bg-surface-0 px-3 py-1.5 text-sm text-ink-primary"
-            />
-            <button
-              type="submit"
-              disabled={deleteAccount.isPending || challenge.trim() === ""}
-              className="rounded-md bg-zone-red px-3 py-1.5 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
-            >
-              {deleteAccount.isPending ? "Deleting…" : "Yes, delete"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setConfirming(false);
-                setChallenge("");
-              }}
-              className="rounded-md border border-border px-3 py-1.5 text-sm text-ink-secondary hover:text-ink-primary"
-            >
-              Cancel
-            </button>
-          </form>
-        )}
-      </div>
-      {deleteAccount.isError && (
-        <p className="mt-2 text-xs text-zone-red">
-          {deleteAccount.error instanceof ApiError ? deleteAccount.error.message : "Couldn't delete account"}
-        </p>
-      )}
+          {deleteAccount.isPending ? "Deleting…" : "Delete account"}
+        </Button>
+      </form>
+      <FieldError>
+        {deleteAccount.isError
+          ? errorMessage(deleteAccount.error, "Couldn't delete account")
+          : null}
+      </FieldError>
     </div>
   );
 }
 
-// A Google-only account has no password to re-enter, so this card is really two different
+// A Google-only account has no password to re-enter, so this row is really two different
 // jobs wearing one title: "add a password so email sign-in works at all" and "change the
 // password you already have". Splitting on hasPassword keeps each one to the fields it
 // actually needs. The account email is shown, never edited — changing an address needs its
 // own verified flow, and quietly rewriting it inside a password form would also break the
 // Google link.
-function EmailSignInCard() {
+function PasswordBody() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const hasPassword = user?.hasPassword ?? false;
@@ -494,7 +423,7 @@ function EmailSignInCard() {
       setCurrentPassword("");
       setPassword("");
       setConfirmPassword("");
-      // Flips the card into change-password mode without a reload.
+      // Flips the row into change-password mode without a reload.
       void queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
     },
   });
@@ -521,15 +450,9 @@ function EmailSignInCard() {
         ? "Something went wrong — try again"
         : null;
 
-  const inputClass =
-    "w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-base text-ink-primary sm:text-sm";
-
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <h3 className="font-display font-semibold text-ink-primary">
-        {hasPassword ? "Password" : "Email sign-in"}
-      </h3>
-      <p className="mt-1 text-sm text-ink-secondary">
+    <div>
+      <RowDescription>
         {hasPassword ? (
           <>
             You can sign in with <span className="text-ink-primary">{user?.email}</span> and a
@@ -542,97 +465,102 @@ function EmailSignInCard() {
             Google keeps working.
           </>
         )}
-      </p>
+      </RowDescription>
       <form onSubmit={onSubmit} className="mt-4 space-y-3">
         {hasPassword && (
-          <div>
-            <label
-              htmlFor="settings-current-password"
-              className="mb-1.5 block text-sm text-ink-secondary"
-            >
-              Current password
-            </label>
-            <input
-              id="settings-current-password"
-              type="password"
-              required
-              autoComplete="current-password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className={inputClass}
-            />
-            <a
-              href="/forgot-password"
-              className="mt-1.5 inline-block text-xs text-ink-secondary underline-offset-4 hover:underline"
-            >
-              Forgot your password?
-            </a>
-          </div>
+          <Field
+            id="settings-current-password"
+            label="Current password"
+            type="password"
+            required
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            below={
+              <a
+                href="/forgot-password"
+                className="mt-1.5 inline-block text-xs text-ink-secondary underline-offset-4 hover:underline"
+              >
+                Forgot your password?
+              </a>
+            }
+          />
         )}
         {/* Hidden but present so password managers file the new credential under this account. */}
         <input type="email" name="email" autoComplete="username" value={user?.email ?? ""} readOnly hidden />
-        <div>
-          <label htmlFor="settings-password" className="mb-1.5 block text-sm text-ink-secondary">
-            {hasPassword ? "New password" : "Password"}
-          </label>
-          <input
-            id="settings-password"
-            type="password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className={inputClass}
-          />
-          <p className="mt-1.5 text-xs text-ink-secondary">At least {MIN_PASSWORD_LENGTH} characters.</p>
-        </div>
-        <div>
-          <label
-            htmlFor="settings-confirm-password"
-            className="mb-1.5 block text-sm text-ink-secondary"
-          >
-            Confirm {hasPassword ? "new " : ""}password
-          </label>
-          <input
-            id="settings-confirm-password"
-            type="password"
-            required
-            minLength={MIN_PASSWORD_LENGTH}
-            autoComplete="new-password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            className={inputClass}
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={setPasswordMutation.isPending}
-          className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-surface-0 hover:opacity-90 disabled:opacity-50"
-        >
+        <Field
+          id="settings-password"
+          label={hasPassword ? "New password" : "Password"}
+          type="password"
+          required
+          minLength={MIN_PASSWORD_LENGTH}
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          help={`At least ${MIN_PASSWORD_LENGTH} characters.`}
+        />
+        <Field
+          id="settings-confirm-password"
+          label={`Confirm ${hasPassword ? "new " : ""}password`}
+          type="password"
+          required
+          minLength={MIN_PASSWORD_LENGTH}
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+        />
+        <Button type="submit" variant="primary" disabled={setPasswordMutation.isPending}>
           {setPasswordMutation.isPending
             ? "Saving…"
             : hasPassword
               ? "Change password"
               : "Add password"}
-        </button>
+        </Button>
       </form>
-      {formError && <p className="mt-3 text-sm text-zone-red">{formError}</p>}
-      {mutationError && <p className="mt-3 text-sm text-zone-red">{mutationError}</p>}
-      {success && (
-        <p className="mt-3 text-sm text-zone-good">
-          {hasPassword
+      <FieldError>{formError ?? mutationError}</FieldError>
+      <FieldSuccess>
+        {success
+          ? hasPassword
             ? "Password updated."
-            : `Password added — you can now sign in with ${user?.email}.`}
-        </p>
-      )}
+            : `Password added — you can now sign in with ${user?.email}.`
+          : null}
+      </FieldSuccess>
     </div>
   );
 }
 
+function appleHealthSummary(): string | undefined {
+  // On an iPhone the row itself carries the connect/sync state; in a browser there is nothing
+  // to connect, and a row with a blank right edge just looked broken next to its neighbours.
+  return isNativeIos() ? undefined : "iPhone app only";
+}
+
+function thresholdSummary(data: RuleThresholdSettings | undefined): string {
+  if (!data) return "";
+  const changed = Object.values(data.overrides).filter((v) => v != null).length;
+  if (changed === 0) return "All default";
+  return `${changed} changed`;
+}
+
 export function Settings() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
+  // These four queries are read here so the closed rows can state what they're set to. Each
+  // shares a key with the component that owns the mutations, so react-query serves one
+  // request and both stay in step.
+  const settings = useQuery<UserSettings>({
+    queryKey: ["settings"],
+    queryFn: () => api.get<UserSettings>("/settings"),
+  });
+  const thresholds = useQuery<RuleThresholdSettings>({
+    queryKey: ["settings", "thresholds"],
+    queryFn: () => api.get<RuleThresholdSettings>("/settings/thresholds"),
+  });
+  const billing = useQuery<BillingStatus>({
+    queryKey: ["billing", "status"],
+    queryFn: () => api.get<BillingStatus>("/billing/status"),
+  });
   const whoopStatus = useQuery<ConnectionStatus>({
     queryKey: ["whoop", "status"],
     queryFn: () => api.get<ConnectionStatus>("/whoop/status"),
@@ -659,48 +587,99 @@ export function Settings() {
     },
   });
 
+  const activeProvider = settings.data?.activeHealthProvider ?? "whoop";
+  // The server also refuses a non-admin's PATCH of these fields — this just keeps the picker
+  // itself from rendering for an account that could never use it.
+  const canChooseModel = settings.data?.canChooseModel ?? false;
+
   return (
-    <div className="max-w-2xl space-y-4">
-      <h1 className="mb-2 font-display text-xl font-semibold text-ink-primary">Settings</h1>
-      <AccountCard />
-      <BillingCard />
-      <HealthSourceCard />
-      <ConnectionCard
-        title="Whoop"
-        description="Recovery, HRV, sleep, and workout data driving today's recommendation. Until Whoop webhooks are hosted live, use Sync now to pull the last 90 days."
-        status={whoopStatus.data}
-        connectUrl="/api/whoop/oauth/start"
-        onSyncNow={() => syncWhoop.mutate()}
-        syncing={syncWhoop.isPending}
-        syncLabel="Sync now"
-        syncError={
-          syncWhoop.isError
-            ? syncWhoop.error instanceof ApiError
-              ? syncWhoop.error.message
-              : "Whoop sync failed"
-            : null
-        }
-      />
-      <ConnectionCard
-        title="Google Calendar"
-        description="Connected when you sign in with Google. Two-way sync with a dedicated Running calendar — the app's schedule always wins on conflicts."
-        status={googleStatus.data}
-        connectUrl="/api/google/oauth/start"
-        onSyncNow={() => syncGoogle.mutate()}
-        syncing={syncGoogle.isPending}
-        syncError={
-          syncGoogle.isError
-            ? syncGoogle.error instanceof ApiError
-              ? syncGoogle.error.message
-              : "Google sync failed"
-            : null
-        }
-      />
-      <EmailSignInCard />
-      <LocationCard />
-      <ThresholdsCard />
-      <AiModelsCard />
-      <DangerZoneCard />
+    <div className="max-w-2xl space-y-8">
+      <header>
+        <h1 className="font-display text-xl font-semibold text-ink-primary">Settings</h1>
+        <p className="mt-1 text-sm text-ink-secondary">
+          Your account, the data run-far reads, and how it coaches you.
+        </p>
+      </header>
+
+      <SettingsGroup title="Account">
+        <SettingsRow label="Account" summary={user?.email}>
+          <AccountBody />
+        </SettingsRow>
+        <SettingsRow
+          label={user?.hasPassword ? "Password" : "Email sign-in"}
+          summary={user?.hasPassword ? "Set" : "Not set"}
+        >
+          <PasswordBody />
+        </SettingsRow>
+        <SettingsRow label="Billing" summary={billingSummary(billing.data)}>
+          <BillingBody status={billing.data} />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title="Data sources">
+        <SettingsRow
+          label="Recovery source"
+          summary={activeProvider === "apple_health" ? "Apple Health" : "Whoop"}
+        >
+          <HealthSourceCard />
+        </SettingsRow>
+        <SettingsRow label="Whoop" status={connectionState(whoopStatus.data)}>
+          <ConnectionBody
+            description="Recovery, HRV, sleep, and workout data driving today's recommendation. Until Whoop webhooks are hosted live, use Sync now to pull the last 90 days."
+            status={whoopStatus.data}
+            connectUrl="/api/whoop/oauth/start"
+            onSyncNow={() => syncWhoop.mutate()}
+            syncing={syncWhoop.isPending}
+            syncError={syncWhoop.isError ? errorMessage(syncWhoop.error, "Whoop sync failed") : null}
+          />
+        </SettingsRow>
+        <SettingsRow label="Apple Health" summary={appleHealthSummary()}>
+          <AppleHealthCard />
+        </SettingsRow>
+        <SettingsRow label="Google Calendar" status={connectionState(googleStatus.data)}>
+          <ConnectionBody
+            description="Connected when you sign in with Google. Two-way sync with a dedicated Running calendar — the app's schedule always wins on conflicts."
+            status={googleStatus.data}
+            connectUrl="/api/google/oauth/start"
+            onSyncNow={() => syncGoogle.mutate()}
+            syncing={syncGoogle.isPending}
+            syncError={
+              syncGoogle.isError ? errorMessage(syncGoogle.error, "Google sync failed") : null
+            }
+          />
+        </SettingsRow>
+        <SettingsRow label="Weather" summary={locationSummary(settings.data)}>
+          <LocationBody settings={settings.data} />
+        </SettingsRow>
+      </SettingsGroup>
+
+      <SettingsGroup title="Coaching">
+        <SettingsRow label="Thresholds" summary={thresholdSummary(thresholds.data)}>
+          <ThresholdsCard />
+        </SettingsRow>
+        {canChooseModel && (
+          <SettingsRow
+            label="AI model"
+            summary={
+              settings.data?.assistantModel || settings.data?.planModel ? "Custom" : "Default"
+            }
+          >
+            <AiModelsBody settings={settings.data} />
+          </SettingsRow>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup title="Danger zone" tone="danger">
+        <SettingsActionRow
+          label="Export my data"
+          description="Every run, recovery reading, and setting, as JSON."
+        >
+          <ButtonLink href="/api/account/export">Export</ButtonLink>
+        </SettingsActionRow>
+        <SettingsRow label="Delete my account">
+          <DeleteAccountBody />
+        </SettingsRow>
+      </SettingsGroup>
     </div>
   );
 }
