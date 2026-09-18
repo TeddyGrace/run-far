@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RuleThresholdSettings } from "@run-far/shared";
 
 import { api, ApiError } from "../lib/api.js";
+import { FieldError, RowDescription } from "./ui/index.js";
 
 /**
  * How each tunable is presented. Ordered as an athlete would reason about them — the recovery
@@ -137,22 +138,15 @@ export function ThresholdsCard() {
   const data = settings.data;
 
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-5">
-      <h2 className="font-display text-base font-semibold text-ink-primary">
-        Recommendation thresholds
-      </h2>
-      <p className="mt-1 text-sm text-ink-secondary">
+    <div>
+      <RowDescription>
         What counts as a hard day for <em>you</em>. These drive the rules engine — the shipped
         values are a reasonable starting point, not a diagnosis.
-      </p>
+      </RowDescription>
 
       {settings.isLoading && <p className="mt-4 text-sm text-ink-muted">Loading…</p>}
 
-      {error && (
-        <p className="mt-4 rounded-lg border border-zone-red/30 bg-surface-2 p-3 text-sm text-ink-secondary">
-          {error}
-        </p>
-      )}
+      <FieldError>{error}</FieldError>
 
       {data && (
         <div className="mt-4 space-y-4">
