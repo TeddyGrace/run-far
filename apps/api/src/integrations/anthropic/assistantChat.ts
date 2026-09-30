@@ -34,6 +34,31 @@ function isoDate(d: Date, tz: string): string {
   return dateYmdInZone(d, tz);
 }
 
+// When the tool loop runs out of iterations the model is still mid-investigation and has never
+// written an answer. Rather than surface a canned fallback, make one last call with tools
+// disabled (tool_choice none) and a nudge, so the athlete gets an answer from what was gathered.
+const WRAP_UP_NUDGE =
+  "You've used your tool budget. Do not call any more tools — answer the athlete now with what you have, " +
+  "and say plainly if anything is still unknown.";
+
+function withWrapUpNudge(conversation: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  const last = conversation[conversation.length - 1];
+  if (last?.role === "user" && Array.isArray(last.content)) {
+    return [
+      ...conversation.slice(0, -1),
+      { role: "user", content: [...last.content, { type: "text", text: WRAP_UP_NUDGE }] },
+    ];
+  }
+  return [...conversation, { role: "user", content: WRAP_UP_NUDGE }];
+}
+
+function textOf(response: Anthropic.Message): string {
+  return response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n\n");
+}
+
 function systemPrompt(todayIso: string, timeZone: string): string {
   const offset = offsetStringForZone(timeZone);
   return `You are the run-far assistant, embedded across the whole app (not just plan building).
@@ -551,6 +576,8 @@ export async function runAssistantChatTurnStream(params: {
   let proposal: ScheduleChangeProposal | null = null;
   let proposalToken: string | null = null;
 
+  let finished = false;
+  let lastStopReason: string | null = null;
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const stream = client.messages.stream({
       model,
@@ -623,13 +650,40 @@ export async function runAssistantChatTurnStream(params: {
     }
 
     if (turnText) assistantMessage = turnText;
-    if (toolResults.length === 0) break;
+    lastStopReason = response.stop_reason;
+    if (toolResults.length === 0) {
+      finished = true;
+      break;
+    }
 
     conversation.push({ role: "assistant", content: response.content });
     conversation.push({ role: "user", content: toolResults });
   }
 
+  if (!finished) {
+    const wrapUp = client.messages.stream({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt(todayIso, tz),
+      tools: TOOLS,
+      tool_choice: { type: "none" },
+      messages: withWrapUpNudge(conversation),
+    });
+    wrapUp.on("text", (delta) => {
+      if (delta) params.onEvent({ type: "text", delta });
+    });
+    const wrapResponse = await wrapUp.finalMessage();
+    usage.add(wrapResponse.usage);
+    lastStopReason = wrapResponse.stop_reason;
+    const wrapText = textOf(wrapResponse);
+    if (wrapText) assistantMessage = wrapText;
+  }
+
   if (!assistantMessage) {
+    logger.warn(
+      { userId: params.userId, model, finished, stopReason: lastStopReason, staged: Boolean(proposal) },
+      "assistant turn produced no text — using fallback reply",
+    );
     assistantMessage = proposal
       ? "I've staged those changes — review and confirm below to apply them."
       : "I'm not sure how to respond to that yet.";
@@ -674,6 +728,8 @@ export async function runAssistantChatTurn(params: {
   let proposal: ScheduleChangeProposal | null = null;
   let proposalToken: string | null = null;
 
+  let finished = false;
+  let lastStopReason: string | null = null;
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const response = await client.messages.create({
       model,
@@ -725,13 +781,36 @@ export async function runAssistantChatTurn(params: {
     }
 
     if (turnText) assistantMessage = turnText;
-    if (toolResults.length === 0) break;
+    lastStopReason = response.stop_reason;
+    if (toolResults.length === 0) {
+      finished = true;
+      break;
+    }
 
     conversation.push({ role: "assistant", content: response.content });
     conversation.push({ role: "user", content: toolResults });
   }
 
+  if (!finished) {
+    const wrapResponse = await client.messages.create({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt(todayIso, tz),
+      tools: TOOLS,
+      tool_choice: { type: "none" },
+      messages: withWrapUpNudge(conversation),
+    });
+    usage.add(wrapResponse.usage);
+    lastStopReason = wrapResponse.stop_reason;
+    const wrapText = textOf(wrapResponse);
+    if (wrapText) assistantMessage = wrapText;
+  }
+
   if (!assistantMessage) {
+    logger.warn(
+      { userId: params.userId, model, finished, stopReason: lastStopReason, staged: Boolean(proposal) },
+      "assistant turn produced no text — using fallback reply",
+    );
     assistantMessage = proposal
       ? "I've staged those changes — review and confirm below to apply them."
       : "I'm not sure how to respond to that yet.";
