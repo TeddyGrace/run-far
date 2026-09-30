@@ -25,7 +25,10 @@ import { getActiveHealthProvider, providerFilter } from "../../lib/healthProvide
 import { newProposalToken, saveProposal } from "./proposalStore.js";
 import { AiUsageAccumulator } from "../../lib/aiCost.js";
 
-const MAX_TOOL_ITERATIONS = 8;
+// Not a working budget — the assistant may make as many tool calls as a request needs. This is
+// only a runaway backstop (a model stuck in a loop would otherwise bill indefinitely); if it is
+// ever hit, the turn still ends with a forced tool-free answer.
+const MAX_TOOL_ITERATIONS = 50;
 
 // recoveryMetrics/sleepRecords/workouts store the athlete-local date (see
 // integrations/whoop/sync.ts), so window bounds must be computed the same way — a UTC slice
@@ -38,7 +41,7 @@ function isoDate(d: Date, tz: string): string {
 // written an answer. Rather than surface a canned fallback, make one last call with tools
 // disabled (tool_choice none) and a nudge, so the athlete gets an answer from what was gathered.
 const WRAP_UP_NUDGE =
-  "You've used your tool budget. Do not call any more tools — answer the athlete now with what you have, " +
+  "You have reached the maximum number of tool calls. Do not call any more tools — answer the athlete now with what you have, " +
   "and say plainly if anything is still unknown.";
 
 function withWrapUpNudge(conversation: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
