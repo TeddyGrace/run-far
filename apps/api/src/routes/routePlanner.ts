@@ -2,13 +2,19 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { and, desc, eq } from "drizzle-orm";
 import {
   generateRouteInputSchema,
+  routeElevationInputSchema,
   saveRouteInputSchema,
   snapRouteInputSchema,
   type LatLon,
+  type RouteElevation,
+  type RouteMapConfig,
+  type RoutePlanStreamEvent,
   type SavedRoute,
 } from "@run-far/shared";
 import { rateLimitKey, requireUserId } from "../lib/session.js";
 import { db } from "../db/client.js";
+import { env } from "../env.js";
+import { elevationFor, isElevationEnabled } from "../integrations/routing/elevation.js";
 import { savedRoutes } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
 import { assertWithinAiQuota, AiQuotaExceededError, aiRouteRateLimit } from "../lib/aiCost.js";
@@ -25,6 +31,8 @@ function toSavedRoute(row: typeof savedRoutes.$inferSelect): SavedRoute {
     notes: row.notes,
     source: row.source,
     distanceM: row.distanceM,
+    elevationGainM: row.elevationGainM,
+    elevationLossM: row.elevationLossM,
     waypoints: row.waypoints as LatLon[],
     geometry: row.geometry as LatLon[],
     createdAt: row.createdAt.toISOString(),
@@ -48,7 +56,7 @@ export async function routePlannerRoutes(app: FastifyInstance) {
       if (!userId) return;
       const body = snapRouteInputSchema.parse(request.body);
       try {
-        return await routeThrough(body.waypoints);
+        return await routeThrough(body.waypoints, fetch, { withElevation: body.elevation });
       } catch (err) {
         if (err instanceof RoutingError) return sendRoutingError(reply, err);
         throw err;
@@ -56,7 +64,32 @@ export async function routePlannerRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post("/api/routes/generate", { config: { rateLimit: aiRouteRateLimit } }, async (request, reply) => {
+  app.post(
+    "/api/routes/elevation",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute", keyGenerator: rateLimitKey } } },
+    async (request, reply): Promise<RouteElevation | undefined> => {
+      const userId = requireUserId(request, reply);
+      if (!userId) return;
+      const body = routeElevationInputSchema.parse(request.body);
+      const elevation = await elevationFor(body.geometry);
+      return { elevationGainM: elevation?.gainM ?? null, elevationLossM: elevation?.lossM ?? null };
+    },
+  );
+
+  app.get("/api/routes/config", async (request, reply): Promise<RouteMapConfig | undefined> => {
+    const userId = requireUserId(request, reply);
+    if (!userId) return;
+    return {
+      tileUrl: env.MAP_TILE_URL,
+      tileAttribution: env.MAP_TILE_ATTRIBUTION,
+      elevationEnabled: isElevationEnabled(),
+    };
+  });
+
+  // Streams progress while the planner works: a request is several model round trips plus
+  // place search and routing, and can take tens of seconds. Each frame is one JSON object
+  // matching routePlanStreamEventSchema in @run-far/shared.
+  app.post("/api/routes/generate/stream", { config: { rateLimit: aiRouteRateLimit } }, async (request, reply) => {
     const userId = requireUserId(request, reply);
     if (!userId) return;
 
@@ -66,6 +99,7 @@ export async function routePlannerRoutes(app: FastifyInstance) {
       });
       return;
     }
+    // Checked before hijacking the socket so these stay ordinary JSON errors.
     try {
       await assertWithinAiQuota(userId);
     } catch (err) {
@@ -77,13 +111,34 @@ export async function routePlannerRoutes(app: FastifyInstance) {
       }
       throw err;
     }
-
     const body = generateRouteInputSchema.parse(request.body);
+
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    const send = (event: RoutePlanStreamEvent) => {
+      if (!raw.writableEnded) raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    // Keeps proxies with idle timeouts from cutting the connection during a long model call.
+    const heartbeat = setInterval(() => raw.write(": keep-alive\n\n"), 15_000);
+
     try {
-      return await planRouteWithAi({ userId, start: body.start, prompt: body.prompt });
+      const result = await planRouteWithAi(
+        { userId, start: body.start, prompt: body.prompt },
+        { onProgress: (message) => send({ type: "progress", message }) },
+      );
+      send({ type: "done", result });
     } catch (err) {
       logger.error({ err, userId }, "AI route planning failed");
-      reply.status(502).send({ error: { message: "Couldn't plan a route right now. Try again shortly.", code: "AI_ROUTE_FAILED" } });
+      send({ type: "error", message: "Couldn't plan a route right now. Try again shortly.", code: "AI_ROUTE_FAILED" });
+    } finally {
+      clearInterval(heartbeat);
+      raw.end();
     }
   });
 
@@ -119,6 +174,8 @@ export async function routePlannerRoutes(app: FastifyInstance) {
         notes: body.notes ?? null,
         source: body.source,
         distanceM: body.distanceM,
+        elevationGainM: body.elevationGainM,
+        elevationLossM: body.elevationLossM,
         waypoints: body.waypoints,
         geometry: body.geometry,
       })

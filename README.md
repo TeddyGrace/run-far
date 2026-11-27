@@ -50,11 +50,14 @@ expects.
   with Claude and get back a structured plan to preview and commit, or ask
   the assistant questions about your schedule.
 
-- **Route mapping** — plot a run from your current location by tapping the map (points
-  snap to streets and trails via an OSRM foot profile, with live distance, loop and
-  out-and-back helpers), or describe the run ("5 miles past some water") and Claude builds
-  it with real map tools: an OpenStreetMap place search and a distance-targeting route
-  generator, so every distance it quotes was measured on the path network, not estimated.
+- **Route mapping** — plot a run from your current location by tapping the map (or with the
+  keyboard): points snap to streets and trails, and the page shows live distance and climb,
+  with loop and out-and-back helpers. Or describe the run ("flat 5 miles past some water") and
+  Claude builds it with real map tools: an OpenStreetMap place search and a distance-targeting
+  route generator. Every distance and climb figure it quotes was measured on the path network
+  and terrain data, not estimated, and progress streams to the page while it works. Routing,
+  elevation, place search and map tiles are each one setting away from a self-hosted or keyed
+  provider (see `.env.example`); the free public defaults are for development only.
   → [`integrations/routing/`](apps/api/src/integrations/routing/),
   [`integrations/anthropic/routePlanner.ts`](apps/api/src/integrations/anthropic/routePlanner.ts)
 

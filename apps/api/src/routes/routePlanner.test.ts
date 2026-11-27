@@ -91,6 +91,26 @@ describe("saved routes", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it("serves map config from server settings", async () => {
+    const owner = await seedUser();
+    const res = await app.inject({ method: "GET", url: "/api/routes/config", cookies: { [SESSION_COOKIE]: app.signCookie(owner) } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ tileUrl: expect.stringContaining("{z}"), elevationEnabled: expect.any(Boolean) });
+  });
+
+  // Skipped where a real key is set, so the suite never makes a billed model call.
+  it.skipIf(Boolean(process.env.ANTHROPIC_API_KEY))("answers the streaming planner with a plain JSON error when AI isn't configured", async () => {
+    const owner = await seedUser();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/routes/generate/stream",
+      cookies: { [SESSION_COOKIE]: app.signCookie(owner) },
+      payload: { start: [40.78, -73.96], prompt: "5 miles" },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error.code).toBe("AI_NOT_CONFIGURED");
+  });
+
   it("requires a session", async () => {
     expect((await app.inject({ method: "GET", url: "/api/routes" })).statusCode).toBe(401);
   });

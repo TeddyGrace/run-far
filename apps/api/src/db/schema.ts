@@ -581,6 +581,9 @@ export const savedRoutes = pgTable(
     notes: text("notes"),
     source: routeSourceEnum("source").notNull().default("manual"),
     distanceM: doublePrecision("distance_m").notNull(),
+    // Null = unknown (elevation not configured, or the service didn't answer), never "flat".
+    elevationGainM: doublePrecision("elevation_gain_m"),
+    elevationLossM: doublePrecision("elevation_loss_m"),
     waypoints: jsonb("waypoints").notNull(),
     geometry: jsonb("geometry").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

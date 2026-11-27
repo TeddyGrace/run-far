@@ -14,12 +14,28 @@ export const plannedRouteSchema = z.object({
   waypoints: z.array(latLonSchema).min(2).max(50),
   geometry: z.array(latLonSchema).min(2),
   distanceM: z.number().nonnegative(),
+  /** Total climb/descent along the route. Null when elevation isn't configured or the
+   * elevation service couldn't answer — "unknown", never "flat". */
+  elevationGainM: z.number().nonnegative().nullable().default(null),
+  elevationLossM: z.number().nonnegative().nullable().default(null),
 });
 export type PlannedRoute = z.infer<typeof plannedRouteSchema>;
 
 export const snapRouteInputSchema = z.object({
   waypoints: z.array(latLonSchema).min(2).max(50),
+  /** The web client snaps one segment at a time and asks for elevation once for the whole
+   * route (POST /routes/elevation), so it turns this off per segment. */
+  elevation: z.boolean().default(true),
 });
+
+export const routeElevationInputSchema = z.object({
+  geometry: z.array(latLonSchema).min(2).max(5_000),
+});
+export const routeElevationSchema = z.object({
+  elevationGainM: z.number().nullable(),
+  elevationLossM: z.number().nullable(),
+});
+export type RouteElevation = z.infer<typeof routeElevationSchema>;
 export type SnapRouteInput = z.infer<typeof snapRouteInputSchema>;
 
 export const generateRouteInputSchema = z.object({
@@ -33,6 +49,14 @@ export const generatedRouteSchema = plannedRouteSchema.extend({
   summary: z.string(),
 });
 export type GeneratedRoute = z.infer<typeof generatedRouteSchema>;
+
+/** Map settings the web client needs, served by the API so the tile provider is server config. */
+export const routeMapConfigSchema = z.object({
+  tileUrl: z.string(),
+  tileAttribution: z.string(),
+  elevationEnabled: z.boolean(),
+});
+export type RouteMapConfig = z.infer<typeof routeMapConfigSchema>;
 
 export const generateRouteResultSchema = z.object({
   /** The assistant's explanation, or its question back when it couldn't build a route. */
@@ -54,3 +78,11 @@ export const savedRouteSchema = saveRouteInputSchema.extend({
   createdAt: z.string(),
 });
 export type SavedRoute = z.infer<typeof savedRouteSchema>;
+
+/** Server-sent frames from POST /api/routes/generate/stream. */
+export const routePlanStreamEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("progress"), message: z.string() }),
+  z.object({ type: z.literal("done"), result: generateRouteResultSchema }),
+  z.object({ type: z.literal("error"), message: z.string(), code: z.string() }),
+]);
+export type RoutePlanStreamEvent = z.infer<typeof routePlanStreamEventSchema>;

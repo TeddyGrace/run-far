@@ -1,5 +1,5 @@
 {
-  "id": "a8d81e9d-f28a-4679-94ab-5915f4cc242f",
+  "id": "42c84252-4af7-4170-aa8f-469de9a3485c",
   "prevId": "a69e70bb-2beb-4b77-b117-94543d36a0da",
   "version": "7",
   "dialect": "postgresql",
@@ -1753,6 +1753,18 @@
           "type": "double precision",
           "primaryKey": false,
           "notNull": true
+        },
+        "elevation_gain_m": {
+          "name": "elevation_gain_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "elevation_loss_m": {
+          "name": "elevation_loss_m",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
         },
         "waypoints": {
           "name": "waypoints",

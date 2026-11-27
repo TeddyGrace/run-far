@@ -44,8 +44,10 @@ Rules:
 - Aim within about 10% of a requested distance. If a via-places route comes out too long or short, try adjusting
   (drop a point, pick a nearer/farther place, or fall back to build_route_of_distance in that place's direction).
 - If no distance is given, pick something reasonable for the request (default 3 miles) and say so.
-- Elevation data is NOT available. If the athlete asks for flat or hilly terrain, say plainly you couldn't check
-  elevation; you may favour riverside/park paths for "flat" but don't claim it is flat.
+- Built routes report climb_feet (total ascent) when elevation data is available. Use it for requests about
+  flat or hilly runs: compare a few directions and pick the one that best fits. As a guide, under ~30 ft of climb
+  per mile is flat and over ~100 ft per mile is hilly. If climb_feet is null, elevation is unavailable: say so
+  plainly rather than claiming a route is flat or hilly.
 - You know nothing about safety, lighting, traffic, or surface beyond what tools return. Don't invent it.
 - Speak to the athlete in miles. Keep the summary to 2-3 short sentences: the shape, what it passes, the distance.
 - Name routes briefly (e.g. "Riverside 5-miler").`;
@@ -118,6 +120,38 @@ interface ToolState {
   presented: GeneratedRoute | null;
 }
 
+/** What the athlete sees while a tool runs — the planner can take a while, and a bare spinner
+ * for 30 seconds reads as broken. */
+export function progressMessage(name: string, input: Record<string, unknown>): string | null {
+  switch (name) {
+    case "find_nearby_places": {
+      const kinds = Array.isArray(input.kinds) && input.kinds.length ? input.kinds.map(String) : null;
+      const label = kinds ? kinds.map((k) => (k === "water" ? "water" : `${k}s`)).join(", ") : "parks, trails and water";
+      return `Looking for ${label} nearby…`;
+    }
+    case "build_route_of_distance": {
+      const mi = Number(input.target_miles);
+      const shape = input.shape === "out_and_back" ? "out-and-back" : "loop";
+      const deg = Number(input.direction_degrees);
+      const dir = Number.isFinite(deg) ? ` heading ${compassPoint(((deg % 360) + 360) % 360)}` : "";
+      return Number.isFinite(mi) ? `Trying a ${mi}-mile ${shape}${dir}…` : `Trying a ${shape}…`;
+    }
+    case "build_route_through":
+      return "Routing through the places it picked…";
+    case "present_route":
+      return "Finishing up…";
+    default:
+      return null;
+  }
+}
+
+export interface RoutePlannerDeps {
+  /** Injected in tests; defaults to a real client. Only `messages.create` is used. */
+  client?: Pick<Anthropic, "messages">;
+  fetchImpl?: typeof fetch;
+  onProgress?: (message: string) => void;
+}
+
 /** A compact, model-readable description of a built route — never the full polyline. */
 function describe(id: string, route: PlannedRoute, start: LatLon) {
   let farthest = route.geometry[0]!;
@@ -135,6 +169,7 @@ function describe(id: string, route: PlannedRoute, start: LatLon) {
     distance_miles: miles(route.distanceM),
     farthest_point: { miles_from_start: miles(farthestM), direction: compassPoint(bearingDeg(start, farthest)) },
     ends_at_start: haversineM(start, end) < 150,
+    climb_feet: route.elevationGainM == null ? null : Math.round(route.elevationGainM / 0.3048),
   };
 }
 
@@ -193,10 +228,15 @@ export async function executeRouteTool(
 }
 
 /** One planning request: the athlete's prompt in, at most one snapped route out. */
-export async function planRouteWithAi(params: { userId: string; start: LatLon; prompt: string }): Promise<GenerateRouteResult> {
-  if (!isAnthropicConfigured()) throw new Error("AI_NOT_CONFIGURED");
+export async function planRouteWithAi(
+  params: { userId: string; start: LatLon; prompt: string },
+  deps: RoutePlannerDeps = {},
+): Promise<GenerateRouteResult> {
+  if (!deps.client && !isAnthropicConfigured()) throw new Error("AI_NOT_CONFIGURED");
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const client = deps.client ?? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const progress = deps.onProgress ?? (() => {});
   const [user] = await db.select({ role: users.role, planModel: users.planModel }).from(users).where(eq(users.id, params.userId));
   // Same model selection as the plan builder: admins may override, everyone else gets the default.
   const model = (user?.role === "admin" && user.planModel) || env.ANTHROPIC_MODEL;
@@ -212,6 +252,7 @@ export async function planRouteWithAi(params: { userId: string; start: LatLon; p
     },
   ];
   let message = "";
+  progress("Reading your request…");
 
   try {
     for (let i = 0; i < MAX_TOOL_ITERATIONS && !state.presented; i++) {
@@ -236,8 +277,11 @@ export async function planRouteWithAi(params: { userId: string; start: LatLon; p
       // Independent lookups the model fires in parallel run in parallel; results go back in one message.
       const results = await Promise.all(
         toolUses.map(async (block): Promise<Anthropic.ToolResultBlockParam> => {
+          const input = (block.input as Record<string, unknown>) ?? {};
+          const note = progressMessage(block.name, input);
+          if (note) progress(note);
           try {
-            const out = await executeRouteTool(block.name, (block.input as Record<string, unknown>) ?? {}, state);
+            const out = await executeRouteTool(block.name, input, state, fetchImpl);
             return { type: "tool_result", tool_use_id: block.id, content: JSON.stringify(out) };
           } catch (err) {
             const msg = err instanceof RoutingError ? err.message : "Tool failed unexpectedly.";

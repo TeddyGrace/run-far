@@ -1,5 +1,6 @@
 import type { LatLon, PlannedRoute } from "@run-far/shared";
 import { env } from "../../env.js";
+import { elevationFor } from "./elevation.js";
 import { bearingDeg, compassPoint, downsample, haversineM, initialLoopRadiusM, loopWaypoints, destinationPoint, DETOUR_FACTOR } from "./geo.js";
 
 // Both services are public OpenStreetMap infrastructure whose usage policies ask clients to
@@ -22,11 +23,28 @@ interface OsrmResponse {
   routes?: Array<{ distance: number; geometry: { coordinates: Array<[number, number]> } }>;
 }
 
-/** Snap a sequence of waypoints to runnable paths (OSRM foot profile) in the given order. */
-export async function routeThrough(waypoints: LatLon[], fetchImpl: typeof fetch = fetch): Promise<PlannedRoute> {
-  if (waypoints.length < 2) throw new RoutingError("A route needs at least two points.", "NO_ROUTE");
+// Small in-process cache of routed requests. The AI planner re-routes the same shapes while it
+// converges, and the web client re-snaps a segment when the athlete undoes and redoes a point;
+// neither should cost the routing service another request. Keyed by rounded coordinates, so
+// it's per-instance and loses nothing that matters on restart.
+const CACHE_MAX = 500;
+const CACHE_TTL_MS = 60 * 60_000;
+const cache = new Map<string, { at: number; value: Promise<PlannedRoute> }>();
+
+function cacheKey(waypoints: LatLon[], withElevation: boolean): string {
+  return `${withElevation ? "e" : "n"}:${waypoints.map(([a, b]) => `${a.toFixed(5)},${b.toFixed(5)}`).join(";")}`;
+}
+
+export function clearRoutingCache(): void {
+  cache.clear();
+}
+
+/** One request to the routing service: geometry and distance only. */
+async function routeLeg(waypoints: LatLon[], fetchImpl: typeof fetch): Promise<{ geometry: LatLon[]; distanceM: number }> {
   const coords = waypoints.map(([lat, lon]) => `${lon.toFixed(6)},${lat.toFixed(6)}`).join(";");
-  const url = `${env.ROUTING_BASE_URL.replace(/\/$/, "")}/route/v1/foot/${coords}?overview=full&geometries=geojson&continue_straight=false`;
+  const params = new URLSearchParams({ overview: "full", geometries: "geojson", continue_straight: "false" });
+  if (env.ROUTING_API_KEY) params.set(env.ROUTING_API_KEY_PARAM, env.ROUTING_API_KEY);
+  const url = `${env.ROUTING_URL.replace(/\/$/, "")}/${coords}?${params.toString()}`;
 
   let res: Response;
   try {
@@ -45,11 +63,53 @@ export async function routeThrough(waypoints: LatLon[], fetchImpl: typeof fetch 
     throw new RoutingError(body.message ?? `Routing failed (${body.code})`, "UPSTREAM");
   }
   const route = body.routes[0];
-  const geometry = downsample(
-    route.geometry.coordinates.map(([lon, lat]) => [lat, lon] as LatLon),
-    MAX_GEOMETRY_POINTS,
-  );
-  return { waypoints, geometry, distanceM: Math.round(route.distance) };
+  return {
+    geometry: route.geometry.coordinates.map(([lon, lat]) => [lat, lon] as LatLon),
+    distanceM: route.distance,
+  };
+}
+
+/**
+ * Snap a sequence of waypoints to runnable paths in the given order.
+ *
+ * Routes with more waypoints than the service accepts per request are routed in overlapping
+ * chunks (each chunk starts where the last ended) and stitched, so the cap is invisible to
+ * callers.
+ */
+export async function routeThrough(
+  waypoints: LatLon[],
+  fetchImpl: typeof fetch = fetch,
+  options: { withElevation?: boolean } = {},
+): Promise<PlannedRoute> {
+  if (waypoints.length < 2) throw new RoutingError("A route needs at least two points.", "NO_ROUTE");
+  const withElevation = options.withElevation ?? true;
+  const key = cacheKey(waypoints, withElevation);
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+
+  const value = (async (): Promise<PlannedRoute> => {
+    const max = env.ROUTING_MAX_WAYPOINTS;
+    const chunks: LatLon[][] = [];
+    for (let i = 0; i < waypoints.length - 1; i += max - 1) chunks.push(waypoints.slice(i, i + max));
+    const legs = await Promise.all(chunks.map((c) => routeLeg(c, fetchImpl)));
+    const full: LatLon[] = [];
+    for (const leg of legs) full.push(...(full.length ? leg.geometry.slice(1) : leg.geometry));
+    const geometry = downsample(full, MAX_GEOMETRY_POINTS);
+    const elevation = withElevation ? await elevationFor(geometry, fetchImpl) : null;
+    return {
+      waypoints,
+      geometry,
+      distanceM: Math.round(legs.reduce((sum, l) => sum + l.distanceM, 0)),
+      elevationGainM: elevation?.gainM ?? null,
+      elevationLossM: elevation?.lossM ?? null,
+    };
+  })();
+
+  cache.set(key, { at: Date.now(), value });
+  // A failed request must not be cached, or one blip pins an error for an hour.
+  value.catch(() => cache.delete(key));
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+  return value;
 }
 
 export type LoopShape = "loop" | "out_and_back";
@@ -76,7 +136,8 @@ export async function routeOfDistance(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const waypoints =
       shape === "loop" ? loopWaypoints(start, bearing, size) : [start, destinationPoint(start, bearing, size), start];
-    const route = await routeThrough(waypoints, fetchImpl);
+    // Elevation only for the attempt that's kept, not every guess on the way to it.
+    const route = await routeThrough(waypoints, fetchImpl, { withElevation: false });
     if (!best || Math.abs(route.distanceM - targetM) < Math.abs(best.distanceM - targetM)) best = route;
     const ratio = targetM / Math.max(route.distanceM, 1);
     if (Math.abs(1 - ratio) <= TOLERANCE) break;
@@ -84,7 +145,8 @@ export async function routeOfDistance(
     // overshoot into the opposite error.
     size *= Math.min(2, Math.max(0.5, ratio));
   }
-  return best!;
+  const elevation = await elevationFor(best!.geometry, fetchImpl);
+  return { ...best!, elevationGainM: elevation?.gainM ?? null, elevationLossM: elevation?.lossM ?? null };
 }
 
 export interface NearbyPlace {
@@ -124,7 +186,7 @@ export async function findNearbyPlaces(
   );
   const [lat, lon] = params.center;
   const radius = Math.round(Math.min(params.radiusM, 20_000));
-  const query = `[out:json][timeout:20];(${selectors.map((s) => `${s.q}(around:${radius},${lat},${lon});`).join("")});out center tags 200;`;
+  const query = `[out:json][timeout:12];(${selectors.map((s) => `${s.q}(around:${radius},${lat},${lon});`).join("")});out center tags 200;`;
 
   let res: Response;
   try {
@@ -132,7 +194,7 @@ export async function findNearbyPlaces(
       method: "POST",
       headers: { "User-Agent": USER_AGENT, "Content-Type": "application/x-www-form-urlencoded" },
       body: `data=${encodeURIComponent(query)}`,
-      signal: AbortSignal.timeout(25_000),
+      signal: AbortSignal.timeout(15_000),
     });
   } catch (err) {
     throw new RoutingError(`Place search unreachable: ${(err as Error).message}`, "UPSTREAM");

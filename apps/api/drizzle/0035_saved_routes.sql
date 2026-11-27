@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS "saved_routes" (
 	"notes" text,
 	"source" "route_source" DEFAULT 'manual' NOT NULL,
 	"distance_m" double precision NOT NULL,
+	"elevation_gain_m" double precision,
+	"elevation_loss_m" double precision,
 	"waypoints" jsonb NOT NULL,
 	"geometry" jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL

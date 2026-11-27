@@ -1,16 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { LatLon } from "@run-far/shared";
 import { bearingDeg, destinationPoint, downsample, haversineM, loopWaypoints } from "./geo.js";
-import { RoutingError, findNearbyPlaces, routeOfDistance, routeThrough } from "./routingClient.js";
+import { RoutingError, clearRoutingCache, findNearbyPlaces, routeOfDistance, routeThrough } from "./routingClient.js";
+import { gainAndLoss, sampleAlong } from "./elevation.js";
 import { executeRouteTool } from "../anthropic/routePlanner.js";
 
 const START: LatLon = [40.7812, -73.9665];
 
+beforeEach(() => clearRoutingCache());
+
 /** A fake OSRM: echoes the waypoints back as the geometry and reports their straight-line
- * length times a detour ratio, which is enough to exercise distance-targeting logic. */
-function fakeOsrm(detour = 1.4, calls: string[] = []): typeof fetch {
+ * length times a detour ratio, which is enough to exercise distance-targeting logic. Also
+ * answers the elevation service with a steady 1m-per-sample climb (`elevationCalls` counts). */
+function fakeOsrm(detour = 1.4, calls: string[] = [], elevationCalls: string[] = []): typeof fetch {
   return (async (input: string | URL | Request) => {
     const url = String(input);
+    if (url.includes("locations=")) {
+      elevationCalls.push(url);
+      const n = decodeURIComponent(url.split("locations=")[1]!).split("|").length;
+      return new Response(JSON.stringify({ status: "OK", results: Array.from({ length: n }, (_, i) => ({ elevation: 10 + i })) }));
+    }
     calls.push(url);
     const coords = url.split("/foot/")[1]!.split("?")[0]!.split(";").map((c) => {
       const [lon, lat] = c.split(",").map(Number);
@@ -64,7 +73,73 @@ describe("routeThrough", () => {
   });
 });
 
+describe("routeThrough caching and chunking", () => {
+  it("answers a repeated request from cache", async () => {
+    const calls: string[] = [];
+    const f = fakeOsrm(1, calls);
+    await routeThrough([START, [40.79, -73.96]], f);
+    await routeThrough([START, [40.79, -73.96]], f);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not cache a failure", async () => {
+    let n = 0;
+    const flaky = (async (input: string | URL | Request) => {
+      if (n++ === 0) throw new Error("socket hang up");
+      return fakeOsrm(1)(input);
+    }) as typeof fetch;
+    await expect(routeThrough([START, [40.79, -73.96]], flaky)).rejects.toMatchObject({ code: "UPSTREAM" });
+    await expect(routeThrough([START, [40.79, -73.96]], flaky)).resolves.toMatchObject({ distanceM: expect.any(Number) });
+  });
+
+  it("splits a route longer than the waypoint cap into stitched requests", async () => {
+    const calls: string[] = [];
+    const waypoints: LatLon[] = Array.from({ length: 30 }, (_, i) => [40.78 + i * 0.001, -73.96]);
+    const route = await routeThrough(waypoints, fakeOsrm(1, calls));
+    expect(calls).toHaveLength(2); // cap is 25: points 0-24, then 24-29
+    // Stitched without repeating the shared join point.
+    expect(route.geometry).toHaveLength(30);
+    const straight = haversineM(waypoints[0]!, waypoints[29]!);
+    expect(route.distanceM).toBeCloseTo(straight, -1);
+  });
+});
+
+describe("elevation", () => {
+  it("ignores sub-threshold DEM noise but counts real climbs and descents", () => {
+    expect(gainAndLoss([10, 11, 10, 12, 10, 11, 10])).toEqual({ gainM: 0, lossM: 0 });
+    expect(gainAndLoss([10, 20, 30, 25, 15])).toEqual({ gainM: 20, lossM: 15 });
+  });
+
+  it("samples evenly by distance, keeping both ends", () => {
+    const line: LatLon[] = [[0, 0], [0, 0.001], [0, 0.01]];
+    const out = sampleAlong(line, 11);
+    expect(out).toHaveLength(11);
+    expect(out[0]).toEqual([0, 0]);
+    expect(out[10]![1]).toBeCloseTo(0.01, 6);
+    expect(out[5]![1]).toBeCloseTo(0.005, 6);
+  });
+
+  it("attaches climb to a routed path, and reports unknown when the service fails", async () => {
+    const route = await routeThrough([START, [40.79, -73.96]], fakeOsrm(1));
+    expect(route.elevationGainM).toBeGreaterThan(0);
+    expect(route.elevationLossM).toBe(0);
+
+    clearRoutingCache();
+    const noElevation = (async (input: string | URL | Request) =>
+      String(input).includes("locations=") ? new Response("busy", { status: 429 }) : fakeOsrm(1)(input)) as typeof fetch;
+    const r2 = await routeThrough([START, [40.79, -73.96]], noElevation);
+    expect(r2.distanceM).toBeGreaterThan(0);
+    expect(r2.elevationGainM).toBeNull();
+  });
+});
+
 describe("routeOfDistance", () => {
+  it("looks up elevation once, for the kept attempt only", async () => {
+    const elevationCalls: string[] = [];
+    await routeOfDistance({ start: START, targetM: 8_047, bearing: 45, shape: "loop" }, fakeOsrm(1.6, [], elevationCalls));
+    expect(elevationCalls).toHaveLength(1);
+  });
+
   it.each(["loop", "out_and_back"] as const)("converges on the target distance for a %s", async (shape) => {
     const targetM = 8_047; // 5 mi
     const route = await routeOfDistance({ start: START, targetM, bearing: 45, shape }, fakeOsrm(1.6));
