@@ -24,3 +24,13 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Route map: OSM's standard tiles are bright; dim them so the map sits in the dark UI without
+   losing the path detail runners actually need (CARTO's dark style drops most footpaths). */
+.route-map-tiles {
+  filter: brightness(0.82) saturate(0.85);
+}
+.leaflet-container {
+  background: theme("colors.surface.1");
+  font-family: theme("fontFamily.body");
+}

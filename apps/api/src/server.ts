@@ -21,6 +21,7 @@ import { recommendationRoutes } from "./routes/recommendations.js";
 import { recoveryRoutes } from "./routes/recovery.js";
 import { weatherRoutes } from "./routes/weather.js";
 import { assistantRoutes } from "./routes/assistant.js";
+import { routePlannerRoutes } from "./routes/routePlanner.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { adminRoutes } from "./routes/admin.js";
 import { billingRoutes } from "./routes/billing.js";
@@ -124,6 +125,7 @@ export async function buildServer() {
   await app.register(weatherRoutes);
   await app.register(assistantRoutes);
   await app.register(settingsRoutes);
+  await app.register(routePlannerRoutes);
   await app.register(adminRoutes);
   await app.register(billingRoutes);
   await app.register(accountRoutes);

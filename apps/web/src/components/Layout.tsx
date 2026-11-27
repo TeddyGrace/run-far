@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Dashboard" },
   { to: "/calendar", label: "Calendar" },
   { to: "/build", label: "Build" },
+  { to: "/routes", label: "Routes" },
   { to: "/settings", label: "Settings" },
 ];
 

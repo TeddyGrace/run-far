@@ -53,7 +53,7 @@ export class AiUsageAccumulator {
     this.totals.cacheWriteTokens += usage.cache_creation_input_tokens ?? 0;
   }
 
-  async flush(params: { userId: string; surface: "plan_builder" | "assistant"; model: string }): Promise<void> {
+  async flush(params: { userId: string; surface: "plan_builder" | "assistant" | "route_planner"; model: string }): Promise<void> {
     // A turn that never called the API (shouldn't happen, but cheap to guard) writes nothing.
     const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = this.totals;
     if (inputTokens === 0 && outputTokens === 0) return;

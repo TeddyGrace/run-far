@@ -99,6 +99,12 @@ const envSchema = z.object({
   ATHLETE_TIMEZONE: z.string().default("America/New_York"),
   /** Contact NWS shows to the app operator (not the athlete) in the API's User-Agent header. */
   NWS_CONTACT_EMAIL: z.string().default("teddygrace77@gmail.com"),
+  /** OSRM-compatible routing server with a foot profile, used to snap run routes to paths.
+   * The default is the FOSSGIS public instance (fair-use, no key); point this at a self-hosted
+   * OSRM if route planning ever sees real traffic. */
+  ROUTING_BASE_URL: z.string().default("https://routing.openstreetmap.de/routed-foot"),
+  /** Overpass API endpoint the AI route planner uses to find parks, trails and water nearby. */
+  OVERPASS_URL: z.string().default("https://overpass-api.de/api/interpreter"),
   /** Widens the session cookie to this domain (e.g. ".run-far.cc") so a login on the main
    * site is also valid on the backoffice subdomain. Left unset in dev — a host-only cookie
    * on "localhost" is already sent to every port, so no sharing trick is needed there. */
