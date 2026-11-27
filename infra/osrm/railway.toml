@@ -1,0 +1,18 @@
+# Railway config for the OSRM routing service. In the service's Settings, set
+# "Config File" (Config as Code) to /infra/osrm/railway.toml — otherwise it picks up the
+# repo-root railway.toml and builds the API instead. See infra/osrm/README.md.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "infra/osrm/Dockerfile"
+# Only rebuild (and re-download/re-process the map) when this service's own files change,
+# not on every API push.
+watchPatterns = ["/infra/osrm/**"]
+
+[deploy]
+# A real walking route in Midtown Manhattan: answers 200 only once the map has loaded and can
+# route, which is a stronger check than "the port is open".
+healthcheckPath = "/route/v1/foot/-73.9855,40.7580;-73.9832,40.7536?overview=false"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

@@ -57,7 +57,9 @@ expects.
   route generator. Every distance and climb figure it quotes was measured on the path network
   and terrain data, not estimated, and progress streams to the page while it works. Routing,
   elevation, place search and map tiles are each one setting away from a self-hosted or keyed
-  provider (see `.env.example`); the free public defaults are for development only.
+  provider (see `.env.example`); the free public defaults are for development only. Routing
+  runs as its own service in the Railway project (OSRM, prepared at build time):
+  [`infra/osrm/`](infra/osrm/README.md).
   → [`integrations/routing/`](apps/api/src/integrations/routing/),
   [`integrations/anthropic/routePlanner.ts`](apps/api/src/integrations/anthropic/routePlanner.ts)
 
