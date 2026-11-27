@@ -14,6 +14,7 @@ import { Dashboard } from "./pages/Dashboard.js";
 import { Calendar } from "./pages/Calendar.js";
 import { Build } from "./pages/Build.js";
 import { Settings } from "./pages/Settings.js";
+import { Routes as RoutesPage } from "./pages/Routes.js";
 
 // Every signed-in screen — the dashboard at "/" included — renders through this one `Layout`
 // element. Keeping the dashboard in the same subtree as the other tabs is what lets React
@@ -42,6 +43,7 @@ function AuthedApp() {
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/build" element={<Build />} />
           <Route path="/import" element={<Navigate to="/build" replace />} />
+          <Route path="/routes" element={<RoutesPage />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </Layout>

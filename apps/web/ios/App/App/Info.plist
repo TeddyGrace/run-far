@@ -28,6 +28,8 @@
 	<string>run-far reads your sleep, heart-rate variability, resting heart rate and workouts to compute a daily recovery score and adjust your training plan when your recovery doesn't match what the plan expects.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>run-far does not write any data to Apple Health.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>run-far uses your location to start route maps where you are and to fetch your local weather forecast.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

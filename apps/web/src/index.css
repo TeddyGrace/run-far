@@ -24,3 +24,68 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Route map: OSM's standard tiles are bright; dim them so the map sits in the dark UI without
+   losing the path detail runners actually need (CARTO's dark style drops most footpaths). */
+.route-map-tiles {
+  filter: brightness(0.82) saturate(0.85);
+}
+.leaflet-container {
+  background: theme("colors.surface.1");
+  font-family: theme("fontFamily.body");
+}
+/* Leaflet's controls ship white; match them to the dark UI. */
+.route-map .leaflet-bar {
+  border: 1px solid theme("colors.border.DEFAULT");
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+}
+.route-map .leaflet-bar a {
+  background: theme("colors.surface.1");
+  color: theme("colors.ink.primary");
+  border-bottom-color: theme("colors.border.DEFAULT");
+}
+.route-map .leaflet-bar a:hover,
+.route-map .leaflet-bar a:focus-visible {
+  background: theme("colors.surface.2");
+  color: theme("colors.ink.primary");
+}
+.route-map .leaflet-bar a.leaflet-disabled {
+  background: theme("colors.surface.1");
+  color: theme("colors.ink.muted");
+}
+.route-map .leaflet-control-attribution {
+  background: rgb(18 24 21 / 0.8);
+  color: theme("colors.ink.secondary");
+}
+.route-map .leaflet-control-attribution a {
+  color: theme("colors.accent.DEFAULT");
+}
+.route-map .leaflet-container:focus-visible {
+  outline: 2px solid theme("colors.accent.DEFAULT");
+  outline-offset: 2px;
+}
+.route-map-crosshair {
+  display: none;
+}
+.route-map:has(.leaflet-container:focus-visible) .route-map-crosshair {
+  display: block;
+}
+.route-here-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgb(124 150 184 / 0.28);
+  border: 1px solid rgb(124 150 184 / 0.6);
+  animation: route-here-pulse 2.4s ease-in-out infinite;
+}
+@keyframes route-here-pulse {
+  0%,
+  100% {
+    transform: scale(0.85);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+}

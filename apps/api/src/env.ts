@@ -99,6 +99,32 @@ const envSchema = z.object({
   ATHLETE_TIMEZONE: z.string().default("America/New_York"),
   /** Contact NWS shows to the app operator (not the athlete) in the API's User-Agent header. */
   NWS_CONTACT_EMAIL: z.string().default("teddygrace77@gmail.com"),
+  // --- Route planning (Routes tab). Every default below is a free, fair-use public service
+  // that is fine for development and light use but asks commercial apps not to lean on it.
+  // For production, point each at a self-hosted instance or a keyed provider. ---
+  /** OSRM-style route endpoint for a walking/foot profile, up to (not including) the
+   * `{lon,lat;lon,lat}` coordinate list. Any server that answers the OSRM route response
+   * shape works: a self-hosted OSRM ("http://osrm:5000/route/v1/foot") or a keyed hosted
+   * service with an OSRM-compatible directions API. */
+  ROUTING_URL: z.string().default("https://routing.openstreetmap.de/routed-foot/route/v1/foot"),
+  /** Optional key for a hosted routing service, sent as the query parameter named below. */
+  ROUTING_API_KEY: z.string().default(""),
+  ROUTING_API_KEY_PARAM: z.string().default("access_token"),
+  /** Most waypoints the routing service accepts in one request; longer routes are routed in
+   * chunks and stitched. Hosted services commonly cap this at 25. */
+  ROUTING_MAX_WAYPOINTS: z.coerce.number().int().min(2).default(25),
+  /** OpenTopoData-compatible elevation endpoint (GET ?locations=lat,lon|...). Empty disables
+   * elevation; routes then show distance only. The public instance allows ~1 request/second
+   * and 1,000/day — self-host (it's one Docker image plus a DEM) before real traffic. */
+  ELEVATION_URL: z.string().default("https://api.opentopodata.org/v1/srtm30m"),
+  /** Overpass API endpoint the AI route planner uses to find parks, trails and water nearby. */
+  OVERPASS_URL: z.string().default("https://overpass-api.de/api/interpreter"),
+  /** Map tile URL template handed to the web map ({z}/{x}/{y}, optionally {r} for retina).
+   * Keyed providers embed their (browser-public, domain-restricted) key in this URL. */
+  MAP_TILE_URL: z.string().default("https://tile.openstreetmap.org/{z}/{x}/{y}.png"),
+  MAP_TILE_ATTRIBUTION: z
+    .string()
+    .default('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'),
   /** Widens the session cookie to this domain (e.g. ".run-far.cc") so a login on the main
    * site is also valid on the backoffice subdomain. Left unset in dev — a host-only cookie
    * on "localhost" is already sent to every port, so no sharing trick is needed there. */

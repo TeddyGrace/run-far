@@ -96,7 +96,8 @@ export const entitlementStatusEnum = pgEnum("entitlement_status", [
   "canceled",
   "none",
 ]);
-export const aiSurfaceEnum = pgEnum("ai_surface", ["plan_builder", "assistant"]);
+export const aiSurfaceEnum = pgEnum("ai_surface", ["plan_builder", "assistant", "route_planner"]);
+export const routeSourceEnum = pgEnum("route_source", ["manual", "ai"]);
 
 // --- Core ---
 
@@ -561,6 +562,33 @@ export const plannedRuns = pgTable(
       .on(t.userId, t.actualWorkoutId)
       .where(sql`${t.actualWorkoutId} IS NOT NULL`),
   ],
+);
+
+// --- Saved routes ---
+
+// A running route the athlete plotted on the map or had the AI build. Geometry is the snapped
+// polyline as [lat, lon] pairs; waypoints are what was tapped (or chosen), kept so a saved route
+// can be reopened and edited rather than only viewed. Both are small enough (a 10-mile route is
+// a few hundred points) that jsonb beats a PostGIS dependency nothing else in the app needs.
+export const savedRoutes = pgTable(
+  "saved_routes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    notes: text("notes"),
+    source: routeSourceEnum("source").notNull().default("manual"),
+    distanceM: doublePrecision("distance_m").notNull(),
+    // Null = unknown (elevation not configured, or the service didn't answer), never "flat".
+    elevationGainM: doublePrecision("elevation_gain_m"),
+    elevationLossM: doublePrecision("elevation_loss_m"),
+    waypoints: jsonb("waypoints").notNull(),
+    geometry: jsonb("geometry").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("saved_routes_user_created_idx").on(t.userId, t.createdAt)],
 );
 
 // --- Recommendations ---
