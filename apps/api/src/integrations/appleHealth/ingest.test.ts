@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 process.env.DATABASE_URL ??= "postgres://runfar:runfar@localhost:5432/runfar";
@@ -396,6 +396,15 @@ describe("ingestAppleHealth", () => {
     // provider filter is what keeps them out of the engine until they switch.
     const userId = await seedUser("whoop");
     const now = new Date("2026-09-12T18:00:00Z");
+    // buildRecoverySnapshot reads "today" from the real clock. Pin it to the fixture's date, or
+    // the snapshot looks for a reading weeks after the newest one here and finds none — which
+    // is how this test started failing once the calendar passed the fixture. Only Date is
+    // faked; the database driver's timers keep running.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     await ingestAppleHealth(userId, buildPayload(now, 25), { now });
 
     expect(await getActiveHealthProvider(userId)).toBe("whoop");
